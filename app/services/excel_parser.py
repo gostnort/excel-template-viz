@@ -16,6 +16,14 @@ def resolve_sheet_name(workbook_path: Path, sheet_name: str) -> str:
     raise ValueError(f"工作表 '{sheet_name}' 不存在，可用: {xl.sheet_names}")
 
 
+def list_sheet_names(workbook_path: Path) -> list[str]:
+    # 获取工作簿内的工作表列表
+    workbook = load_workbook(workbook_path, read_only=True, data_only=True)
+    names = list(workbook.sheetnames)
+    workbook.close()
+    return names
+
+
 def read_template_sheet(
     workbook_path: Path,
     sheet_name: str,
@@ -34,6 +42,22 @@ def read_template_sheet(
     body.columns = headers
     body = body.reset_index(drop=True)
     return body
+
+
+def format_cell_display(value: object) -> str:
+    # 将单元格值格式化为表单显示字符串
+    if value is None or pd.isna(value):
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    if isinstance(value, int):
+        return str(value)
+    return str(value)
+
+
+def build_dataframe_from_form_rows(headers: list[str], rows: list[dict[str, str]]) -> pd.DataFrame:
+    # 由带列标题键的表单行构建 DataFrame
+    return pd.DataFrame(rows, columns=headers)
 
 
 def write_template_sheet(

@@ -1,6 +1,6 @@
 import json
-import os
 from dataclasses import dataclass
+from os import environ
 from pathlib import Path
 
 
@@ -23,7 +23,7 @@ def _resolve_file_path(entry: dict) -> Path:
     # 优先使用环境变量覆盖路径
     env_key = entry.get("file_path_env")
     if env_key:
-        env_value = os.environ.get(env_key, "").strip()
+        env_value = environ.get(env_key, "").strip()
         if env_value:
             return Path(env_value).expanduser()
     relative = entry.get("file_path", "")
@@ -57,3 +57,32 @@ def get_template(template_id: str) -> TemplateConfig | None:
         if item.id == template_id:
             return item
     return None
+
+
+def _read_registry() -> dict:
+    # 读取模板注册表原始数据
+    if not CONFIG_PATH.exists():
+        return {"templates": []}
+    return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+
+
+def _write_registry(payload: dict) -> None:
+    # 写回模板注册表
+    CONFIG_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def update_template_sheet_name(template_id: str, sheet_name: str) -> TemplateConfig | None:
+    # 更新模板默认工作表并落盘
+    payload = _read_registry()
+    templates = payload.get("templates", [])
+    updated = False
+    for entry in templates:
+        if entry.get("id") == template_id:
+            entry["sheet_name"] = sheet_name
+            updated = True
+            break
+    if not updated:
+        return None
+    payload["templates"] = templates
+    _write_registry(payload)
+    return get_template(template_id)

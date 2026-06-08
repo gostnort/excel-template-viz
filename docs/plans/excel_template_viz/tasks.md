@@ -35,7 +35,7 @@ Speckit-style phased tasks for `excel-template-viz`.
 ## Phase 3: Streamlit UI
 
 ### [x] [Task 3.1] Main app sidebar navigation
-* **Description**: `app/app.py` dynamic template nav + Google test page.
+* **Description**: `streamlit_app.py` dynamic template nav + Google test page.
 * **Acceptance**: Each registry entry = sidebar option.
 
 ### [x] [Task 3.2] Template form component

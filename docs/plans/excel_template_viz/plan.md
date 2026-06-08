@@ -4,7 +4,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Streamlit app (app/app.py)                                 │
+│  Streamlit app (streamlit_app.py)                           │
 │  ┌──────────────┐  ┌──────────────────────────────────────┐ │
 │  │ Sidebar nav  │  │ Main panel                           │ │
 │  │ - Template A │  │  template_form.render_template()     │ │
@@ -21,7 +21,7 @@
 ```
 
 ### 1.1 Navigation Model
-* Single `app.py` entry; `st.session_state["page"]` driven by sidebar radio.
+* Single `streamlit_app.py` entry; `st.session_state["page"]` driven by sidebar radio.
 * One radio option per registry template plus fixed "Google Sheet 连通性测试".
 * No Streamlit multipage folder required—keeps template count dynamic from JSON.
 
@@ -59,8 +59,8 @@ Registry fields:
 
 ```
 excel-template-viz/
+├── streamlit_app.py
 ├── app/
-│   ├── app.py
 │   ├── components/
 │   │   └── template_form.py
 │   └── services/
@@ -101,7 +101,7 @@ excel-template-viz/
 
 1. **Planning** — Speckit docs (this package).
 2. **Core services** — registry, excel_parser, google_sheets.
-3. **UI** — app.py sidebar + template_form + Google test section.
+3. **UI** — streamlit_app.py sidebar + template_form + Google test section.
 4. **Config** — templates.json pointing to sample path.
 5. **Tests** — parse ID, sheet name matching, error messages.
 6. **GitHub** — `gh repo create`, initial push.

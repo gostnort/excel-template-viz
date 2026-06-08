@@ -58,7 +58,7 @@
 ## 3. 非功能需求
 
 ### NFR-001：本地优先
-* 使用 `streamlit run app/app.py` 运行；MVP 无需云部署。
+* 使用 `streamlit run streamlit_app.py` 运行；MVP 无需云部署。
 
 ### NFR-002：密钥安全
 * 禁止提交服务账号 JSON；`.gitignore` 排除凭证类 `*.json`（`config/templates.json` 除外）。

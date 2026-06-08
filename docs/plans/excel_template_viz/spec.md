@@ -58,7 +58,7 @@
 ## 3. Non-Functional Requirements
 
 ### NFR-001: Local-first
-* App runs with `streamlit run app/app.py`; no cloud deployment required for MVP.
+* App runs with `streamlit run streamlit_app.py`; no cloud deployment required for MVP.
 
 ### NFR-002: Secrets
 * Never commit service account JSON; `.gitignore` excludes `*.json` credentials except `config/templates.json`.

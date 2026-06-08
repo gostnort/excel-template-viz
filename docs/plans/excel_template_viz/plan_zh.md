@@ -4,7 +4,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Streamlit 应用 (app/app.py)                                │
+│  Streamlit 应用 (streamlit_app.py)                          │
 │  ┌──────────────┐  ┌──────────────────────────────────────┐ │
 │  │ 侧边栏导航   │  │ 主面板                               │ │
 │  │ - 模板 A     │  │  template_form.render_template()     │ │
@@ -21,7 +21,7 @@
 ```
 
 ### 1.1 导航模型
-* 单一入口 `app.py`；侧边栏 radio 驱动 `st.session_state["page"]`。
+* 单一入口 `streamlit_app.py`；侧边栏 radio 驱动 `st.session_state["page"]`。
 * 每个注册模板一项，另加固定项「Google Sheet 连通性测试」。
 * 不依赖 Streamlit 多页文件夹，模板数量由 JSON 动态决定。
 

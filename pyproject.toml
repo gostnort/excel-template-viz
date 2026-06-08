@@ -1,7 +1,7 @@
 [project]
 name = "excel-template-viz"
 version = "0.1.0"
-description = "Streamlit Excel template visualization and Google Sheets connectivity test"
+description = "Streamlit Excel template visualization with Google Sheets data source"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

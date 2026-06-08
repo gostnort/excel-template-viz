@@ -7,6 +7,7 @@ venv/
 
 # Streamlit
 .streamlit/secrets.toml
+.run.pid
 
 # Google 凭证（勿提交）
 credentials/
