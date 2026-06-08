@@ -28,17 +28,22 @@ def render_shutdown_control() -> None:
 def main() -> None:
     st.set_page_config(page_title="Excel 模板可视化", page_icon="📋", layout="wide")
     write_pid_file()
-    st.sidebar.title("导航")
+    st.sidebar.title("选择模版")
     nav_options = build_nav_options()
     if not nav_options:
-        st.sidebar.warning("未加载任何模板，请检查 config/templates.json。")
+        st.sidebar.warning("未加载任何模板，请将 xlsx 文件复制到 templates/ 目录。")
         st.stop()
     labels = [label for label, _ in nav_options]
     id_by_label = {label: page_id for label, page_id in nav_options}
     default_label = labels[0]
     if "nav_label" not in st.session_state:
         st.session_state["nav_label"] = default_label
-    selected_label = st.sidebar.radio("选择页面", labels, index=labels.index(st.session_state["nav_label"]))
+    selected_label = st.sidebar.radio(
+        "选择模版",
+        labels,
+        index=labels.index(st.session_state["nav_label"]),
+        label_visibility="collapsed",
+    )
     st.session_state["nav_label"] = selected_label
     page_id = id_by_label[selected_label]
     templates = {t.id: t for t in load_templates()}

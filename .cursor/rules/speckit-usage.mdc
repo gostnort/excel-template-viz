@@ -1,0 +1,12 @@
+---
+description: Speckit 文档规范与目录约定
+alwaysApply: true
+---
+
+# Speckit 使用规范
+
+- Speckit plan documents will remain in Chinese only; no new bilingual versions will be created.
+- The directory structure for plans is fixed as `plans/<plan>/`.
+- Each plan consists of `plan.md`, `spec.md`, `tasks.md`, and `constitution.md`.
+- README and QUICKSTART files will remain bilingual (Chinese and English) as user documentation.
+- When adding a new plan, update the references in the README; existing bilingual Speckit documents must be marked as deprecated.

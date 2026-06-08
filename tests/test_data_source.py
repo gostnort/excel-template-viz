@@ -6,39 +6,39 @@ from app.services.data_source import (
     DEFAULT_ID_COLUMN,
     DataSourceConfig,
     clear_template_data_source,
+    list_template_data_sources,
     load_template_data_source,
     save_template_data_source,
 )
 
 
 @pytest.fixture
-def isolated_config(tmp_path, monkeypatch):
-    # 将配置路径指向临时目录，避免污染真实 config/
-    config_file = tmp_path / "templates.json"
-    monkeypatch.setattr("app.services.data_source.TEMPLATES_CONFIG_PATH", config_file)
+def isolated_templates(tmp_path, monkeypatch):
+    # 将模板目录指向临时目录，避免污染真实 templates/
+    templates_dir = tmp_path / "templates"
+    templates_dir.mkdir()
+    template_path = templates_dir / "gin_lot.xlsx"
+    template_path.write_text("", encoding="utf-8")
+    config_path = templates_dir / "gin_lot.config.json"
     payload = {
-        "templates": [
-            {
-                "id": "gin_lot",
-                "display_name": "GIN LOT Template",
-                "file_path": "templates/gin_lot_template.xlsx",
-                "sheet_name": "List",
-                "header_row": 0,
-                "data_start_row": 1,
-            }
-        ]
+        "display_name": "GIN LOT Template",
+        "description": "",
+        "sheet_name": "List",
+        "header_row": 0,
+        "data_start_row": 1,
     }
-    config_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    yield config_file
-    if config_file.exists():
-        config_file.unlink()
+    config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    monkeypatch.setattr("app.services.registry.TEMPLATES_DIR", templates_dir)
+    yield config_path
+    if config_path.exists():
+        config_path.unlink()
 
 
-def test_load_returns_none_when_missing(isolated_config) -> None:
+def test_load_returns_none_when_missing(isolated_templates) -> None:
     assert load_template_data_source("gin_lot") is None
 
 
-def test_save_and_load_roundtrip(isolated_config) -> None:
+def test_save_and_load_roundtrip(isolated_templates) -> None:
     config = DataSourceConfig(
         sheet_url="https://docs.google.com/spreadsheets/d/abc123/edit",
         spreadsheet_id="abc123",
@@ -54,19 +54,19 @@ def test_save_and_load_roundtrip(isolated_config) -> None:
     assert loaded.id_column == DEFAULT_ID_COLUMN
 
 
-def test_load_uses_default_id_column(isolated_config) -> None:
-    payload = json.loads(isolated_config.read_text(encoding="utf-8"))
-    payload["templates"][0]["data_source"] = {
+def test_load_uses_default_id_column(isolated_templates) -> None:
+    payload = json.loads(isolated_templates.read_text(encoding="utf-8"))
+    payload["data_source"] = {
         "spreadsheet_id": "xyz",
         "worksheet_name": "List",
     }
-    isolated_config.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    isolated_templates.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     loaded = load_template_data_source("gin_lot")
     assert loaded is not None
     assert loaded.id_column == DEFAULT_ID_COLUMN
 
 
-def test_clear_data_source(isolated_config) -> None:
+def test_clear_data_source(isolated_templates) -> None:
     save_template_data_source(
         "gin_lot",
         DataSourceConfig(
@@ -74,8 +74,28 @@ def test_clear_data_source(isolated_config) -> None:
             spreadsheet_id="id1",
             worksheet_name="W",
             id_column="PO",
-        )
+        ),
     )
     clear_template_data_source("gin_lot")
     loaded = load_template_data_source("gin_lot")
     assert loaded is None
+
+
+def test_list_template_data_sources(isolated_templates) -> None:
+    entries = list_template_data_sources()
+    assert len(entries) == 1
+    assert entries[0].template_id == "gin_lot"
+    assert entries[0].display_name == "GIN LOT Template"
+    assert entries[0].data_source is None
+    save_template_data_source(
+        "gin_lot",
+        DataSourceConfig(
+            sheet_url="https://docs.google.com/spreadsheets/d/abc123/edit",
+            spreadsheet_id="abc123",
+            worksheet_name="Sheet1",
+            id_column="PO",
+        ),
+    )
+    entries = list_template_data_sources()
+    assert entries[0].data_source is not None
+    assert entries[0].data_source.spreadsheet_id == "abc123"

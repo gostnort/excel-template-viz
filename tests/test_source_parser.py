@@ -58,6 +58,32 @@ def test_parse_source_text_skips_empty_lines() -> None:
     assert len(rows) == 1
 
 
+def test_merge_parsed_preserves_template_fields() -> None:
+    headers = [
+        "order",
+        "P.O. No.",
+        "Container No.",
+        "Product Description",
+        "Supplier",
+        "Receiving Date",
+    ]
+    existing = {
+        "order": "5",
+        "P.O. No.": "",
+        "Container No.": "",
+        "Product Description": "Fresh Ginger",
+        "Supplier": "Shandong Santao",
+        "Receiving Date": "",
+    }
+    parsed = parse_source_line(EXAMPLE_LINE, order=1, reference_year=2026)
+    merged = merge_parsed_into_headers(headers, parsed, existing)
+    assert merged["P.O. No."] == "10073"
+    assert merged["Container No."] == "EMCU5484116"
+    assert merged["Receiving Date"] == "06/01/26"
+    assert merged["Product Description"] == "Fresh Ginger"
+    assert merged["Supplier"] == "Shandong Santao"
+
+
 def test_merge_parsed_preserves_manual_fields() -> None:
     headers = [
         "order",

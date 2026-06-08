@@ -1,11 +1,15 @@
-import json
 from dataclasses import asdict, dataclass
-from pathlib import Path
 
+from app.services.registry import load_template_payload, load_templates, save_template_payload
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-TEMPLATES_CONFIG_PATH = PROJECT_ROOT / "config" / "templates.json"
 DEFAULT_ID_COLUMN = "PO"
+
+
+@dataclass
+class TemplateDataSourceEntry:
+    template_id: str
+    display_name: str
+    data_source: "DataSourceConfig | None"
 
 
 @dataclass
@@ -16,37 +20,12 @@ class DataSourceConfig:
     id_column: str = DEFAULT_ID_COLUMN
 
 
-def _load_templates_config() -> dict:
-    # 读取模板注册表 JSON
-    if not TEMPLATES_CONFIG_PATH.exists():
-        return {"templates": []}
-    return json.loads(TEMPLATES_CONFIG_PATH.read_text(encoding="utf-8"))
-
-
-
-def _write_templates_config(payload: dict) -> None:
-    # 写回模板注册表 JSON
-    TEMPLATES_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    TEMPLATES_CONFIG_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-
-def _find_template_entry(payload: dict, template_id: str) -> dict | None:
-    # 查找模板条目
-    for entry in payload.get("templates", []):
-        if entry.get("id") == template_id:
-            return entry
-    return None
-
-
-
 def load_template_data_source(template_id: str) -> DataSourceConfig | None:
-    # 从 templates.json 加载指定模板的数据源配置
-    payload = _load_templates_config()
-    entry = _find_template_entry(payload, template_id)
-    if not entry:
+    # 从模板配置文件加载数据源配置
+    payload = load_template_payload(template_id)
+    if not payload:
         return None
-    raw = entry.get("data_source") or {}
+    raw = payload.get("data_source") or {}
     if not raw.get("spreadsheet_id"):
         return None
     return DataSourceConfig(
@@ -57,23 +36,33 @@ def load_template_data_source(template_id: str) -> DataSourceConfig | None:
     )
 
 
-
 def save_template_data_source(template_id: str, config: DataSourceConfig) -> None:
     # 保存指定模板的数据源配置
-    payload = _load_templates_config()
-    entry = _find_template_entry(payload, template_id)
-    if not entry:
+    payload = load_template_payload(template_id)
+    if payload is None:
         raise ValueError(f"模板 {template_id!r} 不存在")
-    entry["data_source"] = asdict(config)
-    _write_templates_config(payload)
-
+    payload["data_source"] = asdict(config)
+    save_template_payload(template_id, payload)
 
 
 def clear_template_data_source(template_id: str) -> None:
     # 清除指定模板的数据源配置
-    payload = _load_templates_config()
-    entry = _find_template_entry(payload, template_id)
-    if not entry:
+    payload = load_template_payload(template_id)
+    if payload is None:
         return
-    entry.pop("data_source", None)
-    _write_templates_config(payload)
+    payload.pop("data_source", None)
+    save_template_payload(template_id, payload)
+
+
+def list_template_data_sources() -> list[TemplateDataSourceEntry]:
+    # 汇总全部模板的数据源配置
+    entries: list[TemplateDataSourceEntry] = []
+    for template in load_templates():
+        entries.append(
+            TemplateDataSourceEntry(
+                template_id=template.id,
+                display_name=template.display_name,
+                data_source=load_template_data_source(template.id),
+            )
+        )
+    return entries

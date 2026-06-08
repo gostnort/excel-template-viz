@@ -6,6 +6,7 @@ from app.services.data_source import (
     DEFAULT_ID_COLUMN,
     DataSourceConfig,
     clear_template_data_source,
+    list_template_data_sources,
     load_template_data_source,
     save_template_data_source,
 )
@@ -160,6 +161,79 @@ def _render_config_form(template_id: str, saved: DataSourceConfig | None) -> Non
                 st.info("可用工作表: " + ", ".join(titles))
             except GoogleSheetsError as exc:
                 st.error(str(exc))
+
+
+
+def _data_source_summary_rows() -> list[dict[str, str]]:
+    # 构建数据源汇总表行
+    rows: list[dict[str, str]] = []
+    for entry in list_template_data_sources():
+        data_source = entry.data_source
+        rows.append(
+            {
+                "模板": entry.display_name,
+                "状态": "已配置" if data_source else "未配置",
+                "工作表": data_source.worksheet_name or "(默认)" if data_source else "—",
+                "ID 列": data_source.id_column if data_source else "—",
+                "Spreadsheet ID": data_source.spreadsheet_id if data_source else "—",
+            }
+        )
+    return rows
+
+
+
+def render_data_sources_tab(current_template_id: str) -> None:
+    # 填写侧数据源 Tab：集中展示全部模板的数据源
+    st.subheader("数据源汇总")
+    entries = list_template_data_sources()
+    configured_count = sum(1 for entry in entries if entry.data_source is not None)
+    st.caption(
+        f"共 {len(entries)} 个模板，{configured_count} 个已配置 Google Sheet。"
+        " 在侧边栏「添加数据源」可编辑当前模板的数据源。"
+    )
+    if not entries:
+        st.info("未发现任何模板，请将 xlsx 文件复制到 templates/ 目录。")
+        return
+    st.dataframe(_data_source_summary_rows(), use_container_width=True, hide_index=True)
+    current = next((entry for entry in entries if entry.template_id == current_template_id), None)
+    if current is None:
+        return
+    st.markdown(f"**当前模板：{current.display_name}**")
+    if current.data_source is None:
+        st.warning("当前模板尚未配置数据源。请使用侧边栏「添加数据源」进行配置。")
+        return
+    saved = current.data_source
+    st.markdown(f"- **Sheet URL**: `{saved.sheet_url}`")
+    st.markdown(f"- **Spreadsheet ID**: `{saved.spreadsheet_id}`")
+    st.markdown(f"- **工作表**: `{saved.worksheet_name or '(默认)'}`")
+    st.markdown(f"- **ID 列**: `{saved.id_column}`")
+    credentials = get_session_credentials()
+    if credentials is None:
+        st.caption("上传 Google 凭证后可在此预览数据。")
+        return
+    if st.button("预览当前模板数据源", key=f"ds_tab_preview_{current_template_id}"):
+        with st.spinner("正在加载预览..."):
+            try:
+                preview, meta = fetch_sheet_preview(
+                    credentials,
+                    saved.sheet_url,
+                    saved.worksheet_name or None,
+                    5,
+                )
+                st.success(
+                    f"「{meta['spreadsheet_title']}」/「{meta['worksheet_title']}」"
+                    f"（约 {meta['row_count']} 行）"
+                )
+                if preview.empty:
+                    st.info("工作表为空或仅有标题行。")
+                else:
+                    st.dataframe(preview, use_container_width=True)
+            except GoogleSheetsError as exc:
+                st.error(str(exc))
+                for hint in exc.hints:
+                    st.markdown(f"- {hint}")
+            except Exception as exc:
+                st.error(f"预览失败: {exc}")
 
 
 

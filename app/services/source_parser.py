@@ -93,13 +93,8 @@ def merge_parsed_into_headers(
     parsed: dict[str, str],
     existing: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    # 将解析结果合并到以列标题为键的行字典，保留手动字段
-    row = {header: "" for header in headers}
-    if existing:
-        for header in headers:
-            stripped = header.strip()
-            if stripped in MANUAL_ONLY_FIELDS:
-                row[header] = existing.get(header, "")
+    # 将解析结果覆盖到已有行，保留模板中未被解析映射的列
+    row = {header: existing.get(header, "") if existing else "" for header in headers}
     parsed_by_stripped = {key.strip(): value for key, value in parsed.items()}
     for header in headers:
         stripped = header.strip()
