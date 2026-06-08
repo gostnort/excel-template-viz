@@ -1,0 +1,21 @@
+[project]
+name = "excel-template-viz"
+version = "0.1.0"
+description = "Streamlit Excel template visualization and Google Sheets connectivity test"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "streamlit>=1.32",
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "gspread>=6.0",
+    "google-auth>=2.0",
+    "google-auth-oauthlib>=1.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
