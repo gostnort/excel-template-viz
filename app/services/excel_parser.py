@@ -46,7 +46,24 @@ def read_template_sheet(
 
 def format_cell_display(value: object) -> str:
     # 将单元格值格式化为表单显示字符串
-    if value is None or pd.isna(value):
+    if value is None:
+        return ""
+    if isinstance(value, (pd.Series, pd.Index)):
+        if value.empty or value.isna().all():
+            return ""
+        items = [item for item in value.tolist() if pd.notna(item)]
+        if not items:
+            return ""
+        if len(items) == 1:
+            return format_cell_display(items[0])
+        formatted = [format_cell_display(item) for item in items]
+        return ", ".join(item for item in formatted if item)
+    if isinstance(value, (list, tuple, set)):
+        if not value:
+            return ""
+        formatted = [format_cell_display(item) for item in value]
+        return ", ".join(item for item in formatted if item)
+    if pd.isna(value):
         return ""
     if isinstance(value, float) and value.is_integer():
         return str(int(value))

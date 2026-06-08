@@ -7,9 +7,8 @@ Streamlit-based Excel template web app: switch templates in the sidebar, use Goo
 
 - **多模板导航**：将 xlsx 文件放入 `templates/`，侧边栏自动发现并列出 / **Multi-template navigation**: drop xlsx files into `templates/` and see them in the sidebar.
 - **模板配置**：同名 `.json` 或 `.config.json` 保存默认工作表与数据源 / **Template config**: sidecar JSON stores sheet defaults and data sources.
-- **添加数据源**：粘贴 Google Sheet URL，测试连接后保存为默认数据源 / **Add data source**: paste a Sheet URL, test, then save as default.
-- **数据源汇总**：填写侧「数据源」Tab 集中查看全部模板的 Sheet 配置 / **Data source overview**: the form-side **数据源** tab lists all template Sheet configs.
-- **按 PO 查询填表**：配置数据源并完成认证后，输入 PO 编号即可填表 / **Fill by PO**: query a PO and auto-fill from the Sheet.
+- **数据源 Tab**：在模板页「数据源」Tab 内完成认证、测试、工作表/ID 列选择与列映射 / **Data source tab**: authenticate, test, pick worksheet/ID column, and edit mappings per template.
+- **自动查询填表**：在「数据录入」Tab 的 ID 字段输入值，稳定 2 秒后自动从 Sheet 拉取并填入 / **Auto lookup**: enter an ID in the form; after 2 seconds it fetches and fills mapped fields.
 - **源数据粘贴**：支持制表符分隔批量粘贴 / **Paste data**: bulk paste tab-separated rows.
 - **导出 Excel**：编辑后下载更新后的 xlsx / **Export Excel**: download the updated xlsx.
 
@@ -31,14 +30,16 @@ Copy your xlsx files into `templates/`; the app will detect them on startup.
 
 ## Google 数据源（简要）/ Google data source (brief)
 
-1. 侧边栏点击 **添加数据源**。  
-   Click **Add data source** in the sidebar.
+1. 侧边栏选择模板，打开 **数据源** Tab。  
+   Select a template in the sidebar, then open the **数据源** tab.
 2. 上传服务账号 JSON（并将 Sheet 共享给 `client_email`），或配置 `credentials/oauth_client.json` 后 OAuth 授权。  
    Upload a service account JSON (share the Sheet with `client_email`) or configure `credentials/oauth_client.json` for OAuth.
-3. 填写 Sheet URL，**测试连接** 成功后 **保存为默认数据源**。  
-   Enter the Sheet URL, **Test connection**, then **Save as default**.
-4. 在模板页输入 PO（如 `10073`）→ **查询并填入**。  
-   Enter a PO number (e.g. `10073`) → **Query & fill**.
+3. 填写 Sheet URL 并 **测试连接**；成功后从下拉框选择工作表与 ID 列，配置列映射后 **保存数据源配置**。  
+   Enter the Sheet URL and **Test connection**; then pick worksheet/ID column from dropdowns, edit mappings, and **Save**.
+4. 点击 **设为默认 ID 列** 持久化 ID 列选择。  
+   Click **Set default ID column** to persist the ID column.
+5. 切换到 **数据录入** Tab，在 ID 对应字段输入编号（如 `10073`），稳定 2 秒后自动填表。  
+   Switch to **数据录入**, type an ID (e.g. `10073`); fields auto-fill after 2 seconds.
 
 ## 测试 / Tests
 

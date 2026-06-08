@@ -1,14 +1,16 @@
 import json
 
+import pandas as pd
 import streamlit as st
 
 from app.services.data_source import (
+    DEFAULT_COLUMN_MAPPINGS,
     DEFAULT_ID_COLUMN,
     DataSourceConfig,
     clear_template_data_source,
-    list_template_data_sources,
     load_template_data_source,
     save_template_data_source,
+    save_template_id_column,
 )
 from app.services.excel_parser import parse_spreadsheet_id
 from app.services.google_sheets import (
@@ -21,6 +23,7 @@ from app.services.google_sheets import (
 
 CREDENTIALS_SESSION_KEY = "gs_credentials"
 AUTH_METHOD_SESSION_KEY = "gs_auth_method"
+ID_LOOKUP_DELAY_SECONDS = 2.0
 
 
 def get_session_credentials():
@@ -29,8 +32,62 @@ def get_session_credentials():
 
 
 
+def _suffix(template_id: str) -> str:
+    return f"_{template_id}"
+
+
+def _test_ok_key(template_id: str) -> str:
+    return f"ds_test_ok{_suffix(template_id)}"
+
+
+def _columns_key(template_id: str) -> str:
+    return f"ds_sheet_columns{_suffix(template_id)}"
+
+
+def _worksheets_key(template_id: str) -> str:
+    return f"ds_worksheet_titles{_suffix(template_id)}"
+
+
+def _meta_key(template_id: str) -> str:
+    return f"ds_last_meta{_suffix(template_id)}"
+
+
+def _mappings_editor_key(template_id: str) -> str:
+    return f"ds_mappings_editor{_suffix(template_id)}"
+
+
+def is_sheet_test_ok(template_id: str) -> bool:
+    return bool(st.session_state.get(_test_ok_key(template_id)))
+
+
+def get_validated_sheet_columns(template_id: str) -> list[str]:
+    return list(st.session_state.get(_columns_key(template_id), []))
+
+
+def get_validated_worksheet_titles(template_id: str) -> list[str]:
+    return list(st.session_state.get(_worksheets_key(template_id), []))
+
+
+def _restore_validation_state(template_id: str, saved: DataSourceConfig | None) -> None:
+    if saved is None or is_sheet_test_ok(template_id):
+        return
+    if saved.spreadsheet_id:
+        st.session_state[_test_ok_key(template_id)] = True
+        sheet_columns = [
+            item["source"]
+            for item in saved.column_mappings
+            if item.get("kind", "sheet") == "sheet"
+        ]
+        if saved.id_column and saved.id_column not in sheet_columns:
+            sheet_columns.append(saved.id_column)
+        if sheet_columns:
+            st.session_state[_columns_key(template_id)] = sheet_columns
+        if saved.worksheet_name:
+            st.session_state[_worksheets_key(template_id)] = [saved.worksheet_name]
+
+
+
 def _render_auth_controls() -> None:
-    # 认证方式选择与凭证加载
     auth_method = st.radio("认证方式", ["服务账号 JSON", "OAuth 用户授权"], horizontal=True, key="ds_auth_method")
     if auth_method == "服务账号 JSON":
         uploaded = st.file_uploader("上传服务账号 JSON 密钥", type=["json"], key="ds_sa_upload")
@@ -66,28 +123,113 @@ def _render_auth_controls() -> None:
 
 
 
-def _render_config_form(template_id: str, saved: DataSourceConfig | None) -> None:
-    # 数据源 URL、工作表与 ID 列配置表单
-    suffix = f"_{template_id}"
+def _run_sheet_test(
+    template_id: str,
+    sheet_url: str,
+    worksheet_name: str | None,
+    max_rows: int,
+) -> None:
+    credentials = get_session_credentials()
+    if credentials is None:
+        st.warning("请先上传服务账号 JSON 或完成 OAuth 授权。")
+        return
+    with st.spinner("正在连接 Google Sheets..."):
+        try:
+            preview, meta = fetch_sheet_preview(
+                credentials,
+                sheet_url,
+                worksheet_name,
+                int(max_rows),
+            )
+            titles = list_worksheet_titles(credentials, sheet_url)
+            st.session_state[_meta_key(template_id)] = meta
+            st.session_state[_test_ok_key(template_id)] = True
+            st.session_state[_worksheets_key(template_id)] = titles
+            st.session_state[_columns_key(template_id)] = list(preview.columns) if not preview.empty else []
+            st.success(
+                f"连接成功 — 表格「{meta['spreadsheet_title']}」"
+                f" / 工作表「{meta['worksheet_title']}」"
+                f"（共约 {meta['row_count']} 行）"
+            )
+            if preview.empty:
+                st.info("工作表为空或仅有标题行。")
+            else:
+                st.dataframe(preview, use_container_width=True)
+        except GoogleSheetsError as exc:
+            st.error(str(exc))
+            if exc.hints:
+                for hint in exc.hints:
+                    st.markdown(f"- {hint}")
+        except Exception as exc:
+            st.error(f"未知错误: {exc}")
+
+
+
+def _default_worksheet_index(titles: list[str], saved_name: str) -> int:
+    if saved_name and saved_name in titles:
+        return titles.index(saved_name)
+    return 0
+
+
+
+def _default_column_index(columns: list[str], saved_name: str) -> int:
+    if saved_name and saved_name in columns:
+        return columns.index(saved_name)
+    return 0
+
+
+
+def _render_mapping_editor(template_id: str, template_fields: list[str], saved: DataSourceConfig | None) -> None:
+    st.subheader("列映射")
+    st.caption("Sheet 映射用于 Google Sheet 查询；Tab 映射用于制表符粘贴（source 为列索引，从 0 开始）。")
+    default_rows = (saved.column_mappings if saved else None) or DEFAULT_COLUMN_MAPPINGS
+    editor_key = _mappings_editor_key(template_id)
+    if editor_key not in st.session_state:
+        st.session_state[editor_key] = pd.DataFrame(default_rows)
+    edited = st.data_editor(
+        st.session_state[editor_key],
+        num_rows="dynamic",
+        column_config={
+            "source": st.column_config.TextColumn("源列/索引", required=True),
+            "target": st.column_config.SelectboxColumn("目标字段", options=template_fields, required=True),
+            "kind": st.column_config.SelectboxColumn("类型", options=["sheet", "tab"], required=True),
+        },
+        use_container_width=True,
+        key=f"ds_mapping_widget{_suffix(template_id)}",
+    )
+    st.session_state[editor_key] = edited
+
+
+
+def _extract_mappings(template_id: str, saved: DataSourceConfig | None) -> list[dict[str, str]]:
+    editor_key = _mappings_editor_key(template_id)
+    frame = st.session_state.get(editor_key)
+    if frame is None:
+        return list((saved.column_mappings if saved else None) or DEFAULT_COLUMN_MAPPINGS)
+    mappings: list[dict[str, str]] = []
+    for _, row in frame.iterrows():
+        source = str(row.get("source", "")).strip()
+        target = str(row.get("target", "")).strip()
+        kind = str(row.get("kind", "sheet")).strip() or "sheet"
+        if source and target:
+            mappings.append({"source": source, "target": target, "kind": kind})
+    return mappings or list(DEFAULT_COLUMN_MAPPINGS)
+
+
+
+def render_data_sources_tab(template_id: str, template_fields: list[str]) -> None:
+    # 模板页数据源 Tab：认证、测试、下拉选择与列映射
+    saved = load_template_data_source(template_id)
+    _restore_validation_state(template_id, saved)
+    suffix = _suffix(template_id)
+    st.subheader("Google Sheet 数据源")
+    _render_auth_controls()
     default_url = saved.sheet_url if saved else ""
-    default_worksheet = saved.worksheet_name if saved else ""
-    default_id_col = saved.id_column if saved else DEFAULT_ID_COLUMN
     sheet_url = st.text_input(
         "Google Sheet URL",
         value=default_url,
         placeholder="https://docs.google.com/spreadsheets/d/...",
         key=f"ds_sheet_url{suffix}",
-    )
-    worksheet_name = st.text_input(
-        "工作表名称（留空则使用第一个）",
-        value=default_worksheet,
-        key=f"ds_worksheet_name{suffix}",
-    )
-    id_column = st.text_input(
-        "ID 列名（对应模板 P.O. No.）",
-        value=default_id_col,
-        help="Google Sheet 中用于匹配订单号的列，默认 PO。",
-        key=f"ds_id_column{suffix}",
     )
     max_rows = st.number_input(
         "测试预览行数",
@@ -96,169 +238,92 @@ def _render_config_form(template_id: str, saved: DataSourceConfig | None) -> Non
         value=5,
         key=f"ds_max_rows{suffix}",
     )
-    credentials = get_session_credentials()
     if st.button("测试连接", type="primary", key=f"ds_test{suffix}"):
         if not sheet_url.strip():
             st.warning("请先填写 Google Sheet URL。")
-            return
-        if credentials is None:
-            st.warning("请先上传服务账号 JSON 或完成 OAuth 授权。")
-            return
-        with st.spinner("正在连接 Google Sheets..."):
-            try:
-                preview, meta = fetch_sheet_preview(
-                    credentials,
-                    sheet_url,
-                    worksheet_name.strip() or None,
-                    int(max_rows),
-                )
-                st.session_state[f"ds_last_meta{suffix}"] = meta
-                st.success(
-                    f"连接成功 — 表格「{meta['spreadsheet_title']}」"
-                    f" / 工作表「{meta['worksheet_title']}」"
-                    f"（共约 {meta['row_count']} 行）"
-                )
-                if preview.empty:
-                    st.info("工作表为空或仅有标题行。")
-                else:
-                    st.dataframe(preview, use_container_width=True)
-                    headers = list(preview.columns)
-                    if id_column.strip() not in headers:
-                        st.warning(f"未找到 ID 列「{id_column.strip()}」，可用列: {', '.join(headers)}")
-            except GoogleSheetsError as exc:
-                st.error(str(exc))
-                if exc.hints:
-                    for hint in exc.hints:
-                        st.markdown(f"- {hint}")
-            except Exception as exc:
-                st.error(f"未知错误: {exc}")
-    if st.button("保存为模板数据源", key=f"ds_save_{template_id}"):
-        if not sheet_url.strip():
-            st.warning("请先填写 Google Sheet URL。")
-            return
+        else:
+            _run_sheet_test(template_id, sheet_url.strip(), None, int(max_rows))
+    test_ok = is_sheet_test_ok(template_id)
+    worksheet_titles = get_validated_worksheet_titles(template_id)
+    sheet_columns = get_validated_sheet_columns(template_id)
+    saved_worksheet = saved.worksheet_name if saved else ""
+    saved_id_col = saved.id_column if saved else DEFAULT_ID_COLUMN
+    if not test_ok:
+        st.selectbox("工作表", options=["请先测试连接"], disabled=True, key=f"ds_worksheet_locked{suffix}")
+        st.selectbox("ID 列", options=["请先测试连接"], disabled=True, key=f"ds_id_col_locked{suffix}")
+    else:
+        st.selectbox(
+            "工作表",
+            worksheet_titles or [saved_worksheet or "默认"],
+            index=_default_worksheet_index(worksheet_titles, saved_worksheet),
+            key=f"ds_worksheet_select{suffix}",
+        )
+        st.selectbox(
+            "ID 列",
+            sheet_columns or [saved_id_col],
+            index=_default_column_index(sheet_columns, saved_id_col),
+            key=f"ds_id_column_select{suffix}",
+        )
+    _render_mapping_editor(template_id, template_fields, saved)
+    action_col, save_col = st.columns(2)
+    with action_col:
+        set_id_col = st.button("设为默认 ID 列", key=f"ds_set_id_col{suffix}", disabled=not test_ok)
+    with save_col:
+        save_config = st.button("保存数据源配置", key=f"ds_save{suffix}", disabled=not test_ok)
+    if set_id_col:
         try:
             spreadsheet_id = parse_spreadsheet_id(sheet_url)
         except ValueError as exc:
             st.error(str(exc))
-            return
-        meta = st.session_state.get(f"ds_last_meta{suffix}")
-        resolved_worksheet = worksheet_name.strip()
-        if not resolved_worksheet and meta:
-            resolved_worksheet = meta.get("worksheet_title", "")
-        config = DataSourceConfig(
-            sheet_url=sheet_url.strip(),
-            spreadsheet_id=spreadsheet_id,
-            worksheet_name=resolved_worksheet,
-            id_column=id_column.strip() or DEFAULT_ID_COLUMN,
-        )
-        save_template_data_source(template_id, config)
-        st.success("已保存为当前模板的数据源。")
-        st.rerun()
-    if credentials is not None and sheet_url.strip():
-        if st.button("列出可用工作表", key=f"ds_list_ws{suffix}"):
+        else:
+            worksheet_name = st.session_state.get(f"ds_worksheet_select{suffix}", saved_worksheet)
+            id_column = st.session_state.get(f"ds_id_column_select{suffix}", saved_id_col)
+            config = DataSourceConfig(
+                sheet_url=sheet_url.strip(),
+                spreadsheet_id=spreadsheet_id,
+                worksheet_name=str(worksheet_name),
+                id_column=str(id_column) or DEFAULT_ID_COLUMN,
+                column_mappings=_extract_mappings(template_id, saved),
+            )
+            save_template_data_source(template_id, config)
+            save_template_id_column(template_id, str(id_column))
+            st.success(f"已保存默认 ID 列：{id_column}")
+            st.rerun()
+    if save_config:
+        if not sheet_url.strip():
+            st.warning("请先填写 Google Sheet URL。")
+        else:
             try:
-                titles = list_worksheet_titles(credentials, sheet_url)
-                st.info("可用工作表: " + ", ".join(titles))
-            except GoogleSheetsError as exc:
+                spreadsheet_id = parse_spreadsheet_id(sheet_url)
+            except ValueError as exc:
                 st.error(str(exc))
-
-
-
-def _data_source_summary_rows() -> list[dict[str, str]]:
-    # 构建数据源汇总表行
-    rows: list[dict[str, str]] = []
-    for entry in list_template_data_sources():
-        data_source = entry.data_source
-        rows.append(
-            {
-                "模板": entry.display_name,
-                "状态": "已配置" if data_source else "未配置",
-                "工作表": data_source.worksheet_name or "(默认)" if data_source else "—",
-                "ID 列": data_source.id_column if data_source else "—",
-                "Spreadsheet ID": data_source.spreadsheet_id if data_source else "—",
-            }
-        )
-    return rows
-
-
-
-def render_data_sources_tab(current_template_id: str) -> None:
-    # 填写侧数据源 Tab：集中展示全部模板的数据源
-    st.subheader("数据源汇总")
-    entries = list_template_data_sources()
-    configured_count = sum(1 for entry in entries if entry.data_source is not None)
-    st.caption(
-        f"共 {len(entries)} 个模板，{configured_count} 个已配置 Google Sheet。"
-        " 在侧边栏「添加数据源」可编辑当前模板的数据源。"
-    )
-    if not entries:
-        st.info("未发现任何模板，请将 xlsx 文件复制到 templates/ 目录。")
-        return
-    st.dataframe(_data_source_summary_rows(), use_container_width=True, hide_index=True)
-    current = next((entry for entry in entries if entry.template_id == current_template_id), None)
-    if current is None:
-        return
-    st.markdown(f"**当前模板：{current.display_name}**")
-    if current.data_source is None:
-        st.warning("当前模板尚未配置数据源。请使用侧边栏「添加数据源」进行配置。")
-        return
-    saved = current.data_source
-    st.markdown(f"- **Sheet URL**: `{saved.sheet_url}`")
-    st.markdown(f"- **Spreadsheet ID**: `{saved.spreadsheet_id}`")
-    st.markdown(f"- **工作表**: `{saved.worksheet_name or '(默认)'}`")
-    st.markdown(f"- **ID 列**: `{saved.id_column}`")
-    credentials = get_session_credentials()
-    if credentials is None:
-        st.caption("上传 Google 凭证后可在此预览数据。")
-        return
-    if st.button("预览当前模板数据源", key=f"ds_tab_preview_{current_template_id}"):
-        with st.spinner("正在加载预览..."):
-            try:
-                preview, meta = fetch_sheet_preview(
-                    credentials,
-                    saved.sheet_url,
-                    saved.worksheet_name or None,
-                    5,
+            else:
+                worksheet_name = st.session_state.get(f"ds_worksheet_select{suffix}", saved_worksheet)
+                id_column = st.session_state.get(f"ds_id_column_select{suffix}", saved_id_col)
+                config = DataSourceConfig(
+                    sheet_url=sheet_url.strip(),
+                    spreadsheet_id=spreadsheet_id,
+                    worksheet_name=str(worksheet_name),
+                    id_column=str(id_column) or DEFAULT_ID_COLUMN,
+                    column_mappings=_extract_mappings(template_id, saved),
                 )
-                st.success(
-                    f"「{meta['spreadsheet_title']}」/「{meta['worksheet_title']}」"
-                    f"（约 {meta['row_count']} 行）"
-                )
-                if preview.empty:
-                    st.info("工作表为空或仅有标题行。")
-                else:
-                    st.dataframe(preview, use_container_width=True)
-            except GoogleSheetsError as exc:
-                st.error(str(exc))
-                for hint in exc.hints:
-                    st.markdown(f"- {hint}")
-            except Exception as exc:
-                st.error(f"预览失败: {exc}")
-
-
-
-def render_data_source_sidebar(template_id: str, template_label: str) -> None:
-    # 侧边栏数据源设置入口
-    st.sidebar.divider()
-    st.sidebar.subheader("数据源")
-    saved = load_template_data_source(template_id)
-    if saved:
-        st.sidebar.caption(
-            f"{template_label} 已配置: `{saved.worksheet_name or '(默认工作表)'}` · ID 列 `{saved.id_column}`"
-        )
-    else:
-        st.sidebar.caption(f"{template_label} 尚未配置数据源。")
-    if get_session_credentials() is None:
-        st.sidebar.caption("当前会话未加载 Google 凭证，查询前需先认证。")
-    form_key = f"ds_form_open_{template_id}"
-    show_form = st.sidebar.button("添加数据源", key=f"ds_toggle_{template_id}")
-    if show_form or st.session_state.get(form_key):
-        st.session_state[form_key] = True
-        with st.sidebar.expander("数据源设置", expanded=True):
-            _render_auth_controls()
-            _render_config_form(template_id, saved)
-            if saved and st.button("清除已保存配置", key=f"ds_clear_{template_id}"):
-                clear_template_data_source(template_id)
-                st.session_state.pop(f"ds_last_meta_{template_id}", None)
-                st.success("已清除数据源配置。")
+                save_template_data_source(template_id, config)
+                st.success("已保存当前模板的数据源配置。")
                 st.rerun()
+    if saved and st.button("清除已保存配置", key=f"ds_clear{suffix}"):
+        clear_template_data_source(template_id)
+        for key in (
+            _test_ok_key(template_id),
+            _columns_key(template_id),
+            _worksheets_key(template_id),
+            _meta_key(template_id),
+            _mappings_editor_key(template_id),
+        ):
+            st.session_state.pop(key, None)
+        st.success("已清除数据源配置。")
+        st.rerun()
+    if saved:
+        st.caption(
+            f"已保存：工作表 `{saved.worksheet_name or '(默认)'}` · "
+            f"ID 列 `{saved.id_column}` · {len(saved.column_mappings)} 条映射"
+        )

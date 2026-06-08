@@ -2,10 +2,13 @@ import pytest
 
 from app.services.source_parser import (
     IDX_RECEIVING_DATE,
+    map_sheet_row_with_mappings,
+    map_tab_line_with_mappings,
     merge_parsed_into_headers,
     parse_md_date,
     parse_source_line,
     parse_source_text,
+    parse_source_text_with_mappings,
     sheet_row_to_form_fields,
 )
 
@@ -125,6 +128,42 @@ def test_parse_source_line_insufficient_fields() -> None:
 def test_parse_md_date_invalid() -> None:
     with pytest.raises(ValueError, match="无效日期格式"):
         parse_md_date("invalid", reference_year=2026)
+
+
+def test_map_tab_line_with_mappings() -> None:
+    mappings = [
+        {"source": "0", "target": "P.O. No.", "kind": "tab"},
+        {"source": "4", "target": "Container No.", "kind": "tab"},
+        {"source": "12", "target": "Receiving Date", "kind": "tab"},
+    ]
+    parsed = map_tab_line_with_mappings(EXAMPLE_LINE, mappings, order=1, reference_year=2026)
+    assert parsed["P.O. No."] == "10073"
+    assert parsed["Container No."] == "EMCU5484116"
+    assert parsed["Receiving Date"] == "06/01/26"
+
+
+def test_parse_source_text_with_mappings() -> None:
+    mappings = [{"source": "0", "target": "P.O. No.", "kind": "tab"}]
+    rows = parse_source_text_with_mappings(EXAMPLE_LINE, mappings, reference_year=2026)
+    assert len(rows) == 1
+    assert rows[0]["P.O. No."] == "10073"
+
+
+def test_map_sheet_row_with_mappings() -> None:
+    mappings = [
+        {"source": "PO", "target": "P.O. No.", "kind": "sheet"},
+        {"source": "Container#", "target": "Container No.", "kind": "sheet"},
+        {"source": "recv. date", "target": "Receiving Date", "kind": "sheet"},
+    ]
+    row = {
+        "PO": "10073",
+        "Container#": "EMCU5484116",
+        "recv. date": "6/1",
+    }
+    parsed = map_sheet_row_with_mappings(row, mappings, reference_year=2026)
+    assert parsed["P.O. No."] == "10073"
+    assert parsed["Container No."] == "EMCU5484116"
+    assert parsed["Receiving Date"] == "06/01/26"
 
 
 def test_sheet_row_to_form_fields() -> None:

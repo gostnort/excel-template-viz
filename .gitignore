@@ -16,7 +16,9 @@ oauth_token.json
 client_secret*.json
 
 # 本地模板副本（可选，若含敏感数据）
-# templates/*.xlsx
+templates/*.xlsx
+tamplates/*.json
+!templates/README.txt
 
 # IDE
 .idea/
@@ -27,7 +29,12 @@ client_secret*.json
 .DS_Store
 Thumbs.db
 
+# 本地视觉模型权重（app/vllm/ 下可整目录删除重装）
+app/vllm/
+
 # pytest
 .pytest_cache/
 htmlcov/
 .coverage
+
+

@@ -66,12 +66,90 @@ SHEET_CONTAINER_COLUMN = "Container#"
 SHEET_RECV_DATE_COLUMN = "recv. date"
 
 
+def _apply_date_mapping(parsed: dict[str, str], target: str, raw: str, reference_year: int | None) -> None:
+    yy, mm, dd, receiving_date = parse_md_date(raw, reference_year)
+    parsed["YY"] = yy
+    parsed["MM"] = mm
+    parsed["DD"] = dd
+    parsed[target] = receiving_date
+
+
+def map_sheet_row_with_mappings(
+    row: dict[str, str],
+    mappings: list[dict[str, str]],
+    reference_year: int | None = None,
+) -> dict[str, str]:
+    # 按配置映射将 Sheet 行转为表单字段
+    parsed: dict[str, str] = {}
+    for item in mappings:
+        if item.get("kind", "sheet") != "sheet":
+            continue
+        source = item["source"]
+        target = item["target"]
+        raw = row.get(source, "").strip()
+        if not raw:
+            continue
+        if target.strip() == "Receiving Date" or source.strip() in {SHEET_RECV_DATE_COLUMN, "recv. date"}:
+            _apply_date_mapping(parsed, target, raw, reference_year)
+        else:
+            parsed[target] = raw
+    return parsed
+
+
+def map_tab_line_with_mappings(
+    line: str,
+    mappings: list[dict[str, str]],
+    order: int,
+    reference_year: int | None = None,
+) -> dict[str, str]:
+    # 按配置映射将制表符行转为表单字段
+    fields = line.split("\t")
+    parsed: dict[str, str] = {"order": str(order)}
+    for item in mappings:
+        if item.get("kind") != "tab":
+            continue
+        source = item["source"]
+        target = item["target"]
+        if not source.isdigit():
+            continue
+        idx = int(source)
+        if idx >= len(fields):
+            continue
+        raw = fields[idx].strip()
+        if not raw:
+            continue
+        if target.strip() == "Receiving Date":
+            _apply_date_mapping(parsed, target, raw, reference_year)
+        else:
+            parsed[target] = raw
+    return parsed
+
+
+def parse_source_text_with_mappings(
+    text: str,
+    mappings: list[dict[str, str]],
+    reference_year: int | None = None,
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    order = 1
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        rows.append(map_tab_line_with_mappings(line, mappings, order, reference_year))
+        order += 1
+    return rows
+
+
 def sheet_row_to_form_fields(
     row: dict[str, str],
     id_column: str = "PO",
     reference_year: int | None = None,
+    mappings: list[dict[str, str]] | None = None,
 ) -> dict[str, str]:
-    # 将 Google Sheet 行映射为 GIN LOT 表单字段（与制表符粘贴逻辑一致）
+    # 将 Google Sheet 行映射为表单字段
+    if mappings:
+        return map_sheet_row_with_mappings(row, mappings, reference_year)
     po_value = row.get(id_column, "").strip()
     container = row.get(SHEET_CONTAINER_COLUMN, "").strip()
     recv_raw = row.get(SHEET_RECV_DATE_COLUMN, "").strip()

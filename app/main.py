@@ -1,7 +1,6 @@
 import streamlit as st
 import streamlit.components.v1 as components
 
-from app.components.data_source_settings import render_data_source_sidebar
 from app.components.template_form import render_template_page
 from app.services.registry import load_templates
 from app.services.shutdown import CLOSE_TAB_HTML, schedule_shutdown, write_pid_file
@@ -51,7 +50,6 @@ def main() -> None:
     if config is None:
         st.error("模板配置不存在。")
         return
-    render_data_source_sidebar(config.id, config.display_name)
     render_shutdown_control()
     render_template_page(config)
 

@@ -1,7 +1,21 @@
+import math
+import time
+from datetime import timedelta
+
 import streamlit as st
 
-from app.components.data_source_settings import get_session_credentials, render_data_sources_tab
-from app.services.data_source import load_template_data_source
+from app.components.data_source_settings import (
+    ID_LOOKUP_DELAY_SECONDS,
+    get_session_credentials,
+    render_data_sources_tab,
+)
+from app.components.paste_parse_settings import render_paste_mapping_tab
+from app.services.paste_parse_config import load_paste_parse_config, parse_text_with_config
+from app.services.data_source import (
+    id_target_field,
+    load_template_data_source,
+    sheet_mappings,
+)
 from app.services.excel_parser import (
     build_dataframe_from_form_rows,
     format_cell_display,
@@ -14,7 +28,6 @@ from app.services.google_sheets import GoogleSheetsError, fetch_row_by_id
 from app.services.registry import TemplateConfig, update_template_sheet_name
 from app.services.source_parser import (
     merge_parsed_into_headers,
-    parse_source_text,
     sheet_row_to_form_fields,
 )
 
@@ -39,8 +52,12 @@ def _row_select_key(config_id: str) -> str:
 
 
 
+def _auto_id_state_key(config_id: str, row_idx: int) -> str:
+    return f"auto_id_{config_id}_{row_idx}"
+
+
+
 def _summarize_row(row: dict[str, str], row_idx: int) -> str:
-    # 生成行摘要供下拉选择
     candidates = [
         ("P.O. No.", "PO"),
         ("Container No.", "箱号"),
@@ -59,7 +76,6 @@ def _summarize_row(row: dict[str, str], row_idx: int) -> str:
 
 
 def _resolve_selected_index(config_id: str, row_count: int) -> int:
-    # 解析已选行索引
     if row_count <= 0:
         return 0
     key = _row_select_key(config_id)
@@ -71,7 +87,6 @@ def _resolve_selected_index(config_id: str, row_count: int) -> int:
 
 
 def _init_form_rows(config: TemplateConfig, headers: list[str], dataframe) -> list[dict[str, str]]:
-    # 从模板初始化表单行，存入 session_state
     key = _form_rows_key(config.id)
     if key not in st.session_state:
         st.session_state[key] = [
@@ -83,7 +98,6 @@ def _init_form_rows(config: TemplateConfig, headers: list[str], dataframe) -> li
 
 
 def _sync_cell_keys(config_id: str, headers: list[str], rows: list[dict[str, str]]) -> None:
-    # 将行数据同步到各单元格 widget 的 session_state 键
     for row_idx, row in enumerate(rows):
         for col_idx, header in enumerate(headers):
             st.session_state[_cell_key(config_id, row_idx, col_idx)] = row.get(header, "")
@@ -91,9 +105,12 @@ def _sync_cell_keys(config_id: str, headers: list[str], rows: list[dict[str, str
 
 
 def _apply_source_parse(config: TemplateConfig, headers: list[str], source_text: str) -> bool:
-    # 解析粘贴的源数据并写入表单行
+    paste_config = load_paste_parse_config(config.id)
+    if paste_config is None:
+        st.warning("请先在「粘贴映射」Tab 生成并保存 YAML。")
+        return False
     try:
-        parsed_rows = parse_source_text(source_text)
+        parsed_rows = parse_text_with_config(source_text, paste_config)
     except ValueError as exc:
         st.error(f"解析失败: {exc}")
         return False
@@ -119,17 +136,22 @@ def _apply_sheet_lookup(
     headers: list[str],
     po_value: str,
     target_row_index: int,
+    *,
+    show_errors: bool = True,
 ) -> bool:
-    # 按 P.O. No. / PO 从默认数据源拉取行并填入表单
     data_source = load_template_data_source(config.id)
     if data_source is None:
-        st.warning("请先在侧边栏「添加数据源」配置当前模板的 Google Sheet。")
+        if show_errors:
+            st.warning("请先在「数据源」Tab 配置并保存 Google Sheet。")
         return False
     credentials = get_session_credentials()
     if credentials is None:
-        st.warning("请先在侧边栏完成 Google 认证（服务账号或 OAuth）。")
+        if show_errors:
+            st.warning("请先在「数据源」Tab 完成 Google 认证。")
         return False
-    with st.spinner("正在从 Google Sheet 查询..."):
+    mappings = sheet_mappings(data_source)
+    spinner = st.spinner("正在从 Google Sheet 查询...") if show_errors else _null_context()
+    with spinner:
         try:
             row = fetch_row_by_id(
                 credentials,
@@ -139,20 +161,28 @@ def _apply_sheet_lookup(
                 po_value,
             )
         except GoogleSheetsError as exc:
-            st.error(str(exc))
-            for hint in exc.hints:
-                st.markdown(f"- {hint}")
+            if show_errors:
+                st.error(str(exc))
+                for hint in exc.hints:
+                    st.markdown(f"- {hint}")
             return False
         except Exception as exc:
-            st.error(f"查询失败: {exc}")
+            if show_errors:
+                st.error(f"查询失败: {exc}")
             return False
     if row is None:
-        st.warning(f"未找到 {data_source.id_column}={po_value!r} 的记录。")
+        if show_errors:
+            st.warning(f"未找到 {data_source.id_column}={po_value!r} 的记录。")
         return False
     try:
-        parsed = sheet_row_to_form_fields(row, data_source.id_column)
+        parsed = sheet_row_to_form_fields(
+            row,
+            data_source.id_column,
+            mappings=mappings or None,
+        )
     except ValueError as exc:
-        st.error(f"行数据映射失败: {exc}")
+        if show_errors:
+            st.error(f"行数据映射失败: {exc}")
         return False
     existing_rows = list(st.session_state.get(_form_rows_key(config.id), []))
     if not existing_rows:
@@ -167,37 +197,65 @@ def _apply_sheet_lookup(
 
 
 
-def _render_sheet_lookup_area(
+class _null_context:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+
+def _poll_auto_id_lookup(
     config: TemplateConfig,
     headers: list[str],
-    rows: list[dict[str, str]],
+    selected_index: int,
 ) -> None:
-    # 已配置数据源时，按 PO 查询并自动填表
     data_source = load_template_data_source(config.id)
-    if data_source is None:
+    id_field = id_target_field(data_source, headers)
+    if not id_field or not data_source or not data_source.id_column:
         return
-    st.subheader("按 PO 查询")
-    st.caption(
-        f"从当前模板的数据源（工作表 `{data_source.worksheet_name or '默认'}`，"
-        f"ID 列 `{data_source.id_column}`）拉取记录，填入 P.O. No. 等字段。"
-    )
-    po_value = st.text_input(
-        "P.O. No. / PO",
-        placeholder="例如 10073",
-        key=f"po_lookup_{config.id}",
-    )
-    if st.button("查询并填入", key=f"po_fetch_{config.id}"):
-        if not po_value.strip():
-            st.warning("请输入 PO 编号。")
-            return
-        target_row_index = _resolve_selected_index(config.id, len(rows))
-        if _apply_sheet_lookup(config, headers, po_value.strip(), target_row_index):
-            st.rerun()
+    col_idx = headers.index(id_field)
+    cell_key = _cell_key(config.id, selected_index, col_idx)
+    current = str(st.session_state.get(cell_key, "")).strip()
+    state_key = _auto_id_state_key(config.id, selected_index)
+    state = st.session_state.setdefault(state_key, {"value": "", "since": 0.0, "done": ""})
+    now = time.time()
+    if current != state["value"]:
+        state["value"] = current
+        state["since"] = now
+        state["done"] = ""
+        return
+    if not current or current == state["done"]:
+        return
+    elapsed = now - state["since"]
+    if elapsed < ID_LOOKUP_DELAY_SECONDS:
+        return
+    if _apply_sheet_lookup(config, headers, current, selected_index, show_errors=False):
+        state["done"] = current
+        st.rerun()
+
+
+
+def _render_auto_lookup_fragment(
+    config: TemplateConfig,
+    headers: list[str],
+    selected_index: int,
+) -> None:
+    fragment = getattr(st, "fragment", None)
+    if fragment is None:
+        _poll_auto_id_lookup(config, headers, selected_index)
+        return
+
+    @fragment(run_every=timedelta(seconds=1))
+    def _auto_lookup_runner() -> None:
+        _poll_auto_id_lookup(config, headers, selected_index)
+
+    _auto_lookup_runner()
 
 
 
 def _render_source_paste_area(config: TemplateConfig, headers: list[str]) -> None:
-    # 顶部源数据粘贴区与解析按钮
     st.subheader("源数据粘贴")
     source_key = _source_text_key(config.id)
     source_text = st.text_area(
@@ -207,9 +265,42 @@ def _render_source_paste_area(config: TemplateConfig, headers: list[str]) -> Non
         key=source_key,
         label_visibility="collapsed",
     )
-    if st.button("解析并填入", key=f"parse_{config.id}"):
+    has_paste_config = load_paste_parse_config(config.id) is not None
+    parse_disabled = not has_paste_config
+    if st.button("解析并填入", key=f"parse_{config.id}", disabled=parse_disabled):
         if _apply_source_parse(config, headers, source_text):
             st.rerun()
+    elif parse_disabled:
+        st.caption("请先在「粘贴映射」Tab 保存 YAML 映射。")
+
+
+
+LABEL_PEEK_SIZE = 10
+MAX_COLS_PER_ROW = 11
+
+
+def _cols_from_peeked_labels(peeked_headers: list[str]) -> int:
+    # 从当前位置往后最多 10 个 label 中最长者决定本行列数（最多 11 列，最少 1 列）
+    if not peeked_headers:
+        return MAX_COLS_PER_ROW
+    max_label_len = max(len(header.strip()) for header in peeked_headers)
+    if max_label_len <= 10:
+        return MAX_COLS_PER_ROW
+    tier = (max_label_len - 1) // 10
+    return max(1, MAX_COLS_PER_ROW - tier * 2)
+
+
+def _header_row_chunks(headers: list[str]) -> list[list[tuple[int, str]]]:
+    # 每行：从当前位置往后抓 10 个 label 判断列数，本行最多放该列数个字段，再往后推进
+    visual_rows: list[list[tuple[int, str]]] = []
+    pos = 0
+    while pos < len(headers):
+        peeked = headers[pos : pos + LABEL_PEEK_SIZE]
+        per_row = _cols_from_peeked_labels(peeked)
+        count = min(per_row, len(headers) - pos)
+        visual_rows.append(list(enumerate(headers[pos : pos + count], start=pos)))
+        pos += count
+    return visual_rows
 
 
 
@@ -219,25 +310,26 @@ def _render_data_rows(
     rows: list[dict[str, str]],
     selected_index: int,
 ) -> list[dict[str, str]]:
-    # 按行分组渲染单元格输入，标签为第 1 行列标题
+    _render_auto_lookup_fragment(config, headers, selected_index)
     edited_rows: list[dict[str, str]] = []
     for row_idx, row in enumerate(rows):
         if row_idx != selected_index:
             edited_rows.append(row)
             continue
         st.markdown(f"**第 {row_idx + 1} 行**")
-        columns = st.columns(len(headers))
         row_values: dict[str, str] = {}
-        for col_idx, header in enumerate(headers):
-            with columns[col_idx]:
-                cell_key = _cell_key(config.id, row_idx, col_idx)
-                if cell_key not in st.session_state:
-                    st.session_state[cell_key] = row.get(header, "")
-                input_value = st.text_input(
-                    header,
-                    key=cell_key,
-                )
-            row_values[header] = input_value
+        for chunk in _header_row_chunks(headers):
+            columns = st.columns(len(chunk))
+            for col_idx, (global_col_idx, header) in enumerate(chunk):
+                with columns[col_idx]:
+                    cell_key = _cell_key(config.id, row_idx, global_col_idx)
+                    if cell_key not in st.session_state:
+                        st.session_state[cell_key] = row.get(header, "")
+                    input_value = st.text_input(
+                        header,
+                        key=cell_key,
+                    )
+                row_values[header] = input_value
         edited_rows.append(row_values)
     st.session_state[_form_rows_key(config.id)] = edited_rows
     return edited_rows
@@ -245,7 +337,6 @@ def _render_data_rows(
 
 
 def _render_sheet_selector(config: TemplateConfig, sheet_names: list[str]) -> str:
-    # 左侧工作表选择与默认设置
     default_sheet = config.sheet_name if config.sheet_name in sheet_names else sheet_names[0]
     st.subheader("工作表")
     selected_sheet = st.selectbox(
@@ -267,8 +358,19 @@ def _render_sheet_selector(config: TemplateConfig, sheet_names: list[str]) -> st
 
 
 
+def _load_template_headers(config: TemplateConfig, sheet_names: list[str]) -> tuple[str, list[str]]:
+    default_sheet = config.sheet_name if config.sheet_name in sheet_names else sheet_names[0]
+    dataframe = read_template_sheet(
+        config.file_path,
+        default_sheet,
+        config.header_row,
+        config.data_start_row,
+    )
+    return default_sheet, list(dataframe.columns)
+
+
+
 def _render_form_entry_tab(config: TemplateConfig, sheet_names: list[str]) -> None:
-    # 数据录入 Tab：工作表选择、PO 查询、粘贴与导出
     sheet_col, paste_col = st.columns([2, 3])
     with sheet_col:
         selected_sheet = _render_sheet_selector(config, sheet_names)
@@ -292,13 +394,18 @@ def _render_form_entry_tab(config: TemplateConfig, sheet_names: list[str]) -> No
         _init_form_rows(config, headers, dataframe)
     with paste_col:
         _render_source_paste_area(config, headers)
-    rows = st.session_state.get(_form_rows_key(config.id), [])
-    _render_sheet_lookup_area(config, headers, rows)
     st.subheader("数据录入")
     rows = st.session_state.get(_form_rows_key(config.id), [])
     if not rows:
         st.info("暂无数据行，请在上方粘贴源数据并点击「解析并填入」。")
         return
+    data_source = load_template_data_source(config.id)
+    id_field = id_target_field(data_source, headers)
+    if data_source and id_field:
+        st.caption(
+            f"在 `{id_field}` 输入 {data_source.id_column} 值，"
+            f"稳定 {int(ID_LOOKUP_DELAY_SECONDS)} 秒后自动从 Sheet 查询并填入。"
+        )
     st.subheader("已存在数据")
     selected_index = _resolve_selected_index(config.id, len(rows))
     selected_index = st.selectbox(
@@ -336,7 +443,6 @@ def _render_form_entry_tab(config: TemplateConfig, sheet_names: list[str]) -> No
 
 
 def render_template_page(config: TemplateConfig) -> None:
-    # 渲染单个模板的可视化录入表单
     st.title(config.display_name)
     if not config.file_path.exists():
         st.error(f"模板文件不存在: {config.file_path}")
@@ -350,8 +456,15 @@ def render_template_page(config: TemplateConfig) -> None:
     if not sheet_names:
         st.error("模板内没有可用工作表。")
         return
-    entry_tab, sources_tab = st.tabs(["数据录入", "数据源"])
+    try:
+        _, template_fields = _load_template_headers(config, sheet_names)
+    except Exception as exc:
+        st.error(f"读取模板列失败: {exc}")
+        return
+    entry_tab, mapping_tab, sources_tab = st.tabs(["数据录入", "粘贴映射", "数据源"])
     with entry_tab:
         _render_form_entry_tab(config, sheet_names)
+    with mapping_tab:
+        render_paste_mapping_tab(config.id, template_fields)
     with sources_tab:
-        render_data_sources_tab(config.id)
+        render_data_sources_tab(config.id, template_fields)

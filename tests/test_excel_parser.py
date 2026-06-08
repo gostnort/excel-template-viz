@@ -55,6 +55,10 @@ def test_format_cell_display() -> None:
     assert format_cell_display(1) == "1"
     assert format_cell_display(26.0) == "26"
     assert format_cell_display("PO-001") == "PO-001"
+    assert format_cell_display(pd.Series([float("nan")])) == ""
+    assert format_cell_display(pd.Series([1, 2])) == "1, 2"
+    assert format_cell_display(pd.Index([1, float("nan")])) == "1"
+    assert format_cell_display([1, "A"]) == "1, A"
 
 
 def test_build_dataframe_from_form_rows() -> None:
