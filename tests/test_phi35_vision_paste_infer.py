@@ -9,38 +9,37 @@ def test_hardcoded_vision_model_id() -> None:
 
 
 def test_extract_yaml_text_strips_fence() -> None:
-    raw = "```yaml\ndelimiter: tab\nindex_base: 1\n```"
-    assert "delimiter: tab" in extract_yaml_text(raw)
+    raw = "```yaml\ndeterminer: tab\nP.O. No.:\n  - filed: PO\n    index: 0\n```"
+    assert "determiner: tab" in extract_yaml_text(raw)
 
 
 def test_validate_mapping_yaml_rejects_unknown_target() -> None:
     yaml_text = """
-delimiter: tab
-index_base: 1
-fields:
-  - target: Not A Real Field
-    field_index: 1
+determiner: tab
+Not A Real Field:
+  - filed: PO
+    index: 0
 """
-    with pytest.raises(ValueError, match="模板字段不存在"):
+    with pytest.raises(ValueError, match="Unknown template field"):
         validate_mapping_yaml(yaml_text, ["P.O. No."])
 
 
-def test_validate_mapping_yaml_accepts_nested_date() -> None:
+def test_validate_mapping_yaml_accepts_date_rules() -> None:
     yaml_text = """
-delimiter: tab
-index_base: 1
-fields:
-  - field_index: 13
-    split: /
-    fields:
-      - target: MM
-        local_index: 1
-      - target: DD
-        local_index: 2
-    derive:
-      target: Receiving Date
-      from: [MM, DD]
+determiner: tab
+MM:
+  - filed: "recv. date"
+    index: 12
+    regex: "(\\\\d{1,2})(?=\\\\/\\\\d{1,2})"
+DD:
+  - filed: "recv. date"
+    index: 12
+    regex: "(?<=\\\\d{1,2}\\\\/)(\\\\d{1,2})"
+Receiving Date:
+  - filed: "recv. date"
+    index: 12
+    regex: "(\\\\d{1,2}\\\\/\\\\d{1,2})"
 """
     parsed = validate_mapping_yaml(yaml_text, ["MM", "DD", "Receiving Date"])
-    assert parsed["delimiter"] == "tab"
-    assert len(parsed["fields"]) == 1
+    assert parsed["determiner"] == "tab"
+    assert "MM" in parsed

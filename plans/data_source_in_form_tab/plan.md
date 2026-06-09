@@ -1,64 +1,82 @@
-# Data Source Tab in Form Plan
+# Paste-split YAML & Phi-3.5 implementation plan
 
 ## Goal
-Move data source configuration into the template page's "数据源" tab. Sidebar navigation should only list Excel templates. Data source columns become dropdowns populated after a successful sheet test. Allow setting a default ID column and enable auto lookup when the user enters an ID. Add a mapping list that binds source columns to target template fields.
+
+* YAML in **spec.md §4** fully defines TSV row → Ginger (and other) form fields.
+* Phi-3.5 Vision (**vLLM** in docs) fills that YAML from screenshots in **Paste mapping**.
+* **Replace** legacy `paste_parse_config` / `paste_mapping_infer` / old vision column-mapping output.
+
+## Data flow
+
+```mermaid
+flowchart LR
+  A[Source screenshot] --> B[Phi-3.5 fills YAML]
+  B --> C[templates/id.paste.yaml]
+  D[Pasted TSV row] --> E[YAML splitter]
+  C --> E
+  E --> F[Form fields]
+  G[ID true] --> H[Google Sheet lookup]
+```
 
 ## Scope
-- UI: Add "数据源" tab inside each template page.
-- Sidebar: Only template navigation; remove data source config entry.
-- Data source config: Drive all inputs inside the tab.
-- Column mapping: Provide editable mapping list per template.
-- Auto lookup: When ID column value changes, fetch row and fill fields.
 
-## User Flow
-1. User selects a template from the sidebar.
-2. In the template page, user opens the "数据源" tab.
-3. User authenticates and tests a Google Sheet inside the tab.
-4. Once test succeeds, column names are loaded.
-5. User picks worksheet and ID column from dropdowns.
-6. User clicks "设为默认 ID 列" to persist the ID column.
-7. User configures column mappings (source column -> target field).
-8. In "数据录入" tab, typing into the ID field auto-fetches row data and fills fields.
+| Module | Change |
+|--------|--------|
+| `paste_parse_settings.py` | Screenshot/text → Phi-3.5 YAML; edit; save |
+| `paste_parse_config.py` | New loader + splitter (`determiner` / `index` / `regex` / `filed`) |
+| `phi35_vision_paste_infer.py` | English prompt → §4 YAML; 0-based index |
+| `template_form.py` | Source paste + Parse & fill |
+| `paste_mapping_infer.py` | Remove or optional fallback only |
 
-## Data Model Updates
-- Store `worksheet_name`, `id_column`, `spreadsheet_id`, and `column_mappings` in per-template sidecar config.
-- Store `id_column` only after the "设为默认 ID 列" action.
-- Cache the latest validated sheet columns for the current template session.
+**Out of scope**: change xlsx template columns; redesign Data source tab.
 
-## UI Components
-- `template_form` tabs: `数据录入` and `数据源`.
-- 数据源 tab:
-  - Auth inputs and test button.
-  - Sheet selector (dropdown).
-  - ID column selector (dropdown).
-  - "设为默认 ID 列" button.
-  - Column mapping editor (table-like list).
-  - Preview table for the sheet after successful test.
-- 数据录入 tab:
-  - ID input triggers auto lookup on change.
-  - Mappings are applied to fill target fields.
+## YAML keys (match sample)
 
-## Behavior Details
-- Column dropdowns are disabled until sheet test succeeds.
-- On successful test:
-  - Persist `spreadsheet_id` and worksheet name.
-  - Load column headers and make them available to dropdowns.
-- Auto lookup:
-  - When ID input changes and ID column is set, call fetch by ID.
-  - Fill target fields using the mapping list.
+| Key | Meaning |
+|-----|---------|
+| `determiner` | `"tab"` or `/` `,` space |
+| `order` | Optional source header list |
+| `<template field>` | Form label |
+| `filed` | Source header; `?` if unknown |
+| `index` | **0-based** source column |
+| `regex` | Optional extract from cell string |
+| `ID` | `true` → sheet lookup key |
 
-## Implementation Steps
-1. Refactor `main.py` sidebar to only list templates.
-2. Add tabs in `template_form.render_template_page`.
-3. Move data source config UI from sidebar into data source tab.
-4. Update data source services to store mapping list and default ID column.
-5. Add auto-lookup trigger tied to ID field input.
-6. Update tests for data source flow and mapping behavior.
+## Phi-3.5 responsibilities
 
-## Acceptance Criteria
-- Sidebar shows only templates.
-- Data source settings are only visible under the template "数据源" tab.
-- Column dropdowns appear only after a successful test.
-- "设为默认 ID 列" persists and is reused next time.
-- Entering an ID auto-fills mapped fields.
-- Mapping list can be saved and reused per template.
+* **Does**: screenshot → fill `filed`, `index`, `regex`, `ID` per template field.
+* **Does not**: split a paste row into form values (local parser does that).
+* **Path**: `app/vllm/phi-3.5-vision-instruct-int4-ov`.
+
+## User flow
+
+1. **Paste mapping**: download model (first time) → paste screenshot → Phi-3.5 YAML → edit → save.
+2. **Data entry**: paste TSV → **Parse & fill**.
+3. `ID: true` + data source configured → auto Sheet lookup (unchanged).
+
+## Steps
+
+1. New YAML validate + split engine (0-based, regex).
+2. English Phi-3.5 prompt + validation (`?` for unknown).
+3. UI copy: paste mapping serves data entry.
+4. Remove old `fields/target` parser; migrate tests to TSV fixture.
+5. E2E: `tests/test_image.png` + fixture TSV line.
+
+## Acceptance
+
+* Saved YAML matches §4; index 0-based.
+* Fixture TSV splits match spec table.
+* Phi-3.5 screenshot YAML + light edit passes split test.
+* `ID: true` still triggers lookup.
+
+## Browser check (Phase 4.3)
+
+Manual verification on **Ginger Lots** template (2026-06-09):
+
+| Tab | Check |
+|-----|-------|
+| Paste mapping | Model download panel, paste screenshot, infer, YAML editor, save |
+| Data entry | Source paste area, Parse & fill disabled until YAML saved |
+| Data source | Google Sheet config unchanged; `ID: true` in paste YAML triggers auto lookup |
+
+---

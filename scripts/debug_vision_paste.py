@@ -4,14 +4,23 @@ import argparse
 import sys
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from app.services.paste_parse_config import config_from_dict, parse_line_with_config
 from app.services.phi35_vision_model import get_vision_model_status
 from app.services.phi35_vision_paste_infer import (
     VisionInferenceError,
     infer_paste_mapping_from_image_debug,
+)
+
+FIXTURE_TSV = (
+    "10073\tGIN\tShandong Santao\tS26167FG\tEMCU5484116\t140601104991\t"
+    "5/9\t5/30\t$2,612\trel\teverport\t6/2\t6/1\t"
+    "600000 Fresh Ginger, China. (F7)\t1780\t57294"
 )
 
 GINGER_HEADERS = [
@@ -29,24 +38,26 @@ GINGER_HEADERS = [
     "Truck Line",
 ]
 
-EXPECTED_TARGETS = {
-    "P.O. No.",
-    "Supplier",
-    "Container No.",
-    "Product Description",
-    "Receiving Date",
+EXPECTED_SPLIT = {
+    "P.O. No.": "10073",
+    "Supplier": "Shandong Santao",
+    "Container No.": "EMCU5484116",
+    "MM": "06",
+    "DD": "01",
+    "Receiving Date": "06/01",
+    "Product Description": "600000 Fresh Ginger, China. (F7)",
 }
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="调试截图推测 YAML 输出")
+    parser = argparse.ArgumentParser(description="Debug screenshot → YAML mapping inference")
     parser.add_argument(
         "--image",
         type=Path,
-        default=ROOT / "tests" / "fixtures" / "logistics_screenshot.png",
-        help="截图路径",
+        default=ROOT / "tests" / "test_image.png",
+        help="Screenshot path",
     )
-    parser.add_argument("--headers", nargs="*", default=GINGER_HEADERS, help="模板字段列表")
+    parser.add_argument("--headers", nargs="*", default=GINGER_HEADERS, help="Template field list")
     args = parser.parse_args()
 
     status = get_vision_model_status()
@@ -54,7 +65,10 @@ def main() -> int:
     print(f"complete: {status.complete}")
     if status.missing_files:
         print(f"missing_files: {', '.join(status.missing_files)}")
-        print("请先运行: python -c \"from app.services.phi35_vision_model import download_vision_model; download_vision_model()\"")
+        print(
+            'Download first: python -c "from app.services.phi35_vision_model import '
+            'download_vision_model; download_vision_model()"'
+        )
         return 2
 
     image_bytes = args.image.read_bytes()
@@ -73,25 +87,26 @@ def main() -> int:
     print("--- raw response ---")
     print(result.raw_response)
 
-    import yaml
-
     parsed = yaml.safe_load(result.yaml_text)
-    targets: set[str] = set()
-    for rule in parsed.get("fields", []):
-        if isinstance(rule, dict) and rule.get("target"):
-            targets.add(str(rule["target"]))
-        derive = rule.get("derive") if isinstance(rule, dict) else None
-        if isinstance(derive, dict) and derive.get("target"):
-            targets.add(str(derive["target"]))
-        for sub in rule.get("fields", []) if isinstance(rule, dict) else []:
-            if isinstance(sub, dict) and sub.get("target"):
-                targets.add(str(sub["target"]))
-
-    missing = EXPECTED_TARGETS - targets
-    if missing:
-        print("MISSING TARGETS:", ", ".join(sorted(missing)))
+    if parsed.get("determiner") != "tab":
+        print("INVALID: determiner must be tab")
         return 1
-    print("OK: all expected targets present")
+
+    config = config_from_dict(parsed)
+    if config is None:
+        print("INVALID: no field mappings")
+        return 1
+
+    split = parse_line_with_config(FIXTURE_TSV, config, order=1)
+    print("--- split fixture TSV ---")
+    for field, expected in EXPECTED_SPLIT.items():
+        actual = split.get(field)
+        print(f"{field}: {actual!r} (expected {expected!r})")
+        if actual != expected:
+            print("SPLIT MISMATCH")
+            return 1
+
+    print("OK: YAML valid and fixture TSV splits match spec")
     return 0
 
 

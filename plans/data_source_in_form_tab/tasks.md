@@ -1,127 +1,57 @@
-# Data Source Tab in Form Task Breakdown (tasks.md)
-
-
-
-Speckit-style phased tasks for `data_source_in_form_tab`.
-
-
+# Paste-split YAML tasks (`data_source_in_form_tab`)
 
 ---
 
+## Phase 1: Planning
 
+### [x] Task 1.1 — Speckit docs
+* Four files under `plans/data_source_in_form_tab/`, **English**.
 
-## Phase 1: Planning Package
-
-
-
-### [x] [Task 1.1] Publish Speckit docs
-
-* **Description**: Ensure `plans/data_source_in_form_tab/` contains plan and tasks documentation.
-
-* **Acceptance**: `plan.md` and `tasks.md` exist in the plans folder.
-
-
+### [x] Task 1.2 — Align on sample
+* `implementation_context.md` + spec §4; Phi-3.5 = vLLM; 0-based index; tab roles.
 
 ---
 
+## Phase 2: YAML split engine
 
+### [x] Task 2.1 — Load / validate new YAML
+* Keys: `determiner`, `filed`, `index`, `regex`, `ID`; index 0-based.
 
-## Phase 2: Template Page UI
+### [x] Task 2.2 — TSV splitter
+* `determiner` → columns; `index` → pick column; `regex` → extract.
+* **Acceptance**: fixture TSV line in `implementation_context.md` matches spec split table.
 
+### [x] Task 2.3 — Parse & fill
+* Wire **Data entry**; failures do not overwrite existing cells.
 
-
-### [x] [Task 2.1] Template-only sidebar
-
-* **Description**: Update the sidebar to show only templates and remove data source config entries.
-
-* **Acceptance**: Sidebar lists only templates and still navigates to template pages.
-
-
-
-### [x] [Task 2.2] Data source tab UI
-
-* **Description**: Add a "data source" tab to the template page and move config UI into it.
-
-* **Acceptance**: Data source inputs are visible only inside the template tab layout.
-
-
-
-### [x] [Task 2.3] Column dropdown gating
-
-* **Description**: Populate worksheet and column dropdowns only after a successful sheet test.
-
-* **Acceptance**: Dropdowns are disabled or empty until test succeeds, then show sheet columns.
-
-
-
-### [x] [Task 2.4] Default ID column action
-
-* **Description**: Add a "set default ID column" button that persists the selected column.
-
-* **Acceptance**: Clicking the button saves the ID column and restores it on next load.
-
-
-
-### [x] [Task 2.5] Column mapping list
-
-* **Description**: Add an editable mapping list linking source columns to template fields.
-
-* **Acceptance**: Users can add, edit, and save mappings per template.
-
-
+### [x] Task 2.4 — Remove legacy paste
+* Drop `fields/target/split/derive` parser and old vision mapping prompt.
 
 ---
 
+## Phase 3: Phi-3.5 fills YAML
 
+### [x] Task 3.1 — English vision prompt
+* Output §4 schema; index from 0; `filed: "?"` when unknown.
+* **Acceptance**: `scripts/debug_vision_paste.py` validates against new schema.
 
-## Phase 3: Data Flow Behavior
+### [x] Task 3.2 — Paste mapping UI
+* Copy states: defines rules for source paste in Data entry.
 
-
-
-### [x] [Task 3.1] Persist per-template data source config
-
-* **Description**: Store worksheet name, spreadsheet ID, ID column, and input & output column mappings into each template configuration.
-
-* **Acceptance**: Switching templates loads the correct saved data source settings.
-
-
-
-### [x] [Task 3.2] Auto lookup on ID input
-
-* **Description**: Watch the ID field for changes. After the value is stable for 2 seconds, query the configured sheet by ID and fill mapped target fields from the returned row.
-
-* **Acceptance**: Entering an ID triggers a lookup and populates mapped fields from the matching row.
-
-
-
-### [x] [Task 3.3] Monitoring logic on source data input
-
-* **Description**: When users paste tab-delimited text, split into columns and map each value into the configured target field based on the mapping list.
-
-* **Acceptance**: Pasted tab-delimited data populates the correct inputs via the mapping list.
-
-
+### [x] Task 3.3 — ID + data source
+* `ID: true` keeps auto Sheet lookup.
 
 ---
 
+## Phase 4: Tests
 
+### [x] Task 4.1 — Unit tests
+* determiner, 0-based index, regex, multi-date, `?`.
 
-## Phase 4: Tests and Docs
+### [x] Task 4.2 — Screenshot integration
+* `tests/test_image.png` → YAML → split fixture TSV.
 
+### [x] Task 4.3 — Browser check
+* Ginger Lots tabs and buttons; record in `plan.md`.
 
-
-### [x] [Task 4.1] Update tests for new flow
-
-* **Description**: Adjust data source tests to cover tab UI, dropdown gating, and mappings.
-
-* **Acceptance**: Tests cover the new behavior and pass.
-
-
-
-### [x] [Task 4.2] Document new workflow
-
-* **Description**: Update README or in-app notes to describe the data source tab workflow.
-
-* **Acceptance**: Documentation reflects template-only sidebar and data source tab usage.
-
-
+---

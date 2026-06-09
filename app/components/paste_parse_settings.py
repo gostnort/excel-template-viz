@@ -3,14 +3,23 @@ import io
 import streamlit as st
 from streamlit.components.v1 import html as st_html
 
-from app.services.paste_mapping_infer import extract_sample_line, infer_paste_mapping_yaml
+from app.services.paste_mapping_infer import (
+    extract_sample_line,
+    infer_paste_mapping_yaml,
+)
 from app.services.paste_parse_config import (
     load_paste_parse_config,
     paste_config_path,
     save_paste_parse_yaml,
 )
-from app.services.phi35_vision_model import download_vision_model, get_vision_model_status
-from app.services.phi35_vision_paste_infer import VisionInferenceError, infer_paste_mapping_from_image
+from app.services.phi35_vision_model import (
+    download_vision_model,
+    get_vision_model_status,
+)
+from app.services.phi35_vision_paste_infer import (
+    VisionInferenceError,
+    infer_paste_mapping_from_image,
+)
 
 
 def _yaml_draft_key(template_id: str) -> str:
@@ -43,7 +52,9 @@ def _paste_image_button(label: str, key: str):
     try:
         from streamlit_paste_button import paste_image_button
     except ImportError as exc:
-        raise RuntimeError("请安装 streamlit-paste-button: pip install -r requirements.txt") from exc
+        raise RuntimeError(
+            "请安装 streamlit-paste-button: pip install -r requirements.txt"
+        ) from exc
     return paste_image_button(label=label, key=key)
 
 
@@ -108,14 +119,17 @@ def render_paste_mapping_tab(template_id: str, template_headers: list[str]) -> N
         height=0,
     )
     has_saved = load_paste_parse_config(template_id) is not None
-    st.caption("在此初始化并调校「源数据粘贴 → 模板字段」的 YAML 映射。")
+    st.caption(
+        "Configure how pasted source rows (Data entry tab) map to template fields. "
+        "Save YAML here before using Parse & fill."
+    )
     if not has_saved and not st.session_state.get(_paste_init_notice_key(template_id)):
         st.info(f"首次使用请初始化并保存 YAML：`templates/{template_id}.paste.yaml`。")
         st.session_state[_paste_init_notice_key(template_id)] = True
     if has_saved:
-        st.success("已保存映射，可在「数据录入」Tab 粘贴源数据并解析。")
+        st.success("Mapping saved. Paste source rows in Data entry and click Parse & fill.")
     else:
-        st.info("尚未保存映射。可用截图或文本样本推测后，核对 YAML 并保存。")
+        st.info("No mapping saved yet. Use screenshot or text sample inference, review YAML, then save.")
 
     model_ready = _render_vision_model_panel()
 
@@ -125,7 +139,9 @@ def render_paste_mapping_tab(template_id: str, template_headers: list[str]) -> N
         "无需按 Ctrl+C，避免触发清缓存提示。"
     )
     paste_key = f"paste_clipboard_{template_id}"
-    paste_col, infer_col, spacer_col = st.columns([1, 1, 3], vertical_alignment="bottom")
+    paste_col, infer_col, spacer_col = st.columns(
+        [1, 1, 3], vertical_alignment="bottom"
+    )
     try:
         with paste_col:
             paste_result = _paste_image_button("粘贴截图", key=paste_key)
@@ -177,7 +193,9 @@ def render_paste_mapping_tab(template_id: str, template_headers: list[str]) -> N
         else:
             with st.spinner("截图推测中（首次加载模型约需 1 分钟）..."):
                 try:
-                    draft = infer_paste_mapping_from_image(image_bytes, template_headers)
+                    draft = infer_paste_mapping_from_image(
+                        image_bytes, template_headers
+                    )
                     st.session_state[_yaml_draft_key(template_id)] = draft
                     st.success("已生成 YAML，请在下方核对后保存。")
                     st.rerun()
@@ -190,11 +208,11 @@ def render_paste_mapping_tab(template_id: str, template_headers: list[str]) -> N
                     st.error(str(exc))
 
     st.subheader("文本推测")
-    st.caption("粘贴制表符行或 vLLM 输出的 HTML/Markdown 表格，用于快速推测。")
+    st.caption("Paste a tab-separated row or HTML/Markdown table to infer mapping rules for Data entry.")
     sample_text = st.text_area(
         "文本样本",
         height=100,
-        placeholder="10073\tGIN\t...\t6/1\t...",
+        placeholder="粘贴原始数据...",
         key=_paste_sample_key(template_id),
         label_visibility="collapsed",
     )
@@ -219,7 +237,7 @@ def render_paste_mapping_tab(template_id: str, template_headers: list[str]) -> N
     )
     if st.button("保存映射", key=f"paste_save_{template_id}", type="primary"):
         try:
-            save_paste_parse_yaml(template_id, yaml_text)
+            save_paste_parse_yaml(template_id, yaml_text, template_headers)
             st.success("映射已保存。")
             st.rerun()
         except ValueError as exc:

@@ -6,20 +6,83 @@ from typing import Any
 import yaml
 
 from app.services.registry import TEMPLATES_DIR
-from app.services.source_parser import parse_md_date
 
 PASTE_CONFIG_SUFFIX = ".paste.yaml"
+RESERVED_TOP_KEYS = frozenset({"determiner", "order"})
+
+
+@dataclass
+class PasteParseRule:
+    filed: str
+    index: int
+    regex: str | None = None
+    id_flag: bool = False
 
 
 @dataclass
 class PasteParseConfig:
-    delimiter: str
-    index_base: int
-    fields: list[dict[str, Any]]
+    determiner: str
+    field_rules: dict[str, list[PasteParseRule]]
+    order: list[dict[str, Any]] | None = None
 
 
 def paste_config_path(template_id: str) -> Path:
     return TEMPLATES_DIR / f"{template_id}{PASTE_CONFIG_SUFFIX}"
+
+
+def _normalize_determiner(raw: str) -> str:
+    value = raw.strip().lower()
+    if value in {"tab", "\\t"}:
+        return "tab"
+    return value
+
+
+def _split_line(line: str, determiner: str) -> list[str]:
+    if determiner == "tab":
+        return line.split("\t")
+    if determiner == "space":
+        return line.split()
+    return line.split(determiner)
+
+
+def _parse_rules(raw_rules: Any) -> list[PasteParseRule]:
+    if not isinstance(raw_rules, list):
+        return []
+    rules: list[PasteParseRule] = []
+    for item in raw_rules:
+        if not isinstance(item, dict):
+            continue
+        if "index" not in item:
+            continue
+        rules.append(
+            PasteParseRule(
+                filed=str(item.get("filed", "?")),
+                index=int(item["index"]),
+                regex=str(item["regex"]) if item.get("regex") is not None else None,
+                id_flag=bool(item.get("ID", False)),
+            )
+        )
+    return rules
+
+
+def config_from_dict(raw: dict[str, Any]) -> PasteParseConfig | None:
+    field_rules: dict[str, list[PasteParseRule]] = {}
+    for key, value in raw.items():
+        if key in RESERVED_TOP_KEYS:
+            continue
+        rules = _parse_rules(value)
+        if rules:
+            field_rules[str(key)] = rules
+    if not field_rules:
+        return None
+    order = raw.get("order")
+    if order is not None and not isinstance(order, list):
+        order = None
+    return PasteParseConfig(
+        determiner=_normalize_determiner(str(raw.get("determiner", "tab"))),
+        field_rules=field_rules,
+        order=order,
+    )
 
 
 def load_paste_parse_config(template_id: str) -> PasteParseConfig | None:
@@ -32,19 +95,17 @@ def load_paste_parse_config(template_id: str) -> PasteParseConfig | None:
         return None
     if not isinstance(raw, dict):
         return None
-    fields = raw.get("fields")
-    if not isinstance(fields, list) or not fields:
-        return None
-    delimiter = str(raw.get("delimiter", "tab")).strip().lower()
-    index_base = int(raw.get("index_base", 1))
-    return PasteParseConfig(delimiter=delimiter, index_base=index_base, fields=fields)
+    return config_from_dict(raw)
 
 
-def save_paste_parse_yaml(template_id: str, yaml_text: str) -> None:
+def save_paste_parse_yaml(template_id: str, yaml_text: str, template_headers: list[str] | None = None) -> None:
+    if template_headers is not None:
+        validate_mapping_yaml(yaml_text, template_headers)
+    else:
+        parsed = yaml.safe_load(yaml_text)
+        if not isinstance(parsed, dict) or config_from_dict(parsed) is None:
+            raise ValueError("YAML must contain at least one template field mapping")
     path = paste_config_path(template_id)
-    parsed = yaml.safe_load(yaml_text)
-    if not isinstance(parsed, dict) or not parsed.get("fields"):
-        raise ValueError("YAML 必须包含非空的 fields 列表")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml_text, encoding="utf-8")
 
@@ -64,118 +125,91 @@ def extract_yaml_text(model_output: str) -> str:
 def validate_mapping_yaml(yaml_text: str, template_headers: list[str]) -> dict[str, Any]:
     parsed = yaml.safe_load(yaml_text)
     if not isinstance(parsed, dict):
-        raise ValueError("模型输出不是有效的 YAML 对象")
-    fields = parsed.get("fields")
-    if not isinstance(fields, list) or not fields:
-        raise ValueError("YAML 缺少 fields 列表")
+        raise ValueError("Model output is not a valid YAML object")
+    config = config_from_dict(parsed)
+    if config is None:
+        raise ValueError("YAML must contain at least one template field mapping")
     allowed = {header.strip() for header in template_headers}
-    for rule in fields:
-        if not isinstance(rule, dict):
-            raise ValueError("fields 中存在非法项")
-        if "target" in rule:
-            target = str(rule["target"]).strip()
-            if target not in allowed:
-                raise ValueError("模板字段不存在，请检查 YAML 中的 target 是否在模板列中。")
-        derive = rule.get("derive")
-        if isinstance(derive, dict) and derive.get("target"):
-            target = str(derive["target"]).strip()
-            if target not in allowed:
-                raise ValueError("模板字段不存在，请检查 YAML 中的 derive.target 是否在模板列中。")
-        for sub in rule.get("fields", []):
-            if isinstance(sub, dict) and sub.get("target"):
-                target = str(sub["target"]).strip()
-                if target not in allowed:
-                    raise ValueError("模板字段不存在，请检查 YAML 中的子字段 target 是否在模板列中。")
-    parsed.setdefault("delimiter", "tab")
-    parsed.setdefault("index_base", 1)
+    for field_name in config.field_rules:
+        if field_name.strip() not in allowed:
+            raise ValueError(
+                f"Unknown template field {field_name!r}; check that it exists in the template columns."
+            )
+    parsed.setdefault("determiner", config.determiner)
     return parsed
 
 
-def _split_line(line: str, delimiter: str) -> list[str]:
-    if delimiter in {"tab", "\\t"}:
-        return line.split("\t")
-    return line.split(delimiter)
-
-
-def _pick_part(parts: list[str], index: int, index_base: int) -> str:
-    pos = index - index_base if index_base == 1 else index
-    if pos < 0 or pos >= len(parts):
-        raise ValueError(f"列索引 {index} 超出范围（共 {len(parts)} 列）")
-    return parts[pos].strip()
-
-
-def _resolve_field_index(field_rule: dict[str, Any], default_index_base: int) -> tuple[int, int] | None:
-    raw_index = field_rule.get("field_index", field_rule.get("index"))
-    if raw_index is None:
+def id_target_field_from_config(config: PasteParseConfig | None) -> str | None:
+    if config is None:
         return None
-    index_base = int(field_rule.get("index_base", default_index_base))
-    return int(raw_index), index_base
+    for field_name, rules in config.field_rules.items():
+        for rule in rules:
+            if rule.id_flag:
+                return field_name
+    return None
 
 
-def _resolve_local_index(field_rule: dict[str, Any], default_index_base: int) -> tuple[int, int] | None:
-    raw_index = field_rule.get("local_index", field_rule.get("index"))
-    if raw_index is None:
+def resolve_id_target_field(
+    template_id: str,
+    data_source_config: Any,
+    headers: list[str],
+) -> str | None:
+    from app.services.data_source import id_target_field
+
+    paste_config = load_paste_parse_config(template_id)
+    paste_id = id_target_field_from_config(paste_config)
+    header_by_stripped = {header.strip(): header for header in headers}
+    if paste_id and paste_id.strip() in header_by_stripped:
+        return header_by_stripped[paste_id.strip()]
+    return id_target_field(data_source_config, headers)
+
+
+def _safe_regex_search(pattern: str, raw: str) -> re.Match[str] | None:
+    try:
+        return re.search(pattern, raw)
+    except re.error:
+        pass
+    if "(?<=" in pattern and r"\d{1,2}" in pattern:
+        alt = re.sub(r"\(\?<=[^)]+\)", r"(?:\\d{1,2}/)", pattern, count=1)
+        try:
+            return re.search(alt, raw)
+        except re.error:
+            return None
+    return None
+
+
+def _extract_with_regex(raw: str, pattern: str) -> str | None:
+    match = _safe_regex_search(pattern, raw)
+    if not match:
         return None
-    index_base = int(field_rule.get("local_index_base", field_rule.get("index_base", default_index_base)))
-    return int(raw_index), index_base
+    if match.lastindex and match.lastindex >= 1:
+        return match.group(1).strip()
+    return match.group(0).strip()
 
 
-def _apply_field_rules(
-    parts: list[str],
-    field_rule: dict[str, Any],
-    parsed: dict[str, str],
-    reference_year: int | None,
-    default_index_base: int,
-) -> None:
-    field_index = _resolve_field_index(field_rule, default_index_base)
-    if "target" in field_rule and field_index is not None:
-        index, index_base = field_index
-        target = str(field_rule["target"])
-        value = _pick_part(parts, index, index_base)
-        if field_rule.get("date") == "M/D":
-            yy, mm, dd, receiving = parse_md_date(value, reference_year)
-            parsed["YY"] = yy
-            parsed["MM"] = mm
-            parsed["DD"] = dd
-            parsed[target] = receiving
-        else:
-            parsed[target] = value
-        return
-    if field_index is None:
-        raise ValueError("字段规则缺少 field_index 或 target")
-    index, index_base = field_index
-    raw = _pick_part(parts, index, index_base)
-    split_delim = str(field_rule.get("split", "/"))
-    sub_parts = raw.split(split_delim)
-    for sub_rule in field_rule.get("fields", []):
-        if "target" not in sub_rule:
-            continue
-        local_index = _resolve_local_index(sub_rule, default_index_base)
-        if local_index is None:
-            continue
-        sub_target = str(sub_rule["target"])
-        sub_index, sub_base = local_index
-        sub_pos = sub_index - sub_base if sub_base == 1 else sub_index
-        if sub_pos < 0 or sub_pos >= len(sub_parts):
-            continue
-        value = sub_parts[sub_pos].strip()
-        pad = sub_rule.get("pad")
-        if pad:
-            value = value.zfill(int(pad))
-        parsed[sub_target] = value
-    derive = field_rule.get("derive")
-    if isinstance(derive, dict):
-        target = str(derive.get("target", ""))
-        from_fields = derive.get("from", [])
-        if target and isinstance(from_fields, list) and len(from_fields) >= 2:
-            mm = parsed.get(str(from_fields[0]), "")
-            dd = parsed.get(str(from_fields[1]), "")
-            yy = parsed.get("YY", "")
-            if mm and dd and not yy:
-                yy = str((reference_year or 2026) % 100).zfill(2)
-                parsed["YY"] = yy
-            if mm and dd:
-                parsed[target] = f"{mm}/{dd}/{yy or '00'}"
+def _format_field_value(field_name: str, value: str) -> str:
+    stripped_name = field_name.strip()
+    if stripped_name in {"MM", "DD"} and value.isdigit():
+        return value.zfill(2)
+    if stripped_name == "Receiving Date" and "/" in value:
+        parts = value.split("/", 1)
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            return f"{parts[0].zfill(2)}/{parts[1].zfill(2)}"
+    return value
+
+
+def _apply_field_rule(parts: list[str], rule: PasteParseRule) -> str | None:
+    if rule.index < 0 or rule.index >= len(parts):
+        return None
+    raw = parts[rule.index].strip()
+    if not raw:
+        return None
+    if rule.regex:
+        extracted = _extract_with_regex(raw, rule.regex)
+        if not extracted:
+            return None
+        return extracted
+    return raw
 
 
 def parse_line_with_config(
@@ -184,12 +218,18 @@ def parse_line_with_config(
     order: int,
     reference_year: int | None = None,
 ) -> dict[str, str]:
-    parts = _split_line(line, config.delimiter)
+    del reference_year  # retained for call-site compatibility
+    parts = _split_line(line, config.determiner)
     if not parts:
-        raise ValueError("空行无法解析")
+        raise ValueError("Empty line cannot be parsed")
     parsed: dict[str, str] = {"order": str(order)}
-    for field_rule in config.fields:
-        _apply_field_rules(parts, field_rule, parsed, reference_year, config.index_base)
+    for field_name, rules in config.field_rules.items():
+        for rule in rules:
+            value = _apply_field_rule(parts, rule)
+            if value is None:
+                continue
+            parsed[field_name] = _format_field_value(field_name, value)
+            break
     return parsed
 
 

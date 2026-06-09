@@ -1,20 +1,28 @@
 from datetime import datetime
+import re
 
 # 源数据制表符分隔字段索引
 IDX_PO_NO = 0
 IDX_CONTAINER_NO = 4
 IDX_RECEIVING_DATE = 12
 
-# 仅手动填写的表单列（解析时不写入）
-MANUAL_ONLY_FIELDS = frozenset({"Container Seal No.", "Lot No."})
+MD_DATE_REGEX = re.compile(r"(?:0?[1-9]|1[0-2])/(?:0?[1-9]|[12]\d|3[01])")
+
+
+def _extract_md_date_text(date_text: str) -> str | None:
+    match = MD_DATE_REGEX.search(date_text)
+    if not match:
+        return None
+    return match.group(0)
 
 
 def parse_md_date(date_text: str, reference_year: int | None = None) -> tuple[str, str, str, str]:
     # 解析 M/D 或 MM/DD，返回 YY、MM、DD 及 Receiving Date（MM/DD/YY）
     text = date_text.strip()
-    if not text or "/" not in text:
+    extracted = _extract_md_date_text(text)
+    if not extracted:
         raise ValueError(f"无效日期格式: {date_text!r}")
-    parts = text.split("/")
+    parts = extracted.split("/")
     if len(parts) != 2:
         raise ValueError(f"无效日期格式: {date_text!r}")
     month_str, day_str = parts[0].strip(), parts[1].strip()
@@ -171,13 +179,10 @@ def merge_parsed_into_headers(
     parsed: dict[str, str],
     existing: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    # 将解析结果覆盖到已有行，保留模板中未被解析映射的列
     row = {header: existing.get(header, "") if existing else "" for header in headers}
-    parsed_by_stripped = {key.strip(): value for key, value in parsed.items()}
+    parsed_by_stripped = {key.strip(): value for key, value in parsed.items() if str(value).strip()}
     for header in headers:
         stripped = header.strip()
-        if stripped in MANUAL_ONLY_FIELDS:
-            continue
         if stripped in parsed_by_stripped:
             row[header] = parsed_by_stripped[stripped]
     return row

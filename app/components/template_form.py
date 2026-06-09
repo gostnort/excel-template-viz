@@ -10,9 +10,12 @@ from app.components.data_source_settings import (
     render_data_sources_tab,
 )
 from app.components.paste_parse_settings import render_paste_mapping_tab
-from app.services.paste_parse_config import load_paste_parse_config, parse_text_with_config
+from app.services.paste_parse_config import (
+    load_paste_parse_config,
+    parse_text_with_config,
+    resolve_id_target_field,
+)
 from app.services.data_source import (
-    id_target_field,
     load_template_data_source,
     sheet_mappings,
 )
@@ -212,7 +215,7 @@ def _poll_auto_id_lookup(
     selected_index: int,
 ) -> None:
     data_source = load_template_data_source(config.id)
-    id_field = id_target_field(data_source, headers)
+    id_field = resolve_id_target_field(config.id, data_source, headers)
     if not id_field or not data_source or not data_source.id_column:
         return
     col_idx = headers.index(id_field)
@@ -400,7 +403,7 @@ def _render_form_entry_tab(config: TemplateConfig, sheet_names: list[str]) -> No
         st.info("暂无数据行，请在上方粘贴源数据并点击「解析并填入」。")
         return
     data_source = load_template_data_source(config.id)
-    id_field = id_target_field(data_source, headers)
+    id_field = resolve_id_target_field(config.id, data_source, headers)
     if data_source and id_field:
         st.caption(
             f"在 `{id_field}` 输入 {data_source.id_column} 值，"
