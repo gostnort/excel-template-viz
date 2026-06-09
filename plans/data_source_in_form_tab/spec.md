@@ -26,7 +26,38 @@ Paste-split YAML (only schema — see §4)
 
 **0-based** columns: `0=PO, 2=Supplier, 4=Container#, 12=recv date (6/1), 13=Product, …`
 
-See `implementation_context.md` for full column table and screenshot markdown.
+| index | value |
+|------:|-------|
+| 0 | 10073 |
+| 1 | GIN |
+| 2 | Shandong Santao |
+| 3 | S26167FG |
+| 4 | EMCU5484116 |
+| 5 | 140601104991 |
+| 6 | 5/9 |
+| 7 | 5/30 |
+| 8 | $2,612 |
+| 9 | rel |
+| 10 | everport |
+| 11 | 6/2 |
+| 12 | 6/1 |
+| 13 | 600000 Fresh Ginger, China. (F7) |
+| 14 | 1780 |
+| 15 | 57294 |
+
+Expected split examples:
+
+| Target field | Typical rule | Value |
+|--------------|--------------|-------|
+| P.O. No. | index 0 | 10073 |
+| Supplier | index 2 | Shandong Santao |
+| Container No. | index 4 | EMCU5484116 |
+| Lot No. | index 3 | S26167FG |
+| MM / DD | index 12 + regex | 06 / 01 |
+| Receiving Date | index 12 + regex | 06/01 |
+| Product Description | index 13 | 600000 Fresh Ginger, China. (F7) |
+
+Screenshot table (Phi-3.5 input) — markdown transcription with 0-based column order; use any logistics spreadsheet screenshot in **Paste mapping** tab for manual testing.
 
 ---
 
@@ -144,7 +175,8 @@ Truck Line:
 
 ## 5. Non-functional
 
-* **0-based** `index` everywhere; Phi-3.5 prompts in **English**, state index starts at 0.
+* **0-based** `index` for source columns; use **`index: -1`** when the field is not split from paste (`filed: "?"`).
+* Phi-3.5 prompts in **English**, state index starts at 0 for mapped columns.
 * Paths: `pathlib.Path`.
 * Model weights under `app/vllm/` only.
 

@@ -8,7 +8,7 @@
 * Four files under `plans/data_source_in_form_tab/`, **English**.
 
 ### [x] Task 1.2 — Align on sample
-* `implementation_context.md` + spec §4; Phi-3.5 = vLLM; 0-based index; tab roles.
+* spec §1 + §4; Phi-3.5 = vLLM; 0-based index; tab roles.
 
 ---
 
@@ -19,7 +19,7 @@
 
 ### [x] Task 2.2 — TSV splitter
 * `determiner` → columns; `index` → pick column; `regex` → extract.
-* **Acceptance**: fixture TSV line in `implementation_context.md` matches spec split table.
+* **Acceptance**: fixture TSV line in spec §1 matches split table.
 
 ### [x] Task 2.3 — Parse & fill
 * Wire **Data entry**; failures do not overwrite existing cells.
@@ -49,7 +49,7 @@
 * determiner, 0-based index, regex, multi-date, `?`.
 
 ### [x] Task 4.2 — Screenshot integration
-* `tests/test_image.png` → YAML → split fixture TSV.
+* Manual: Paste mapping screenshot → YAML → split fixture TSV in Data entry.
 
 ### [x] Task 4.3 — Browser check
 * Ginger Lots tabs and buttons; record in `plan.md`.

@@ -3,12 +3,9 @@ import io
 import streamlit as st
 from streamlit.components.v1 import html as st_html
 
-from app.services.paste_mapping_infer import (
-    extract_sample_line,
-    infer_paste_mapping_yaml,
-)
+from app.components.paste_image_button import paste_image_button
 from app.services.paste_parse_config import (
-    load_paste_parse_config,
+    build_empty_mapping_yaml,
     paste_config_path,
     save_paste_parse_yaml,
 )
@@ -26,36 +23,35 @@ def _yaml_draft_key(template_id: str) -> str:
     return f"paste_yaml_draft_{template_id}"
 
 
+def _yaml_mtime_key(template_id: str) -> str:
+    return f"paste_yaml_mtime_{template_id}"
+
+
+def _yaml_force_reload_key(template_id: str) -> str:
+    return f"paste_yaml_force_reload_{template_id}"
+
+
 def _paste_image_key(template_id: str) -> str:
     return f"paste_image_bytes_{template_id}"
 
 
-def _paste_sample_key(template_id: str) -> str:
-    return f"paste_sample_text_{template_id}"
-
-
-def _paste_init_notice_key(template_id: str) -> str:
-    return f"paste_init_notice_{template_id}"
-
-
-def _load_yaml_draft(template_id: str) -> str:
+def _prepare_yaml_draft(template_id: str, template_headers: list[str]) -> None:
+    """Load YAML into session state before the text_area widget is created."""
     key = _yaml_draft_key(template_id)
-    if key in st.session_state:
-        return st.session_state[key]
+    mtime_key = _yaml_mtime_key(template_id)
+    force_reload = st.session_state.pop(_yaml_force_reload_key(template_id), False)
     path = paste_config_path(template_id)
+
     if path.exists():
-        return path.read_text(encoding="utf-8")
-    return ""
+        mtime = path.stat().st_mtime_ns
+        cached_mtime = st.session_state.get(mtime_key)
+        if force_reload or cached_mtime is None or cached_mtime != mtime:
+            st.session_state[key] = path.read_text(encoding="utf-8")
+            st.session_state[mtime_key] = mtime
+            return
 
-
-def _paste_image_button(label: str, key: str):
-    try:
-        from streamlit_paste_button import paste_image_button
-    except ImportError as exc:
-        raise RuntimeError(
-            "请安装 streamlit-paste-button: pip install -r requirements.txt"
-        ) from exc
-    return paste_image_button(label=label, key=key)
+    if key not in st.session_state:
+        st.session_state[key] = build_empty_mapping_yaml(template_headers)
 
 
 def _render_vision_model_panel() -> bool:
@@ -118,18 +114,7 @@ def render_paste_mapping_tab(template_id: str, template_headers: list[str]) -> N
         """,
         height=0,
     )
-    has_saved = load_paste_parse_config(template_id) is not None
-    st.caption(
-        "Configure how pasted source rows (Data entry tab) map to template fields. "
-        "Save YAML here before using Parse & fill."
-    )
-    if not has_saved and not st.session_state.get(_paste_init_notice_key(template_id)):
-        st.info(f"首次使用请初始化并保存 YAML：`templates/{template_id}.paste.yaml`。")
-        st.session_state[_paste_init_notice_key(template_id)] = True
-    if has_saved:
-        st.success("Mapping saved. Paste source rows in Data entry and click Parse & fill.")
-    else:
-        st.info("No mapping saved yet. Use screenshot or text sample inference, review YAML, then save.")
+    _prepare_yaml_draft(template_id, template_headers)
 
     model_ready = _render_vision_model_panel()
 
@@ -139,47 +124,23 @@ def render_paste_mapping_tab(template_id: str, template_headers: list[str]) -> N
         "无需按 Ctrl+C，避免触发清缓存提示。"
     )
     paste_key = f"paste_clipboard_{template_id}"
-    paste_col, infer_col, spacer_col = st.columns(
-        [1, 1, 3], vertical_alignment="bottom"
-    )
-    try:
-        with paste_col:
-            paste_result = _paste_image_button("粘贴截图", key=paste_key)
-    except RuntimeError as exc:
-        st.error(str(exc))
-        paste_result = None
+    paste_col, infer_col = st.columns(2, gap="small", vertical_alignment="center")
+    with paste_col:
+        paste_result = paste_image_button(
+            "粘贴截图",
+            key=paste_key,
+            background_color="#FF4B4B",
+            hover_background_color="#E02020",
+            text_color="#FFFFFF",
+        )
     with infer_col:
         infer_clicked = st.button(
             "截图推测",
             key=f"paste_image_infer_{template_id}",
             disabled=not model_ready,
+            type="primary",
             use_container_width=True,
         )
-    with spacer_col:
-        st.empty()
-    st.markdown(
-        """
-        <script>
-        const syncPasteInferButtons = () => {
-          const labels = ["粘贴截图", "截图推测"];
-          const buttons = Array.from(window.parent.document.querySelectorAll("button"))
-            .filter((btn) => labels.includes(btn.innerText.trim()));
-          if (buttons.length !== 2) {
-            return;
-          }
-          const targetWidth = Math.max(
-            ...buttons.map((btn) => btn.parentElement.getBoundingClientRect().width)
-          );
-          buttons.forEach((btn) => {
-            btn.style.width = `${Math.ceil(targetWidth)}px`;
-          });
-        };
-        setTimeout(syncPasteInferButtons, 0);
-        window.parent.addEventListener("resize", syncPasteInferButtons);
-        </script>
-        """,
-        unsafe_allow_html=True,
-    )
     if paste_result is not None:
         image_bytes = _image_bytes_from_paste(paste_result)
         if image_bytes is not None:
@@ -197,7 +158,6 @@ def render_paste_mapping_tab(template_id: str, template_headers: list[str]) -> N
                         image_bytes, template_headers
                     )
                     st.session_state[_yaml_draft_key(template_id)] = draft
-                    st.success("已生成 YAML，请在下方核对后保存。")
                     st.rerun()
                 except VisionInferenceError as exc:
                     st.error(str(exc))
@@ -207,38 +167,17 @@ def render_paste_mapping_tab(template_id: str, template_headers: list[str]) -> N
                 except Exception as exc:
                     st.error(str(exc))
 
-    st.subheader("文本推测")
-    st.caption("Paste a tab-separated row or HTML/Markdown table to infer mapping rules for Data entry.")
-    sample_text = st.text_area(
-        "文本样本",
-        height=100,
-        placeholder="粘贴原始数据...",
-        key=_paste_sample_key(template_id),
-        label_visibility="collapsed",
-    )
-    if st.button("文本推测", key=f"paste_infer_{template_id}"):
-        sample = extract_sample_line(sample_text)
-        if not sample:
-            st.warning("请粘贴至少一行样本数据。")
-        else:
-            try:
-                draft = infer_paste_mapping_yaml(sample, template_headers)
-                st.session_state[_yaml_draft_key(template_id)] = draft
-                st.rerun()
-            except ValueError as exc:
-                st.error(str(exc))
-
     st.subheader("映射 YAML")
-    yaml_text = st.text_area(
+    st.text_area(
         "映射 YAML",
-        value=_load_yaml_draft(template_id),
         height=320,
         key=_yaml_draft_key(template_id),
     )
     if st.button("保存映射", key=f"paste_save_{template_id}", type="primary"):
         try:
+            yaml_text = st.session_state[_yaml_draft_key(template_id)]
             save_paste_parse_yaml(template_id, yaml_text, template_headers)
-            st.success("映射已保存。")
+            st.session_state[_yaml_force_reload_key(template_id)] = True
             st.rerun()
         except ValueError as exc:
             st.error(str(exc))

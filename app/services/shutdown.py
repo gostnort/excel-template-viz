@@ -11,10 +11,6 @@ PID_FILE = PROJECT_ROOT / ".run.pid"
 CLOSE_TAB_HTML = "<script>window.close();</script>"
 
 
-def get_pid_file_path() -> Path:
-    return PID_FILE
-
-
 def write_pid_file(pid: int | None = None) -> None:
     # 写入 PID 文件，供 run.bat 启动与关闭功能共用
     target = pid if pid is not None else os.getpid()

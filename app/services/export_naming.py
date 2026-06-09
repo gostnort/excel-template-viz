@@ -34,14 +34,16 @@ def _resolve_receiving_date(rows: list[dict[str, str]], date_column: str, fallba
     return fallback
 
 
-def _collect_ids(rows: list[dict[str, str]], po_column: str) -> list[str]:
-    # 收集并清理 PO 编号
+def _collect_distinct_ids(rows: list[dict[str, str]], id_column: str) -> list[str]:
+    # 按行顺序收集去重后的 ID 值
+    seen: set[str] = set()
     ids: list[str] = []
     for row in rows:
-        raw = row.get(po_column, "")
+        raw = row.get(id_column, "")
         if isinstance(raw, str):
             cleaned = _clean_po_value(raw)
-            if cleaned:
+            if cleaned and cleaned not in seen:
+                seen.add(cleaned)
                 ids.append(cleaned)
     return ids
 
@@ -49,21 +51,18 @@ def _collect_ids(rows: list[dict[str, str]], po_column: str) -> list[str]:
 def build_export_filename(
     template_path: Path,
     rows: list[dict[str, str]],
-    po_column: str = "P.O. No.",
+    id_column: str = "P.O. No.",
     date_column: str = "Receiving Date",
     today: date | None = None,
 ) -> str:
-    # 生成带模板名、PO 编号与日期的导出文件名
+    # 生成 template-IDs-data-time.xlsx 格式的导出文件名
     base_name = template_path.stem
     safe_rows = rows or []
-    ids = _collect_ids(safe_rows, po_column)
+    ids = _collect_distinct_ids(safe_rows, id_column)
     if not ids:
         ids = ["no-po"]
-    if len(safe_rows) > 1:
-        id_part = "-".join(ids[:3])
-        id_part = f"{id_part}-{len(safe_rows)}rows"
-    else:
-        id_part = ids[0]
+    id_part = "-".join(ids)
+    data_part = f"{len(safe_rows)}rows"
     ref_date = _resolve_receiving_date(safe_rows, date_column, today or date.today())
-    date_part = ref_date.strftime("%Y%m%d")
-    return f"{base_name}-{id_part}-{date_part}.xlsx"
+    time_part = ref_date.strftime("%Y%m%d")
+    return f"{base_name}-{id_part}-{data_part}-{time_part}.xlsx"

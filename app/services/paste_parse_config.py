@@ -90,42 +90,171 @@ def load_paste_parse_config(template_id: str) -> PasteParseConfig | None:
     if not path.exists():
         return None
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        raw = _safe_load_mapping_yaml(path.read_text(encoding="utf-8"))
     except yaml.YAMLError:
         return None
     if not isinstance(raw, dict):
+        return None
+    try:
+        raw = _normalize_field_rule_lists(raw)
+    except ValueError:
         return None
     return config_from_dict(raw)
 
 
 def save_paste_parse_yaml(template_id: str, yaml_text: str, template_headers: list[str] | None = None) -> None:
+    cleaned = extract_yaml_text(yaml_text)
     if template_headers is not None:
-        validate_mapping_yaml(yaml_text, template_headers)
+        config = validate_mapping_yaml(cleaned, template_headers)
+        cleaned = config_to_yaml(config)
     else:
-        parsed = yaml.safe_load(yaml_text)
+        parsed = _safe_load_mapping_yaml(cleaned)
         if not isinstance(parsed, dict) or config_from_dict(parsed) is None:
             raise ValueError("YAML must contain at least one template field mapping")
+        cleaned = config_to_yaml(parsed)
     path = paste_config_path(template_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml_text, encoding="utf-8")
+    path.write_text(cleaned, encoding="utf-8")
+
+
+_RULE_KEY_ORDER = ("ID", "filed", "index", "regex")
+
+
+def _yaml_scalar(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str):
+        if "regex" in value or "\\" in value or "(" in value:
+            escaped = value.replace("'", "''")
+            return f"'{escaped}'"
+        if value in {"", "?", "tab"} or " " in value or "#" in value or "." in value:
+            return f'"{value}"'
+        return f'"{value}"'
+    return f'"{value}"'
+
+
+def _format_rule_lines(rule: dict[str, Any], indent: int) -> list[str]:
+    if not isinstance(rule, dict):
+        return []
+    keys = [key for key in _RULE_KEY_ORDER if key in rule]
+    keys.extend(key for key in rule if key not in keys)
+    lines: list[str] = []
+    for idx, key in enumerate(keys):
+        if idx == 0:
+            lines.append(f"{' ' * indent}- {key}: {_yaml_scalar(rule[key])}")
+        else:
+            lines.append(f"{' ' * (indent + 2)}{key}: {_yaml_scalar(rule[key])}")
+    return lines
+
+
+def _normalize_field_rule_lists(raw: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(raw)
+    for key, value in raw.items():
+        if key in RESERVED_TOP_KEYS:
+            if key == "order" and value is not None and not isinstance(value, list):
+                raise ValueError(f"'{key}' must be a YAML list; each entry must start with '-'")
+            continue
+        if isinstance(value, dict):
+            normalized[key] = [value]
+            continue
+        if not isinstance(value, list):
+            raise ValueError(
+                f"Field {key!r} must be a YAML list. Put '-' before each rule, e.g.\n"
+                f"{key}:\n  - filed: \"?\"\n    index: -1"
+            )
+        for item in value:
+            if not isinstance(item, dict):
+                raise ValueError(f"Field {key!r}: each '-' item must be a mapping with filed/index")
+    return normalized
 
 
 def config_to_yaml(config: dict[str, Any]) -> str:
-    return yaml.dump(config, allow_unicode=True, sort_keys=False, default_flow_style=False)
+    config = _normalize_field_rule_lists(config)
+    lines: list[str] = [f'determiner: {_yaml_scalar(str(config.get("determiner", "tab")))}']
+    order = config.get("order")
+    if isinstance(order, list) and order:
+        lines.append("order:")
+        for item in order:
+            lines.extend(_format_rule_lines(item, indent=2))
+    for key, value in config.items():
+        if key in RESERVED_TOP_KEYS or key == "determiner":
+            continue
+        if not isinstance(value, list):
+            continue
+        lines.append(str(key) + ":")
+        for rule in value:
+            if isinstance(rule, dict):
+                lines.extend(_format_rule_lines(rule, indent=2))
+    return "\n".join(lines) + "\n"
+
+
+def build_empty_mapping_yaml(template_headers: list[str]) -> str:
+    skip_fields = frozenset({"order"})
+    config: dict[str, Any] = {"determiner": "tab"}
+    for header in template_headers:
+        if header.strip() in skip_fields:
+            continue
+        rule: dict[str, Any] = {"filed": "?", "index": -1}
+        if header.strip() == "P.O. No.":
+            rule["ID"] = True
+        config[header] = [rule]
+    return config_to_yaml(config)
+
+
+_REGEX_DOUBLE_QUOTED = re.compile(r'^(\s*regex:\s*)"(.*)"\s*$')
+
+
+def _normalize_yaml_regex_quotes(yaml_text: str) -> str:
+    # YAML double-quoted scalars treat \d as invalid escapes; regex must use single quotes.
+    lines: list[str] = []
+    for line in yaml_text.splitlines():
+        match = _REGEX_DOUBLE_QUOTED.match(line)
+        if not match:
+            lines.append(line)
+            continue
+        prefix, inner = match.group(1), match.group(2)
+        inner = inner.replace("\\\\", "\\")
+        escaped = inner.replace("'", "''")
+        lines.append(f"{prefix}'{escaped}'")
+    return "\n".join(lines)
+
+
+def _safe_load_mapping_yaml(yaml_text: str) -> Any:
+    normalized = _normalize_yaml_regex_quotes(yaml_text)
+    return yaml.safe_load(normalized)
 
 
 def extract_yaml_text(model_output: str) -> str:
     text = model_output.strip()
-    fenced = re.search(r"```(?:yaml)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
+    if not text:
+        return text
+
+    fenced = re.search(
+        r"```(?:yaml|yml)?\s*\r?\n?(.*?)```",
+        text,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
     if fenced:
-        text = fenced.group(1).strip()
-    return text
+        return fenced.group(1).strip()
+
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:yaml|yml)?\s*\r?\n?", "", text, count=1, flags=re.IGNORECASE)
+        text = re.sub(r"```\s*$", "", text.strip())
+
+    return text.strip()
 
 
 def validate_mapping_yaml(yaml_text: str, template_headers: list[str]) -> dict[str, Any]:
-    parsed = yaml.safe_load(yaml_text)
+    normalized = extract_yaml_text(yaml_text)
+    try:
+        parsed = _safe_load_mapping_yaml(normalized)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Invalid YAML: {exc}") from exc
     if not isinstance(parsed, dict):
         raise ValueError("Model output is not a valid YAML object")
+    parsed = _normalize_field_rule_lists(parsed)
     config = config_from_dict(parsed)
     if config is None:
         raise ValueError("YAML must contain at least one template field mapping")

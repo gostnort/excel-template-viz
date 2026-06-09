@@ -41,15 +41,10 @@ Copy your xlsx files into `templates/`; the app will detect them on startup.
 5. 切换到 **数据录入** Tab，在 ID 对应字段输入编号（如 `10073`），稳定 2 秒后自动填表。  
    Switch to **数据录入**, type an ID (e.g. `10073`); fields auto-fill after 2 seconds.
 
-## 测试 / Tests
-
-```bash
-pytest
-```
-
 ## 文档 / Docs
 
 - 项目概览（CodeGraph 风格）/ Project overview: `plans/CODEGRAPH_OVERVIEW.md`
 - Speckit 规划 / Speckit plans: `plans/`
+- 项目清理计划（死代码与 pytest 移除）/ Project cleanup plan: `plans/project_cleanup/`
 - 快速开始 / Quickstart: `QUICKSTART.md`
-- 弃用说明 / Deprecation: 旧的双语 Speckit 文档（如 `plan_zh.md`）已弃用，仅保留历史参考。/ Legacy bilingual Speckit docs (e.g. `plan_zh.md`) are deprecated and kept for historical reference.
+- 弃用说明 / Deprecation: 旧的双语 Speckit 文档（如 `plan_zh.md`）已按计划删除；英文 Speckit 保留作历史档案。/ Legacy bilingual Speckit docs (e.g. `plan_zh.md`) were removed per `plans/project_cleanup/`; English Speckit kept for history.

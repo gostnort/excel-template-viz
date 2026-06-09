@@ -59,8 +59,8 @@ flowchart LR
 1. New YAML validate + split engine (0-based, regex).
 2. English Phi-3.5 prompt + validation (`?` for unknown).
 3. UI copy: paste mapping serves data entry.
-4. Remove old `fields/target` parser; migrate tests to TSV fixture.
-5. E2E: `tests/test_image.png` + fixture TSV line.
+4. Remove old `fields/target` parser; manual acceptance with TSV fixture in spec §1.
+5. Manual E2E: screenshot in Paste mapping tab + fixture TSV line in Data entry.
 
 ## Acceptance
 

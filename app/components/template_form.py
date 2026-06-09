@@ -1,6 +1,6 @@
-import math
 import time
 from datetime import timedelta
+from pathlib import Path
 
 import streamlit as st
 
@@ -11,6 +11,7 @@ from app.components.data_source_settings import (
 )
 from app.components.paste_parse_settings import render_paste_mapping_tab
 from app.services.paste_parse_config import (
+    id_target_field_from_config,
     load_paste_parse_config,
     parse_text_with_config,
     resolve_id_target_field,
@@ -26,6 +27,12 @@ from app.services.excel_parser import (
     read_template_sheet,
     write_template_sheet,
 )
+from app.services.excel_print import (
+    ensure_print_image,
+    open_print_preview_dialog,
+    persist_export_file,
+    primary_print_area,
+)
 from app.services.export_naming import build_export_filename
 from app.services.google_sheets import GoogleSheetsError, fetch_row_by_id
 from app.services.registry import TemplateConfig, update_template_sheet_name
@@ -37,6 +44,38 @@ from app.services.source_parser import (
 
 def _form_rows_key(config_id: str) -> str:
     return f"form_rows_{config_id}"
+
+
+def _pending_export_bytes_key(config_id: str) -> str:
+    return f"pending_export_bytes_{config_id}"
+
+
+def _pending_export_filename_key(config_id: str) -> str:
+    return f"pending_export_filename_{config_id}"
+
+
+def _last_export_path_key(config_id: str) -> str:
+    return f"last_export_path_{config_id}"
+
+
+def _persist_export_on_save_as(config_id: str) -> None:
+    xlsx_bytes = st.session_state.get(_pending_export_bytes_key(config_id))
+    filename = st.session_state.get(_pending_export_filename_key(config_id))
+    if not xlsx_bytes or not filename:
+        return
+    saved_path = persist_export_file(config_id, xlsx_bytes, filename)
+    st.session_state[_last_export_path_key(config_id)] = str(saved_path)
+    area = primary_print_area(saved_path)
+    if area:
+        ensure_print_image(saved_path, area.sheet, area.range)
+
+
+def _get_last_export_path(config_id: str) -> Path | None:
+    raw = st.session_state.get(_last_export_path_key(config_id))
+    if not raw:
+        return None
+    path = Path(raw)
+    return path if path.is_file() else None
 
 
 
@@ -89,22 +128,50 @@ def _resolve_selected_index(config_id: str, row_count: int) -> int:
 
 
 
-def _init_form_rows(config: TemplateConfig, headers: list[str], dataframe) -> list[dict[str, str]]:
-    key = _form_rows_key(config.id)
-    if key not in st.session_state:
-        st.session_state[key] = [
-            {header: format_cell_display(dataframe.iloc[row_idx][header]) for header in headers}
-            for row_idx in range(len(dataframe))
-        ]
-    return st.session_state[key]
+def _form_sheet_key(config_id: str) -> str:
+    return f"form_loaded_sheet_{config_id}"
 
 
+def _form_mtime_key(config_id: str) -> str:
+    return f"form_loaded_mtime_{config_id}"
 
-def _sync_cell_keys(config_id: str, headers: list[str], rows: list[dict[str, str]]) -> None:
+
+def _rows_from_dataframe(headers: list[str], dataframe) -> list[dict[str, str]]:
+    return [
+        {header: format_cell_display(dataframe.iloc[row_idx][header]) for header in headers}
+        for row_idx in range(len(dataframe))
+    ]
+
+
+def _ensure_form_rows_from_sheet(
+    config: TemplateConfig,
+    headers: list[str],
+    dataframe,
+    selected_sheet: str,
+) -> None:
+    rows_key = _form_rows_key(config.id)
+    sheet_key = _form_sheet_key(config.id)
+    mtime_key = _form_mtime_key(config.id)
+    if dataframe.empty:
+        if rows_key not in st.session_state:
+            st.session_state[rows_key] = []
+        return
+    mtime = config.file_path.stat().st_mtime_ns
+    reload = (
+        rows_key not in st.session_state
+        or st.session_state.get(sheet_key) != selected_sheet
+        or st.session_state.get(mtime_key) != mtime
+    )
+    if reload:
+        st.session_state[rows_key] = _rows_from_dataframe(headers, dataframe)
+        st.session_state[sheet_key] = selected_sheet
+        st.session_state[mtime_key] = mtime
+
+
+def _prime_cell_keys(config_id: str, headers: list[str], rows: list[dict[str, str]]) -> None:
     for row_idx, row in enumerate(rows):
         for col_idx, header in enumerate(headers):
             st.session_state[_cell_key(config_id, row_idx, col_idx)] = row.get(header, "")
-
 
 
 def _apply_source_parse(config: TemplateConfig, headers: list[str], source_text: str) -> bool:
@@ -129,7 +196,7 @@ def _apply_source_parse(config: TemplateConfig, headers: list[str], source_text:
         else:
             existing_rows.append(merged)
     st.session_state[_form_rows_key(config.id)] = existing_rows
-    _sync_cell_keys(config.id, headers, existing_rows)
+    _prime_cell_keys(config.id, headers, existing_rows)
     return True
 
 
@@ -195,7 +262,7 @@ def _apply_sheet_lookup(
     merged = merge_parsed_into_headers(headers, parsed, existing_rows[target_row_index])
     existing_rows[target_row_index] = merged
     st.session_state[_form_rows_key(config.id)] = existing_rows
-    _sync_cell_keys(config.id, headers, existing_rows)
+    _prime_cell_keys(config.id, headers, existing_rows)
     return True
 
 
@@ -264,7 +331,6 @@ def _render_source_paste_area(config: TemplateConfig, headers: list[str]) -> Non
     source_text = st.text_area(
         "源数据",
         height=120,
-        placeholder="粘贴制表符分隔数据，例如：\n10073\tGIN\t...\t6/1\t...",
         key=source_key,
         label_visibility="collapsed",
     )
@@ -326,8 +392,6 @@ def _render_data_rows(
             for col_idx, (global_col_idx, header) in enumerate(chunk):
                 with columns[col_idx]:
                     cell_key = _cell_key(config.id, row_idx, global_col_idx)
-                    if cell_key not in st.session_state:
-                        st.session_state[cell_key] = row.get(header, "")
                     input_value = st.text_input(
                         header,
                         key=cell_key,
@@ -391,10 +455,7 @@ def _render_form_entry_tab(config: TemplateConfig, sheet_names: list[str]) -> No
     if dataframe.empty:
         with sheet_col:
             st.info("工作表无数据行，解析源数据后将自动创建表单行。")
-        if _form_rows_key(config.id) not in st.session_state:
-            st.session_state[_form_rows_key(config.id)] = []
-    else:
-        _init_form_rows(config, headers, dataframe)
+    _ensure_form_rows_from_sheet(config, headers, dataframe, selected_sheet)
     with paste_col:
         _render_source_paste_area(config, headers)
     st.subheader("数据录入")
@@ -410,6 +471,7 @@ def _render_form_entry_tab(config: TemplateConfig, sheet_names: list[str]) -> No
             f"稳定 {int(ID_LOOKUP_DELAY_SECONDS)} 秒后自动从 Sheet 查询并填入。"
         )
     st.subheader("已存在数据")
+    _prime_cell_keys(config.id, headers, rows)
     selected_index = _resolve_selected_index(config.id, len(rows))
     selected_index = st.selectbox(
         "选择行（显示摘要）",
@@ -427,22 +489,60 @@ def _render_form_entry_tab(config: TemplateConfig, sheet_names: list[str]) -> No
         config.header_row,
         config.data_start_row,
     )
-    export_filename = build_export_filename(config.file_path, edited_rows)
-    st.download_button(
-        label="Save As",
-        data=xlsx_bytes,
-        file_name=export_filename,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key=f"save_as_{config.id}",
+    paste_config = load_paste_parse_config(config.id)
+    id_field = id_target_field_from_config(paste_config) or "P.O. No."
+    export_filename = build_export_filename(
+        config.file_path,
+        edited_rows,
+        id_column=id_field,
     )
-    st.download_button(
-        label="下载更新后的 Excel",
-        data=xlsx_bytes,
-        file_name=f"{config.id}_filled.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key=f"download_{config.id}",
-    )
+    st.session_state[_pending_export_bytes_key(config.id)] = xlsx_bytes
+    st.session_state[_pending_export_filename_key(config.id)] = export_filename
+    last_export_path = _get_last_export_path(config.id)
+    print_area = primary_print_area(last_export_path) if last_export_path else None
+    col_save, col_print = st.columns(2)
+    with col_save:
+        st.download_button(
+            label="Save As",
+            data=xlsx_bytes,
+            file_name=export_filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"save_as_{config.id}",
+            use_container_width=True,
+            on_click=_persist_export_on_save_as,
+            args=(config.id,),
+        )
+    with col_print:
+        if last_export_path and print_area:
+            if st.button(
+                f"打印 {print_area.label}",
+                key=f"print_{config.id}",
+                use_container_width=True,
+            ):
+                try:
+                    preview_path = ensure_print_image(
+                        last_export_path,
+                        print_area.sheet,
+                        print_area.range,
+                    )
+                    open_print_preview_dialog(preview_path)
+                except Exception as exc:
+                    st.error(str(exc))
+    if last_export_path and print_area:
+        try:
+            preview_path = ensure_print_image(
+                last_export_path,
+                print_area.sheet,
+                print_area.range,
+            )
+            st.image(str(preview_path), caption="打印预览", use_container_width=True)
+        except Exception as exc:
+            st.error(str(exc))
 
+
+
+FORM_TAB_LABELS = ["数据录入", "粘贴映射", "数据源"]
+FORM_TAB_SESSION_KEY = "form_page_tab"
 
 
 def render_template_page(config: TemplateConfig) -> None:
@@ -464,7 +564,11 @@ def render_template_page(config: TemplateConfig) -> None:
     except Exception as exc:
         st.error(f"读取模板列失败: {exc}")
         return
-    entry_tab, mapping_tab, sources_tab = st.tabs(["数据录入", "粘贴映射", "数据源"])
+    entry_tab, mapping_tab, sources_tab = st.tabs(
+        FORM_TAB_LABELS,
+        default=FORM_TAB_LABELS[0],
+        key=FORM_TAB_SESSION_KEY,
+    )
     with entry_tab:
         _render_form_entry_tab(config, sheet_names)
     with mapping_tab:

@@ -1,11 +1,6 @@
 from datetime import datetime
 import re
 
-# 源数据制表符分隔字段索引
-IDX_PO_NO = 0
-IDX_CONTAINER_NO = 4
-IDX_RECEIVING_DATE = 12
-
 MD_DATE_REGEX = re.compile(r"(?:0?[1-9]|1[0-2])/(?:0?[1-9]|[12]\d|3[01])")
 
 
@@ -40,36 +35,6 @@ def parse_md_date(date_text: str, reference_year: int | None = None) -> tuple[st
     return yy, mm, dd, receiving_date
 
 
-def parse_source_line(line: str, order: int, reference_year: int | None = None) -> dict[str, str]:
-    # 解析单行制表符分隔源数据，映射到 GIN LOT List 表单字段
-    fields = line.split("\t")
-    if len(fields) <= IDX_RECEIVING_DATE:
-        raise ValueError(f"字段数量不足，需要至少 {IDX_RECEIVING_DATE + 1} 列")
-    yy, mm, dd, receiving_date = parse_md_date(fields[IDX_RECEIVING_DATE], reference_year)
-    return {
-        "order": str(order),
-        "YY": yy,
-        "MM": mm,
-        "DD": dd,
-        "P.O. No.": fields[IDX_PO_NO].strip(),
-        "Container No.": fields[IDX_CONTAINER_NO].strip(),
-        "Receiving Date": receiving_date,
-    }
-
-
-def parse_source_text(text: str, reference_year: int | None = None) -> list[dict[str, str]]:
-    # 解析多行源文本，每行对应一条表单记录
-    rows: list[dict[str, str]] = []
-    order = 1
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        rows.append(parse_source_line(line, order, reference_year))
-        order += 1
-    return rows
-
-
 SHEET_CONTAINER_COLUMN = "Container#"
 SHEET_RECV_DATE_COLUMN = "recv. date"
 
@@ -102,51 +67,6 @@ def map_sheet_row_with_mappings(
         else:
             parsed[target] = raw
     return parsed
-
-
-def map_tab_line_with_mappings(
-    line: str,
-    mappings: list[dict[str, str]],
-    order: int,
-    reference_year: int | None = None,
-) -> dict[str, str]:
-    # 按配置映射将制表符行转为表单字段
-    fields = line.split("\t")
-    parsed: dict[str, str] = {"order": str(order)}
-    for item in mappings:
-        if item.get("kind") != "tab":
-            continue
-        source = item["source"]
-        target = item["target"]
-        if not source.isdigit():
-            continue
-        idx = int(source)
-        if idx >= len(fields):
-            continue
-        raw = fields[idx].strip()
-        if not raw:
-            continue
-        if target.strip() == "Receiving Date":
-            _apply_date_mapping(parsed, target, raw, reference_year)
-        else:
-            parsed[target] = raw
-    return parsed
-
-
-def parse_source_text_with_mappings(
-    text: str,
-    mappings: list[dict[str, str]],
-    reference_year: int | None = None,
-) -> list[dict[str, str]]:
-    rows: list[dict[str, str]] = []
-    order = 1
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        rows.append(map_tab_line_with_mappings(line, mappings, order, reference_year))
-        order += 1
-    return rows
 
 
 def sheet_row_to_form_fields(

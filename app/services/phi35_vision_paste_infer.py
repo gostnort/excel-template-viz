@@ -50,21 +50,23 @@ The image shows a SOURCE spreadsheet (header row + data rows). Users will paste 
 
 Your task: produce a YAML mapping that tells the app how each template field maps to a source column.
 
-Output ONLY valid YAML (optionally wrapped in ```yaml fences). No prose, no bullets, no explanation.
+Output ONLY valid YAML. Do NOT wrap in markdown code fences. No prose, no bullets, no explanation.
 
 Schema rules:
 1. Top-level key `determiner` must be "tab" (tab-separated paste rows).
 2. Optional top-level `order` lists discovered source headers as {{filed, index}} entries.
-3. Each template field name below is a top-level YAML key; its value is a list of rules.
-4. Each rule has:
+3. Each template field name below is a top-level YAML key; its value MUST be a YAML list.
+4. CRITICAL: Every rule line MUST start with "-" (dash). Never output a bare mapping without "-".
+5. Each rule item has:
    - `filed`: source column header text from the image (use "?" if unknown)
-   - `index`: 0-based source column index (leftmost column is 0)
+   - `index`: 0-based source column index (leftmost column is 0); use **-1** when `filed` is "?" (do not split from paste)
    - optional `regex`: Python regex to extract from the full cell string (first match wins)
    - optional `ID: true` on the ID lookup field (usually P.O. No.)
-5. Use 0-based index everywhere. Count columns from the left starting at 0.
-6. Omit template fields with no plausible mapping.
-7. For date fields (MM, DD, Receiving Date, YY), you may reuse the same `index` with different `regex` values.
-8. Regex should match dates inside noisy text (e.g. "pickup 5/28, tdi 5/29" → use regex on the date portion).
+6. Mapped columns use 0-based index. Unmapped / manual fields use `filed: "?"` and `index: -1`.
+7. Omit template fields with no plausible mapping, or use `filed: "?"` with `index: -1` when the field is filled manually.
+8. For date fields (MM, DD, Receiving Date, YY), you may reuse the same `index` with different `regex` values.
+9. Put regex patterns in single quotes, e.g. regex: '(\\d{{1,2}}\\/\\d{{1,2}})'.
+10. Regex should match dates inside noisy text (e.g. "pickup 5/28, tdi 5/29").
 
 Example shape (values are illustrative):
 ```yaml

@@ -141,9 +141,3 @@ def get_phi35_vision_bundle():
     _processor = AutoProcessor.from_pretrained(model_dir, **load_kwargs)
     _model = OVModelForVisualCausalLM.from_pretrained(model_dir, **load_kwargs)
     return _processor, _model
-
-
-def reset_phi35_vision_cache() -> None:
-    global _processor, _model
-    _processor = None
-    _model = None

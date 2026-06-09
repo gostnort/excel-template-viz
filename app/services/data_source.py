@@ -1,6 +1,6 @@
 from dataclasses import asdict, dataclass, field
 
-from app.services.registry import load_template_payload, load_templates, save_template_payload
+from app.services.registry import load_template_payload, save_template_payload
 
 DEFAULT_ID_COLUMN = "PO"
 
@@ -12,13 +12,6 @@ DEFAULT_COLUMN_MAPPINGS: list[dict[str, str]] = [
     {"source": "4", "target": "Container No.", "kind": "tab"},
     {"source": "12", "target": "Receiving Date", "kind": "tab"},
 ]
-
-
-@dataclass
-class TemplateDataSourceEntry:
-    template_id: str
-    display_name: str
-    data_source: "DataSourceConfig | None"
 
 
 @dataclass
@@ -94,30 +87,10 @@ def clear_template_data_source(template_id: str) -> None:
     save_template_payload(template_id, payload)
 
 
-def list_template_data_sources() -> list[TemplateDataSourceEntry]:
-    # 汇总全部模板的数据源配置
-    entries: list[TemplateDataSourceEntry] = []
-    for template in load_templates():
-        entries.append(
-            TemplateDataSourceEntry(
-                template_id=template.id,
-                display_name=template.display_name,
-                data_source=load_template_data_source(template.id),
-            )
-        )
-    return entries
-
-
 def sheet_mappings(config: DataSourceConfig | None) -> list[dict[str, str]]:
     if config is None:
         return [item for item in DEFAULT_COLUMN_MAPPINGS if item["kind"] == "sheet"]
     return [item for item in config.column_mappings if item.get("kind", "sheet") == "sheet"]
-
-
-def tab_mappings(config: DataSourceConfig | None) -> list[dict[str, str]]:
-    if config is None:
-        return [item for item in DEFAULT_COLUMN_MAPPINGS if item["kind"] == "tab"]
-    return [item for item in config.column_mappings if item.get("kind") == "tab"]
 
 
 def id_target_field(config: DataSourceConfig | None, headers: list[str]) -> str | None:

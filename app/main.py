@@ -1,7 +1,11 @@
 import streamlit as st
 import streamlit.components.v1 as components
 
-from app.components.template_form import render_template_page
+from app.components.template_form import (
+    FORM_TAB_LABELS,
+    FORM_TAB_SESSION_KEY,
+    render_template_page,
+)
 from app.services.registry import load_templates
 from app.services.shutdown import CLOSE_TAB_HTML, schedule_shutdown, write_pid_file
 
@@ -27,7 +31,22 @@ def render_shutdown_control() -> None:
 def main() -> None:
     st.set_page_config(page_title="Excel 模板可视化", page_icon="📋", layout="wide")
     write_pid_file()
-    st.sidebar.title("选择模版")
+    st.sidebar.markdown("## 选择模版")
+    st.sidebar.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] .stRadio label p {
+            font-size: 1.5rem;
+            font-weight: 600;
+            line-height: 1.3;
+        }
+        [data-testid="stSidebar"] .stRadio div[role="radiogroup"] > label {
+            padding: 0.4rem 0;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     nav_options = build_nav_options()
     if not nav_options:
         st.sidebar.warning("未加载任何模板，请将 xlsx 文件复制到 templates/ 目录。")
@@ -45,6 +64,9 @@ def main() -> None:
     )
     st.session_state["nav_label"] = selected_label
     page_id = id_by_label[selected_label]
+    if st.session_state.get("nav_page_id") != page_id:
+        st.session_state["nav_page_id"] = page_id
+        st.session_state[FORM_TAB_SESSION_KEY] = FORM_TAB_LABELS[0]
     templates = {t.id: t for t in load_templates()}
     config = templates.get(page_id)
     if config is None:
