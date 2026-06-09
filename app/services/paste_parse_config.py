@@ -75,17 +75,17 @@ def validate_mapping_yaml(yaml_text: str, template_headers: list[str]) -> dict[s
         if "target" in rule:
             target = str(rule["target"]).strip()
             if target not in allowed:
-                raise ValueError(f"未知模板字段 target: {target}")
+                raise ValueError("模板字段不存在，请检查 YAML 中的 target 是否在模板列中。")
         derive = rule.get("derive")
         if isinstance(derive, dict) and derive.get("target"):
             target = str(derive["target"]).strip()
             if target not in allowed:
-                raise ValueError(f"未知模板字段 derive.target: {target}")
+                raise ValueError("模板字段不存在，请检查 YAML 中的 derive.target 是否在模板列中。")
         for sub in rule.get("fields", []):
             if isinstance(sub, dict) and sub.get("target"):
                 target = str(sub["target"]).strip()
                 if target not in allowed:
-                    raise ValueError(f"未知模板字段 sub.target: {target}")
+                    raise ValueError("模板字段不存在，请检查 YAML 中的子字段 target 是否在模板列中。")
     parsed.setdefault("delimiter", "tab")
     parsed.setdefault("index_base", 1)
     return parsed
@@ -104,6 +104,22 @@ def _pick_part(parts: list[str], index: int, index_base: int) -> str:
     return parts[pos].strip()
 
 
+def _resolve_field_index(field_rule: dict[str, Any], default_index_base: int) -> tuple[int, int] | None:
+    raw_index = field_rule.get("field_index", field_rule.get("index"))
+    if raw_index is None:
+        return None
+    index_base = int(field_rule.get("index_base", default_index_base))
+    return int(raw_index), index_base
+
+
+def _resolve_local_index(field_rule: dict[str, Any], default_index_base: int) -> tuple[int, int] | None:
+    raw_index = field_rule.get("local_index", field_rule.get("index"))
+    if raw_index is None:
+        return None
+    index_base = int(field_rule.get("local_index_base", field_rule.get("index_base", default_index_base)))
+    return int(raw_index), index_base
+
+
 def _apply_field_rules(
     parts: list[str],
     field_rule: dict[str, Any],
@@ -111,10 +127,11 @@ def _apply_field_rules(
     reference_year: int | None,
     default_index_base: int,
 ) -> None:
-    if "target" in field_rule and "index" in field_rule:
-        index_base = int(field_rule.get("index_base", default_index_base))
+    field_index = _resolve_field_index(field_rule, default_index_base)
+    if "target" in field_rule and field_index is not None:
+        index, index_base = field_index
         target = str(field_rule["target"])
-        value = _pick_part(parts, int(field_rule["index"]), index_base)
+        value = _pick_part(parts, index, index_base)
         if field_rule.get("date") == "M/D":
             yy, mm, dd, receiving = parse_md_date(value, reference_year)
             parsed["YY"] = yy
@@ -124,18 +141,20 @@ def _apply_field_rules(
         else:
             parsed[target] = value
         return
-    if "index" not in field_rule:
-        raise ValueError("字段规则缺少 index 或 target")
-    index_base = int(field_rule.get("index_base", default_index_base))
-    raw = _pick_part(parts, int(field_rule["index"]), index_base)
+    if field_index is None:
+        raise ValueError("字段规则缺少 field_index 或 target")
+    index, index_base = field_index
+    raw = _pick_part(parts, index, index_base)
     split_delim = str(field_rule.get("split", "/"))
     sub_parts = raw.split(split_delim)
-    sub_base = int(field_rule.get("index_base", 1))
     for sub_rule in field_rule.get("fields", []):
-        if "target" not in sub_rule or "index" not in sub_rule:
+        if "target" not in sub_rule:
+            continue
+        local_index = _resolve_local_index(sub_rule, default_index_base)
+        if local_index is None:
             continue
         sub_target = str(sub_rule["target"])
-        sub_index = int(sub_rule["index"])
+        sub_index, sub_base = local_index
         sub_pos = sub_index - sub_base if sub_base == 1 else sub_index
         if sub_pos < 0 or sub_pos >= len(sub_parts):
             continue

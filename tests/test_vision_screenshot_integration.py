@@ -68,6 +68,6 @@ def test_logistics_screenshot_produces_ginger_yaml() -> None:
     targets = _collect_targets(parsed)
     assert EXPECTED_TARGETS.issubset(targets)
     po_rule = next(item for item in parsed["fields"] if item.get("target") == "P.O. No.")
-    assert po_rule["index"] == 1
+    assert po_rule["field_index"] == 1
     container_rule = next(item for item in parsed["fields"] if item.get("target") == "Container No.")
-    assert container_rule["index"] == 5
+    assert container_rule["field_index"] == 5

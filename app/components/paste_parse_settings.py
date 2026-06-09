@@ -1,8 +1,9 @@
 import io
 
 import streamlit as st
+from streamlit.components.v1 import html as st_html
 
-from app.services.paste_mapping_infer import infer_paste_mapping_yaml
+from app.services.paste_mapping_infer import extract_sample_line, infer_paste_mapping_yaml
 from app.services.paste_parse_config import (
     load_paste_parse_config,
     paste_config_path,
@@ -24,6 +25,10 @@ def _paste_sample_key(template_id: str) -> str:
     return f"paste_sample_text_{template_id}"
 
 
+def _paste_init_notice_key(template_id: str) -> str:
+    return f"paste_init_notice_{template_id}"
+
+
 def _load_yaml_draft(template_id: str) -> str:
     key = _yaml_draft_key(template_id)
     if key in st.session_state:
@@ -42,22 +47,9 @@ def _paste_image_button(label: str, key: str):
     return paste_image_button(label=label, key=key)
 
 
-def _format_size(size_bytes: int | None) -> str:
-    if not size_bytes:
-        return "未知"
-    if size_bytes >= 1024**3:
-        return f"{size_bytes / 1024**3:.2f} GB"
-    return f"{size_bytes / 1024**2:.1f} MB"
-
-
 def _render_vision_model_panel() -> bool:
     status = get_vision_model_status()
-    st.subheader("视觉模型")
-    st.caption(f"模型目录：`{status.model_dir}`")
-    if status.size_bytes:
-        st.caption(f"占用空间：{_format_size(status.size_bytes)}")
     if status.complete:
-        st.success("模型已就绪，可使用截图推测。")
         return True
     if status.missing_files:
         st.warning(
@@ -75,10 +67,10 @@ def _render_vision_model_panel() -> bool:
             status_text.caption(message)
 
         try:
-            snapshot_path = download_vision_model(on_progress=on_progress)
+            download_vision_model(on_progress=on_progress)
             progress_bar.empty()
             status_text.empty()
-            st.success(f"下载完成：`{snapshot_path}`")
+            st.success("下载完成。")
             st.rerun()
         except Exception as exc:
             progress_bar.empty()
@@ -96,11 +88,30 @@ def _image_bytes_from_paste(paste_result) -> bytes | None:
 
 
 def render_paste_mapping_tab(template_id: str, template_headers: list[str]) -> None:
-    has_saved = load_paste_parse_config(template_id) is not None
-    st.caption(
-        f"在此初始化并调校「源数据粘贴 → 模板字段」的 YAML 映射。"
-        f"保存路径：`{paste_config_path(template_id)}`"
+    st_html(
+        """
+        <script>
+        window.addEventListener("keydown", (event) => {
+          const isCtrlC = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c";
+          if (!isCtrlC) {
+            return;
+          }
+          const target = event.target;
+          const tag = target ? target.tagName : "";
+          const editable = target && (target.isContentEditable || tag === "INPUT" || tag === "TEXTAREA");
+          if (!editable) {
+            event.stopPropagation();
+          }
+        }, true);
+        </script>
+        """,
+        height=0,
     )
+    has_saved = load_paste_parse_config(template_id) is not None
+    st.caption("在此初始化并调校「源数据粘贴 → 模板字段」的 YAML 映射。")
+    if not has_saved and not st.session_state.get(_paste_init_notice_key(template_id)):
+        st.info(f"首次使用请初始化并保存 YAML：`templates/{template_id}.paste.yaml`。")
+        st.session_state[_paste_init_notice_key(template_id)] = True
     if has_saved:
         st.success("已保存映射，可在「数据录入」Tab 粘贴源数据并解析。")
     else:
@@ -109,13 +120,50 @@ def render_paste_mapping_tab(template_id: str, template_headers: list[str]) -> N
     model_ready = _render_vision_model_panel()
 
     st.subheader("截图推测")
-    st.caption("先截图（如 Win+Shift+S），点击下方按钮后 **Ctrl+V** 粘贴，再点「截图推测」生成 YAML。")
+    st.caption(
+        "先截图（如 Win+Shift+S），点击「粘贴截图」后按 Ctrl+V，再点「截图推测」。"
+        "无需按 Ctrl+C，避免触发清缓存提示。"
+    )
     paste_key = f"paste_clipboard_{template_id}"
+    paste_col, infer_col, spacer_col = st.columns([1, 1, 3], vertical_alignment="bottom")
     try:
-        paste_result = _paste_image_button("粘贴截图 (Ctrl+V)", key=paste_key)
+        with paste_col:
+            paste_result = _paste_image_button("粘贴截图", key=paste_key)
     except RuntimeError as exc:
         st.error(str(exc))
         paste_result = None
+    with infer_col:
+        infer_clicked = st.button(
+            "截图推测",
+            key=f"paste_image_infer_{template_id}",
+            disabled=not model_ready,
+            use_container_width=True,
+        )
+    with spacer_col:
+        st.empty()
+    st.markdown(
+        """
+        <script>
+        const syncPasteInferButtons = () => {
+          const labels = ["粘贴截图", "截图推测"];
+          const buttons = Array.from(window.parent.document.querySelectorAll("button"))
+            .filter((btn) => labels.includes(btn.innerText.trim()));
+          if (buttons.length !== 2) {
+            return;
+          }
+          const targetWidth = Math.max(
+            ...buttons.map((btn) => btn.parentElement.getBoundingClientRect().width)
+          );
+          buttons.forEach((btn) => {
+            btn.style.width = `${Math.ceil(targetWidth)}px`;
+          });
+        };
+        setTimeout(syncPasteInferButtons, 0);
+        window.parent.addEventListener("resize", syncPasteInferButtons);
+        </script>
+        """,
+        unsafe_allow_html=True,
+    )
     if paste_result is not None:
         image_bytes = _image_bytes_from_paste(paste_result)
         if image_bytes is not None:
@@ -123,9 +171,9 @@ def render_paste_mapping_tab(template_id: str, template_headers: list[str]) -> N
     image_bytes = st.session_state.get(_paste_image_key(template_id))
     if image_bytes:
         st.image(image_bytes, caption="当前剪贴板截图", width=480)
-    if st.button("截图推测", key=f"paste_image_infer_{template_id}", disabled=not model_ready):
+    if infer_clicked:
         if not image_bytes:
-            st.warning("请先点击「粘贴截图」并 Ctrl+V 粘贴截图。")
+            st.warning("请先点击「粘贴截图」，再用 Ctrl+V 粘贴截图。")
         else:
             with st.spinner("截图推测中（首次加载模型约需 1 分钟）..."):
                 try:
@@ -142,7 +190,7 @@ def render_paste_mapping_tab(template_id: str, template_headers: list[str]) -> N
                     st.error(str(exc))
 
     st.subheader("文本推测")
-    st.caption("粘贴一行制表符分隔样本，用于无截图时的快速推测。")
+    st.caption("粘贴制表符行或 vLLM 输出的 HTML/Markdown 表格，用于快速推测。")
     sample_text = st.text_area(
         "文本样本",
         height=100,
@@ -151,7 +199,7 @@ def render_paste_mapping_tab(template_id: str, template_headers: list[str]) -> N
         label_visibility="collapsed",
     )
     if st.button("文本推测", key=f"paste_infer_{template_id}"):
-        sample = next((line.strip() for line in sample_text.splitlines() if line.strip()), "")
+        sample = extract_sample_line(sample_text)
         if not sample:
             st.warning("请粘贴至少一行样本数据。")
         else:
@@ -163,9 +211,6 @@ def render_paste_mapping_tab(template_id: str, template_headers: list[str]) -> N
                 st.error(str(exc))
 
     st.subheader("映射 YAML")
-    with st.expander("模板字段参考", expanded=False):
-        for header in template_headers:
-            st.markdown(f"- `{header}`")
     yaml_text = st.text_area(
         "映射 YAML",
         value=_load_yaml_draft(template_id),

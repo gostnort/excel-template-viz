@@ -19,9 +19,9 @@ delimiter: tab
 index_base: 1
 fields:
   - target: Not A Real Field
-    index: 1
+    field_index: 1
 """
-    with pytest.raises(ValueError, match="未知模板字段"):
+    with pytest.raises(ValueError, match="模板字段不存在"):
         validate_mapping_yaml(yaml_text, ["P.O. No."])
 
 
@@ -30,13 +30,13 @@ def test_validate_mapping_yaml_accepts_nested_date() -> None:
 delimiter: tab
 index_base: 1
 fields:
-  - index: 13
+  - field_index: 13
     split: /
     fields:
       - target: MM
-        index: 1
+        local_index: 1
       - target: DD
-        index: 2
+        local_index: 2
     derive:
       target: Receiving Date
       from: [MM, DD]

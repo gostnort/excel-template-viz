@@ -35,7 +35,7 @@ def test_infer_finds_po_container_and_date() -> None:
     assert "P.O. No." in targets
     assert "Container No." in targets
     nested = next(item for item in config["fields"] if "split" in item)
-    assert nested["index"] == 13
+    assert nested["field_index"] == 13
 
 
 def test_infer_yaml_roundtrip() -> None:
@@ -51,18 +51,17 @@ delimiter: tab
 index_base: 1
 fields:
   - target: P.O. No.
-    index: 1
+    field_index: 1
   - target: Container No.
-    index: 5
-  - index: 13
+    field_index: 5
+  - field_index: 13
     split: /
-    index_base: 1
     fields:
       - target: MM
-        index: 1
+        local_index: 1
         pad: 2
       - target: DD
-        index: 2
+        local_index: 2
         pad: 2
     derive:
       target: Receiving Date
@@ -84,7 +83,7 @@ delimiter: tab
 index_base: 1
 fields:
   - target: P.O. No.
-    index: 1
+    field_index: 1
 """
     config = PasteParseConfig(**yaml.safe_load(raw))
     rows = parse_text_with_config(f"{EXAMPLE_LINE}\n{EXAMPLE_LINE}", config)

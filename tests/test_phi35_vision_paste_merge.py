@@ -24,12 +24,12 @@ def test_merge_mapping_configs_combines_targets() -> None:
         {
             "delimiter": "tab",
             "index_base": 1,
-            "fields": [{"target": "P.O. No.", "index": 1}],
+            "fields": [{"target": "P.O. No.", "field_index": 1}],
         },
         {
             "delimiter": "tab",
             "index_base": 1,
-            "fields": [{"target": "Supplier", "index": 3}],
+            "fields": [{"target": "Supplier", "field_index": 3}],
         },
     ]
     merged = _merge_mapping_configs(configs)
@@ -42,12 +42,12 @@ def test_fill_missing_logistics_fields_adds_po_and_product() -> None:
         "delimiter": "tab",
         "index_base": 1,
         "fields": [
-            {"target": "Supplier", "index": 3},
-            {"target": "Container No.", "index": 5},
+            {"target": "Supplier", "field_index": 3},
+            {"target": "Container No.", "field_index": 5},
             {
-                "index": 13,
+                "field_index": 13,
                 "split": "/",
-                "fields": [{"target": "MM", "index": 1}],
+                "fields": [{"target": "MM", "local_index": 1}],
                 "derive": {"target": "Receiving Date", "from": ["MM", "DD"]},
             },
         ],
