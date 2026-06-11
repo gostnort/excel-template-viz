@@ -163,6 +163,9 @@ def _ensure_form_rows_from_sheet(
         st.session_state[rows_key] = rows
         st.session_state[sheet_key] = selected_sheet
         st.session_state[mtime_key] = mtime
+        for row_idx, row in enumerate(rows):
+            for col_idx, header in enumerate(headers):
+                st.session_state[_cell_key(config.id, row_idx, col_idx)] = row.get(header, "")
 
 
 
@@ -188,6 +191,8 @@ def _apply_source_parse(config: TemplateConfig, headers: list[str], source_text:
             existing_rows[idx] = merged
         else:
             existing_rows.append(merged)
+        for col_idx, header in enumerate(headers):
+            st.session_state[_cell_key(config.id, idx, col_idx)] = merged.get(header, "")
     st.session_state[_form_rows_key(config.id)] = existing_rows
     return True
 
@@ -262,9 +267,20 @@ def _apply_sheet_lookup(
         existing_rows = [{header: "" for header in headers}]
     while len(existing_rows) <= target_row_index:
         existing_rows.append({header: "" for header in headers})
-    merged = merge_parsed_into_headers(headers, parsed, existing_rows[target_row_index])
+        
+    existing_row = existing_rows[target_row_index].copy()
+    for col_idx, header in enumerate(headers):
+        ck = _cell_key(config.id, target_row_index, col_idx)
+        if ck in st.session_state:
+            existing_row[header] = str(st.session_state[ck])
+            
+    merged = merge_parsed_into_headers(headers, parsed, existing_row)
     existing_rows[target_row_index] = merged
     st.session_state[_form_rows_key(config.id)] = existing_rows
+    
+    for col_idx, header in enumerate(headers):
+        st.session_state[_cell_key(config.id, target_row_index, col_idx)] = merged.get(header, "")
+        
     return True
 
 
