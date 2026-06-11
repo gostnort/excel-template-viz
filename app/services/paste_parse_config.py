@@ -278,6 +278,90 @@ def id_target_field_from_config(config: PasteParseConfig | None) -> str | None:
     return None
 
 
+def id_column_from_config(config: PasteParseConfig | None) -> str | None:
+    if config is None:
+        return None
+    for field_name, rules in config.field_rules.items():
+        for rule in rules:
+            if rule.id_flag and rule.filed and rule.filed != "?":
+                return rule.filed
+    return None
+
+
+def resolve_sheet_header(filed: str, sheet_headers: list[str]) -> str | None:
+    if not filed or filed == "?":
+        return None
+    filed_stripped = filed.strip()
+    for h in sheet_headers:
+        if h == filed_stripped:
+            return h
+    filed_lower = filed_stripped.lower()
+    for h in sheet_headers:
+        if h.strip().lower() == filed_lower:
+            return h
+    return None
+
+
+def map_sheet_row_from_paste_config(
+    row: dict[str, str],
+    config: PasteParseConfig,
+) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    sheet_headers = list(row.keys())
+    for field_name, rules in config.field_rules.items():
+        for rule in rules:
+            if not rule.filed or rule.filed == "?":
+                continue
+            resolved_header = resolve_sheet_header(rule.filed, sheet_headers)
+            if resolved_header is None:
+                continue
+            raw_val = row.get(resolved_header, "")
+            if raw_val is None:
+                raw_val = ""
+            raw_val = str(raw_val).strip()
+            if not raw_val:
+                continue
+            if rule.regex:
+                extracted = _extract_with_regex(raw_val, rule.regex)
+                if extracted is None:
+                    continue
+                val = extracted
+            else:
+                val = raw_val
+            parsed[field_name] = _format_field_value(field_name, val)
+            break
+    return parsed
+
+
+def validate_yaml_against_sheet_headers(
+    config: PasteParseConfig,
+    sheet_headers: list[str],
+) -> dict[str, Any]:
+    matched: dict[str, str] = {}
+    missing: list[str] = []
+    id_filed = id_column_from_config(config)
+    id_matched = True
+    if id_filed:
+        resolved_id_header = resolve_sheet_header(id_filed, sheet_headers)
+        if not resolved_id_header:
+            id_matched = False
+    for field_name, rules in config.field_rules.items():
+        for rule in rules:
+            if not rule.filed or rule.filed == "?":
+                continue
+            resolved = resolve_sheet_header(rule.filed, sheet_headers)
+            if resolved:
+                matched[rule.filed] = resolved
+            else:
+                if rule.filed not in missing:
+                    missing.append(rule.filed)
+    return {
+        "matched": matched,
+        "missing": missing,
+        "id_matched": id_matched,
+    }
+
+
 def resolve_id_target_field(
     template_id: str,
     data_source_config: Any,

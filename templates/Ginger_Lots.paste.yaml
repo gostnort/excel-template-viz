@@ -21,11 +21,11 @@ Container No.:
   - filed: "Container#"
     index: 4
 Container Seal No.:
-  - filed: "BL#"
-    index: 5
+  - filed: "?"
+    index: -1
 Lot No.:
-  - filed: "Com. Inv #"
-    index: 3
+  - filed: "?"
+    index: -1
 Receiving Date:
   - filed: "recv. date"
     index: 12

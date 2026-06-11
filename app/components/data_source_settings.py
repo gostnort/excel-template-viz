@@ -13,6 +13,11 @@ from app.services.data_source import (
     save_template_id_column,
 )
 from app.services.excel_parser import parse_spreadsheet_id
+from app.services.paste_parse_config import (
+    load_paste_parse_config,
+    id_column_from_config,
+    validate_yaml_against_sheet_headers,
+)
 from app.services.google_sheets import (
     GoogleSheetsError,
     credentials_from_service_account_json,
@@ -88,6 +93,16 @@ def _restore_validation_state(template_id: str, saved: DataSourceConfig | None) 
 
 
 def _render_auth_controls() -> None:
+    if CREDENTIALS_SESSION_KEY in st.session_state:
+        auth_method_saved = st.session_state.get(AUTH_METHOD_SESSION_KEY, "service_account")
+        auth_label = "服务账号 JSON" if auth_method_saved == "service_account" else "OAuth 用户授权"
+        st.success(f"✅ Google Sheets 认证成功！当前已加载并激活「{auth_label}」会话凭证。")
+        if st.button("重新认证 / 切换账号", key="ds_reauth_btn"):
+            st.session_state.pop(CREDENTIALS_SESSION_KEY, None)
+            st.session_state.pop(AUTH_METHOD_SESSION_KEY, None)
+            st.rerun()
+        return
+
     auth_method = st.radio("认证方式", ["服务账号 JSON", "OAuth 用户授权"], horizontal=True, key="ds_auth_method")
     if auth_method == "服务账号 JSON":
         uploaded = st.file_uploader("上传服务账号 JSON 密钥", type=["json"], key="ds_sa_upload")
@@ -118,8 +133,6 @@ def _render_auth_controls() -> None:
                     st.markdown(f"- {hint}")
             except Exception as exc:
                 st.error(f"OAuth 失败: {exc}")
-        if CREDENTIALS_SESSION_KEY in st.session_state:
-            st.success("已加载会话中的 OAuth 凭证。")
 
 
 
@@ -248,6 +261,13 @@ def render_data_sources_tab(template_id: str, template_fields: list[str]) -> Non
     sheet_columns = get_validated_sheet_columns(template_id)
     saved_worksheet = saved.worksheet_name if saved else ""
     saved_id_col = saved.id_column if saved else DEFAULT_ID_COLUMN
+
+    paste_config = load_paste_parse_config(template_id)
+    yaml_id_col = id_column_from_config(paste_config) if paste_config else None
+    default_id_col = saved_id_col
+    if yaml_id_col and yaml_id_col in sheet_columns:
+        default_id_col = yaml_id_col
+
     if not test_ok:
         st.selectbox("工作表", options=["请先测试连接"], disabled=True, key=f"ds_worksheet_locked{suffix}")
         st.selectbox("ID 列", options=["请先测试连接"], disabled=True, key=f"ds_id_col_locked{suffix}")
@@ -260,11 +280,40 @@ def render_data_sources_tab(template_id: str, template_fields: list[str]) -> Non
         )
         st.selectbox(
             "ID 列",
-            sheet_columns or [saved_id_col],
-            index=_default_column_index(sheet_columns, saved_id_col),
+            sheet_columns or [default_id_col],
+            index=_default_column_index(sheet_columns, default_id_col),
             key=f"ds_id_column_select{suffix}",
         )
-    _render_mapping_editor(template_id, template_fields, saved)
+        if paste_config and sheet_columns:
+            st.markdown("### 📋 YAML 与 Google Sheet 在线表头匹配对齐状态")
+            res = validate_yaml_against_sheet_headers(paste_config, sheet_columns)
+            yaml_fields = []
+            for field, rules in paste_config.field_rules.items():
+                for rule in rules:
+                    if rule.filed and rule.filed != "?":
+                        yaml_fields.append((field, rule.filed))
+            align_rows = []
+            for field, filed in yaml_fields:
+                if filed in res["matched"]:
+                    status = "✅ 已对齐"
+                    actual = res["matched"][filed]
+                else:
+                    status = "❌ 未在 Sheet 中找到"
+                    actual = ""
+                align_rows.append({
+                    "表单字段": field,
+                    "YAML 声明列名 (filed)": filed,
+                    "对齐状态": status,
+                    "实际匹配 Sheet 列名": actual
+                })
+            if align_rows:
+                st.dataframe(pd.DataFrame(align_rows), use_container_width=True)
+            else:
+                st.info("YAML 中没有定义任何需要对齐匹配的 `filed` 列名（均为手动字段 `?`）。")
+            if not res["id_matched"] and yaml_id_col:
+                st.error(f"⚠️ 警告：YAML 中定义的 ID 主键列「{yaml_id_col}」在当前 Google Sheet 中对齐失败，自动查询功能将无法正常工作，请检查列名拼写！")
+    if not paste_config:
+        _render_mapping_editor(template_id, template_fields, saved)
     action_col, save_col = st.columns(2)
     with action_col:
         set_id_col = st.button("设为默认 ID 列", key=f"ds_set_id_col{suffix}", disabled=not test_ok)

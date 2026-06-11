@@ -11,8 +11,10 @@ from app.components.data_source_settings import (
 )
 from app.components.paste_parse_settings import render_paste_mapping_tab
 from app.services.paste_parse_config import (
+    id_column_from_config,
     id_target_field_from_config,
     load_paste_parse_config,
+    map_sheet_row_from_paste_config,
     parse_text_with_config,
     resolve_id_target_field,
 )
@@ -219,6 +221,12 @@ def _apply_sheet_lookup(
         if show_errors:
             st.warning("请先在「数据源」Tab 完成 Google 认证。")
         return False
+
+    paste_config = load_paste_parse_config(config.id)
+    id_column = id_column_from_config(paste_config)
+    if not id_column:
+        id_column = data_source.id_column
+
     mappings = sheet_mappings(data_source)
     spinner = st.spinner("正在从 Google Sheet 查询...") if show_errors else _null_context()
     with spinner:
@@ -227,7 +235,7 @@ def _apply_sheet_lookup(
                 credentials,
                 data_source.spreadsheet_id,
                 data_source.worksheet_name or None,
-                data_source.id_column,
+                id_column,
                 po_value,
             )
         except GoogleSheetsError as exc:
@@ -242,14 +250,17 @@ def _apply_sheet_lookup(
             return False
     if row is None:
         if show_errors:
-            st.warning(f"未找到 {data_source.id_column}={po_value!r} 的记录。")
+            st.warning(f"未找到 {id_column}={po_value!r} 的记录。")
         return False
     try:
-        parsed = sheet_row_to_form_fields(
-            row,
-            data_source.id_column,
-            mappings=mappings or None,
-        )
+        if paste_config:
+            parsed = map_sheet_row_from_paste_config(row, paste_config)
+        else:
+            parsed = sheet_row_to_form_fields(
+                row,
+                id_column,
+                mappings=mappings or None,
+            )
     except ValueError as exc:
         if show_errors:
             st.error(f"行数据映射失败: {exc}")
@@ -283,7 +294,11 @@ def _poll_auto_id_lookup(
 ) -> None:
     data_source = load_template_data_source(config.id)
     id_field = resolve_id_target_field(config.id, data_source, headers)
-    if not id_field or not data_source or not data_source.id_column:
+    if not id_field or not data_source:
+        return
+    paste_config = load_paste_parse_config(config.id)
+    id_column = id_column_from_config(paste_config) or data_source.id_column
+    if not id_column:
         return
     col_idx = headers.index(id_field)
     cell_key = _cell_key(config.id, selected_index, col_idx)
@@ -466,8 +481,10 @@ def _render_form_entry_tab(config: TemplateConfig, sheet_names: list[str]) -> No
     data_source = load_template_data_source(config.id)
     id_field = resolve_id_target_field(config.id, data_source, headers)
     if data_source and id_field:
+        paste_config = load_paste_parse_config(config.id)
+        id_col_name = id_column_from_config(paste_config) or data_source.id_column
         st.caption(
-            f"在 `{id_field}` 输入 {data_source.id_column} 值，"
+            f"在 `{id_field}` 输入 {id_col_name} 值，"
             f"稳定 {int(ID_LOOKUP_DELAY_SECONDS)} 秒后自动从 Sheet 查询并填入。"
         )
     st.subheader("已存在数据")
