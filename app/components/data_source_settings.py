@@ -282,14 +282,19 @@ def render_data_sources_tab(template_id: str, template_fields: list[str]) -> Non
     if yaml_id_col and yaml_id_col in sheet_columns:
         default_id_col = yaml_id_col
 
+    default_worksheet = saved_worksheet
+    yaml_worksheet = paste_config.worksheet if paste_config else None
+    if yaml_worksheet and yaml_worksheet in worksheet_titles:
+        default_worksheet = yaml_worksheet
+
     if not test_ok:
         st.selectbox("工作表", options=["请先测试连接"], disabled=True, key=f"ds_worksheet_locked{suffix}")
         st.selectbox("ID 列", options=["请先测试连接"], disabled=True, key=f"ds_id_col_locked{suffix}")
     else:
         st.selectbox(
             "工作表",
-            worksheet_titles or [saved_worksheet or "默认"],
-            index=_default_worksheet_index(worksheet_titles, saved_worksheet),
+            worksheet_titles or [default_worksheet or "默认"],
+            index=_default_worksheet_index(worksheet_titles, default_worksheet),
             key=f"ds_worksheet_select{suffix}",
         )
         st.selectbox(

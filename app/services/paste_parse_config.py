@@ -8,7 +8,7 @@ import yaml
 from app.services.registry import TEMPLATES_DIR
 
 PASTE_CONFIG_SUFFIX = ".paste.yaml"
-RESERVED_TOP_KEYS = frozenset({"determiner", "order"})
+RESERVED_TOP_KEYS = frozenset({"determiner", "order", "worksheet"})
 
 
 @dataclass
@@ -24,6 +24,7 @@ class PasteParseConfig:
     determiner: str
     field_rules: dict[str, list[PasteParseRule]]
     order: list[dict[str, Any]] | None = None
+    worksheet: str | None = None
 
 
 def paste_config_path(template_id: str) -> Path:
@@ -78,10 +79,16 @@ def config_from_dict(raw: dict[str, Any]) -> PasteParseConfig | None:
     order = raw.get("order")
     if order is not None and not isinstance(order, list):
         order = None
+    
+    worksheet = raw.get("worksheet")
+    if worksheet is not None:
+        worksheet = str(worksheet).strip()
+    
     return PasteParseConfig(
         determiner=_normalize_determiner(str(raw.get("determiner", "tab"))),
         field_rules=field_rules,
         order=order,
+        worksheet=worksheet,
     )
 
 
@@ -173,6 +180,9 @@ def _normalize_field_rule_lists(raw: dict[str, Any]) -> dict[str, Any]:
 def config_to_yaml(config: dict[str, Any]) -> str:
     config = _normalize_field_rule_lists(config)
     lines: list[str] = [f'determiner: {_yaml_scalar(str(config.get("determiner", "tab")))}']
+    worksheet = config.get("worksheet")
+    if worksheet is not None:
+        lines.append(f'worksheet: {_yaml_scalar(str(worksheet))}')
     order = config.get("order")
     if isinstance(order, list) and order:
         lines.append("order:")

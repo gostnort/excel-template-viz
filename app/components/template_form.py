@@ -226,6 +226,8 @@ def _apply_sheet_lookup(
     id_column = id_column_from_config(paste_config)
     if not id_column:
         id_column = data_source.id_column
+        
+    worksheet_name = paste_config.worksheet if paste_config and paste_config.worksheet else data_source.worksheet_name
 
     mappings = sheet_mappings(data_source)
     spinner = st.spinner("正在从 Google Sheet 查询...") if show_errors else _null_context()
@@ -234,7 +236,7 @@ def _apply_sheet_lookup(
             row = fetch_row_by_id(
                 credentials,
                 data_source.spreadsheet_id,
-                data_source.worksheet_name or None,
+                worksheet_name or None,
                 id_column,
                 po_value,
             )
