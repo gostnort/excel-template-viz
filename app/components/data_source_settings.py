@@ -100,7 +100,14 @@ def get_validated_worksheet_titles(template_id: str) -> list[str]:
 
 
 def _restore_validation_state(template_id: str, saved: DataSourceConfig | None) -> None:
-    if saved is None or is_sheet_test_ok(template_id):
+    if saved is None:
+        # If no config is saved, ensure we clear any leftover state from memory
+        st.session_state.pop(_test_ok_key(template_id), None)
+        st.session_state.pop(_columns_key(template_id), None)
+        st.session_state.pop(_worksheets_key(template_id), None)
+        st.session_state.pop(_meta_key(template_id), None)
+        return
+    if is_sheet_test_ok(template_id):
         return
     if saved.spreadsheet_id:
         st.session_state[_test_ok_key(template_id)] = True
@@ -254,12 +261,19 @@ def render_data_sources_tab(template_id: str, template_fields: list[str]) -> Non
         value=5,
         key=f"ds_max_rows{suffix}",
     )
+
+    test_ok = is_sheet_test_ok(template_id)
+    # Clear test_ok if sheet_url changed so user must retest
+    if test_ok and saved and sheet_url.strip() != saved.sheet_url:
+        test_ok = False
+        st.session_state[_test_ok_key(template_id)] = False
+
     if st.button("测试连接", type="primary", key=f"ds_test{suffix}"):
         if not sheet_url.strip():
             st.warning("请先填写 Google Sheet URL。")
         else:
             _run_sheet_test(template_id, sheet_url.strip(), None, int(max_rows))
-    test_ok = is_sheet_test_ok(template_id)
+            test_ok = is_sheet_test_ok(template_id)
     worksheet_titles = get_validated_worksheet_titles(template_id)
     sheet_columns = get_validated_sheet_columns(template_id)
     saved_worksheet = saved.worksheet_name if saved else ""
