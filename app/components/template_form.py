@@ -169,13 +169,8 @@ def _ensure_form_rows_from_sheet(
         st.session_state[rows_key] = rows
         st.session_state[sheet_key] = selected_sheet
         st.session_state[mtime_key] = mtime
-        _prime_cell_keys(config.id, headers, rows)
 
 
-def _prime_cell_keys(config_id: str, headers: list[str], rows: list[dict[str, str]]) -> None:
-    for row_idx, row in enumerate(rows):
-        for col_idx, header in enumerate(headers):
-            st.session_state[_cell_key(config_id, row_idx, col_idx)] = row.get(header, "")
 
 
 def _apply_source_parse(config: TemplateConfig, headers: list[str], source_text: str) -> bool:
@@ -200,7 +195,6 @@ def _apply_source_parse(config: TemplateConfig, headers: list[str], source_text:
         else:
             existing_rows.append(merged)
     st.session_state[_form_rows_key(config.id)] = existing_rows
-    _prime_cell_keys(config.id, headers, existing_rows)
     return True
 
 
@@ -277,7 +271,6 @@ def _apply_sheet_lookup(
     merged = merge_parsed_into_headers(headers, parsed, existing_rows[target_row_index])
     existing_rows[target_row_index] = merged
     st.session_state[_form_rows_key(config.id)] = existing_rows
-    _prime_cell_keys(config.id, headers, existing_rows)
     return True
 
 
@@ -413,6 +406,7 @@ def _render_data_rows(
                     cell_key = _cell_key(config.id, row_idx, global_col_idx)
                     input_value = st.text_input(
                         header,
+                        value=row.get(header, ""),
                         key=cell_key,
                     )
                 row_values[header] = input_value
