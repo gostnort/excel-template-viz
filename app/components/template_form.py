@@ -165,9 +165,11 @@ def _ensure_form_rows_from_sheet(
         or st.session_state.get(mtime_key) != mtime
     )
     if reload:
-        st.session_state[rows_key] = _rows_from_dataframe(headers, dataframe)
+        rows = _rows_from_dataframe(headers, dataframe)
+        st.session_state[rows_key] = rows
         st.session_state[sheet_key] = selected_sheet
         st.session_state[mtime_key] = mtime
+        _prime_cell_keys(config.id, headers, rows)
 
 
 def _prime_cell_keys(config_id: str, headers: list[str], rows: list[dict[str, str]]) -> None:
@@ -475,22 +477,14 @@ def _render_form_entry_tab(config: TemplateConfig, sheet_names: list[str]) -> No
     _ensure_form_rows_from_sheet(config, headers, dataframe, selected_sheet)
     with paste_col:
         _render_source_paste_area(config, headers)
-    st.subheader("数据录入")
+    
     rows = st.session_state.get(_form_rows_key(config.id), [])
     if not rows:
         st.info("暂无数据行，请在上方粘贴源数据并点击「解析并填入」。")
         return
     data_source = load_template_data_source(config.id)
     id_field = resolve_id_target_field(config.id, data_source, headers)
-    if data_source and id_field:
-        paste_config = load_paste_parse_config(config.id)
-        id_col_name = id_column_from_config(paste_config) or data_source.id_column
-        st.caption(
-            f"在 `{id_field}` 输入 {id_col_name} 值，"
-            f"稳定 {int(ID_LOOKUP_DELAY_SECONDS)} 秒后自动从 Sheet 查询并填入。"
-        )
-    st.subheader("已存在数据")
-    _prime_cell_keys(config.id, headers, rows)
+    
     selected_index = _resolve_selected_index(config.id, len(rows))
     selected_index = st.selectbox(
         "选择行（显示摘要）",

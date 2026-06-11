@@ -47,6 +47,30 @@ def main() -> None:
         """,
         unsafe_allow_html=True,
     )
+    
+    components.html(
+        """
+        <script>
+        const doc = window.parent.document;
+        doc.addEventListener('keydown', function(e) {
+            // Block 'c' or 'C' key shortcut for "Clear caches" when outside input fields
+            if (e.key === 'c' || e.key === 'C') {
+                if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+                    e.stopPropagation();
+                }
+            }
+            // Block 'r' or 'R' key shortcut for "Rerun"
+            if (e.key === 'r' || e.key === 'R') {
+                if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+                    e.stopPropagation();
+                }
+            }
+        }, true);
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
     nav_options = build_nav_options()
     if not nav_options:
         st.sidebar.warning("未加载任何模板，请将 xlsx 文件复制到 templates/ 目录。")
