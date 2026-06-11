@@ -5,7 +5,6 @@ from pathlib import Path
 import streamlit as st
 
 from app.components.data_source_settings import (
-    ID_LOOKUP_DELAY_SECONDS,
     get_session_credentials,
     render_data_sources_tab,
 )
@@ -93,11 +92,6 @@ def _cell_key(config_id: str, row_idx: int, col_idx: int) -> str:
 
 def _row_select_key(config_id: str) -> str:
     return f"row_select_{config_id}"
-
-
-
-def _auto_id_state_key(config_id: str, row_idx: int) -> str:
-    return f"auto_id_{config_id}_{row_idx}"
 
 
 
@@ -284,56 +278,6 @@ class _null_context:
 
 
 
-def _poll_auto_id_lookup(
-    config: TemplateConfig,
-    headers: list[str],
-    selected_index: int,
-) -> None:
-    data_source = load_template_data_source(config.id)
-    id_field = resolve_id_target_field(config.id, data_source, headers)
-    if not id_field or not data_source:
-        return
-    paste_config = load_paste_parse_config(config.id)
-    id_column = id_column_from_config(paste_config) or data_source.id_column
-    if not id_column:
-        return
-    col_idx = headers.index(id_field)
-    cell_key = _cell_key(config.id, selected_index, col_idx)
-    current = str(st.session_state.get(cell_key, "")).strip()
-    state_key = _auto_id_state_key(config.id, selected_index)
-    state = st.session_state.setdefault(state_key, {"value": "", "since": 0.0, "done": ""})
-    now = time.time()
-    if current != state["value"]:
-        state["value"] = current
-        state["since"] = now
-        state["done"] = ""
-        return
-    if not current or current == state["done"]:
-        return
-    elapsed = now - state["since"]
-    if elapsed < ID_LOOKUP_DELAY_SECONDS:
-        return
-    if _apply_sheet_lookup(config, headers, current, selected_index, show_errors=False):
-        state["done"] = current
-        st.rerun()
-
-
-
-def _render_auto_lookup_fragment(
-    config: TemplateConfig,
-    headers: list[str],
-    selected_index: int,
-) -> None:
-    fragment = getattr(st, "fragment", None)
-    if fragment is None:
-        _poll_auto_id_lookup(config, headers, selected_index)
-        return
-
-    @fragment(run_every=timedelta(seconds=1))
-    def _auto_lookup_runner() -> None:
-        _poll_auto_id_lookup(config, headers, selected_index)
-
-    _auto_lookup_runner()
 
 
 
@@ -391,7 +335,16 @@ def _render_data_rows(
     rows: list[dict[str, str]],
     selected_index: int,
 ) -> list[dict[str, str]]:
-    _render_auto_lookup_fragment(config, headers, selected_index)
+    data_source = load_template_data_source(config.id)
+    id_field = resolve_id_target_field(config.id, data_source, headers) if data_source else None
+
+    def _on_id_input_change(cell_key: str):
+        val = str(st.session_state.get(cell_key, "")).strip()
+        if not val:
+            return
+        # Attempt to automatically read from sheet when content is present and focus changes
+        _apply_sheet_lookup(config, headers, val, selected_index, show_errors=True)
+
     edited_rows: list[dict[str, str]] = []
     for row_idx, row in enumerate(rows):
         if row_idx != selected_index:
@@ -404,11 +357,16 @@ def _render_data_rows(
             for col_idx, (global_col_idx, header) in enumerate(chunk):
                 with columns[col_idx]:
                     cell_key = _cell_key(config.id, row_idx, global_col_idx)
-                    input_value = st.text_input(
-                        header,
-                        value=row.get(header, ""),
-                        key=cell_key,
-                    )
+                    
+                    kwargs = {
+                        "key": cell_key,
+                        "value": row.get(header, ""),
+                    }
+                    if id_field and header == id_field:
+                        kwargs["on_change"] = _on_id_input_change
+                        kwargs["args"] = (cell_key,)
+                    
+                    input_value = st.text_input(header, **kwargs)
                 row_values[header] = input_value
         edited_rows.append(row_values)
     st.session_state[_form_rows_key(config.id)] = edited_rows
