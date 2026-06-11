@@ -9,12 +9,12 @@ venv/
 .streamlit/secrets.toml
 .run.pid
 
-# Google 凭证（勿提交）
+# Google OAuth 凭证（勿提交）
 credentials/
 *-service-account*.json
 oauth_token.json
 client_secret*.json
-app/oauth/authorized_user.json
+app/oauth/
 
 # 本地模板副本（可选，若含敏感数据）
 templates/*.xlsx
@@ -35,5 +35,4 @@ app/vllm/
 
 # 导出 xlsx（打开/打印用）
 exports/
-oauth/** */
-!oauth/
+
