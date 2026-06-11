@@ -33,4 +33,5 @@ if errorlevel 1 (
 
 echo.
 echo 安装完成！请运行 run.bat 启动应用。
+echo Google 连接请在应用内「数据源」Tab 按页面指引操作。
 exit /b 0

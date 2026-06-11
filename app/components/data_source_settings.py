@@ -1,5 +1,3 @@
-import json
-
 import pandas as pd
 import streamlit as st
 
@@ -19,15 +17,23 @@ from app.services.paste_parse_config import (
     validate_yaml_against_sheet_headers,
 )
 from app.services.google_sheets import (
+    GOOGLE_CLOUD_HOME_URL,
+    GOOGLE_CREDENTIALS_URL,
+    GOOGLE_OAUTH_AUDIENCE_URL,
+    GOOGLE_OAUTH_CONSENT_URL,
+    GOOGLE_OAUTH_CREATE_CLIENT_URL,
+    GOOGLE_SHEETS_API_URL,
     GoogleSheetsError,
-    credentials_from_service_account_json,
     fetch_sheet_preview,
+    has_oauth_client,
     list_worksheet_titles,
+    remove_stored_oauth,
     run_oauth_flow,
+    save_oauth_client_json,
+    stored_oauth_client_path,
 )
 
 CREDENTIALS_SESSION_KEY = "gs_credentials"
-AUTH_METHOD_SESSION_KEY = "gs_auth_method"
 ID_LOOKUP_DELAY_SECONDS = 2.0
 
 
@@ -99,47 +105,113 @@ def _restore_validation_state(template_id: str, saved: DataSourceConfig | None) 
 
 
 
+def _start_google_oauth() -> None:
+    try:
+        credentials = run_oauth_flow()
+        st.session_state[CREDENTIALS_SESSION_KEY] = credentials
+        st.success("Google 账号连接成功。")
+        st.rerun()
+    except GoogleSheetsError as exc:
+        st.error(str(exc))
+        for hint in exc.hints:
+            st.markdown(f"- {hint}")
+    except Exception as exc:
+        st.error(f"连接失败: {exc}")
+
+
+def _render_oauth_setup_guide() -> None:
+    st.markdown("### 首次连接 Google（本机只需配置一次）")
+    st.error(
+        "**重要：JSON 只能在创建弹窗里下载一次！**\n\n"
+        "点 **Create** 后会弹出 **OAuth client created**。弹窗**底部**有 **Download JSON**。\n\n"
+        "在点 **OK** 关闭弹窗**之前**，必须先点 **Download JSON** 并把文件保存好。"
+        "弹窗一关，Google **不会再让你下载**，列表页也**没有**下载按钮（只有铅笔和垃圾桶）。\n\n"
+        "如果已经关掉了弹窗、没下到文件：删掉该客户端 → 重新 **+ Create client** → "
+        "在**新弹窗**里立刻 **Download JSON**。"
+    )
+    link_col1, link_col2, link_col3 = st.columns(3)
+    with link_col1:
+        st.markdown("**① 启用 Google Sheets API**")
+        st.caption("打开后点「启用」。")
+        st.link_button("打开 API 页面", GOOGLE_SHEETS_API_URL, use_container_width=True)
+    with link_col2:
+        st.markdown("**② 受众（Audience）**")
+        st.caption("必须选 **External**（外部），不能用 Internal。用 Gmail 登录必填。")
+        st.link_button("打开 Audience", GOOGLE_OAUTH_AUDIENCE_URL, use_container_width=True)
+    with link_col3:
+        st.markdown("**③ 创建 OAuth 客户端**")
+        st.caption("+ Create client → Desktop → Create → **立刻 Download JSON** → 再点 OK。")
+        st.link_button("打开 Clients 页面", GOOGLE_OAUTH_CREATE_CLIENT_URL, use_container_width=True)
+    st.warning(
+        "若浏览器出现 **Access blocked** / **Error 403: org_internal**："
+        "说明 OAuth 设成了 **Internal（仅组织内）**。"
+        "请打开 **Audience**，改为 **External**，保存后重新点「连接 Google 账号」。"
+        "用 `@gmail.com` 个人账号时不能选 Internal。"
+    )
+    st.caption(
+        f"没有 Google Cloud 项目？先打开 [Google Cloud 控制台]({GOOGLE_CLOUD_HOME_URL}) 新建项目。"
+        f" 同意屏幕：{GOOGLE_OAUTH_CONSENT_URL}"
+    )
+    st.markdown("**④ 上传第 ③ 步下载的 JSON 文件（不要点 OK 就关弹窗）**")
+    uploaded = st.file_uploader(
+        "选择 JSON 文件",
+        type=["json"],
+        key="ds_oauth_client_upload",
+        label_visibility="collapsed",
+    )
+    if uploaded is not None:
+        try:
+            save_oauth_client_json(uploaded.getvalue())
+            st.success("配置文件已保存。正在打开浏览器，请登录 Google 并点「允许」…")
+            _start_google_oauth()
+        except GoogleSheetsError as exc:
+            st.error(str(exc))
+            for hint in exc.hints:
+                st.markdown(f"- {hint}")
+
+
+def _clear_google_auth_session() -> None:
+    st.session_state.pop(CREDENTIALS_SESSION_KEY, None)
+
+
+def _remove_oauth_config() -> None:
+    _clear_google_auth_session()
+    removed = remove_stored_oauth()
+    if removed:
+        st.success("已删除本机 OAuth 配置文件，可重新上传 JSON 或重新连接。")
+    else:
+        st.info("本机没有已保存的 OAuth 配置文件。")
+    st.rerun()
+
+
 def _render_auth_controls() -> None:
     if CREDENTIALS_SESSION_KEY in st.session_state:
-        auth_method_saved = st.session_state.get(AUTH_METHOD_SESSION_KEY, "service_account")
-        auth_label = "服务账号 JSON" if auth_method_saved == "service_account" else "OAuth 用户授权"
-        st.success(f"✅ Google Sheets 认证成功！当前已加载并激活「{auth_label}」会话凭证。")
-        if st.button("重新认证 / 切换账号", key="ds_reauth_btn"):
-            st.session_state.pop(CREDENTIALS_SESSION_KEY, None)
-            st.session_state.pop(AUTH_METHOD_SESSION_KEY, None)
-            st.rerun()
+        st.success("✅ Google 账号已连接，可以读取 Google Sheet。")
+        reconnect_col, remove_col = st.columns(2)
+        with reconnect_col:
+            if st.button("重新连接 / 切换账号", key="ds_reauth_btn", use_container_width=True):
+                _clear_google_auth_session()
+                st.rerun()
+        with remove_col:
+            if st.button("删除 OAuth 配置", key="ds_remove_oauth_connected", use_container_width=True):
+                _remove_oauth_config()
         return
 
-    auth_method = st.radio("认证方式", ["服务账号 JSON", "OAuth 用户授权"], horizontal=True, key="ds_auth_method")
-    if auth_method == "服务账号 JSON":
-        uploaded = st.file_uploader("上传服务账号 JSON 密钥", type=["json"], key="ds_sa_upload")
-        if uploaded is not None:
-            raw = uploaded.getvalue().decode("utf-8")
-            try:
-                credentials = credentials_from_service_account_json(raw)
-                st.session_state[CREDENTIALS_SESSION_KEY] = credentials
-                st.session_state[AUTH_METHOD_SESSION_KEY] = "service_account"
-                email = json.loads(raw).get("client_email", "")
-                if email:
-                    st.info(f"服务账号邮箱: `{email}` — 请确保 Google Sheet 已共享给该邮箱。")
-            except GoogleSheetsError as exc:
-                st.error(str(exc))
-                for hint in exc.hints:
-                    st.markdown(f"- {hint}")
-    else:
-        st.caption("OAuth 需要项目根目录 `credentials/oauth_client.json`。")
-        if st.button("启动 OAuth 授权", key="ds_oauth_start"):
-            try:
-                credentials = run_oauth_flow()
-                st.session_state[CREDENTIALS_SESSION_KEY] = credentials
-                st.session_state[AUTH_METHOD_SESSION_KEY] = "oauth"
-                st.success("OAuth 授权成功。")
-            except GoogleSheetsError as exc:
-                st.error(str(exc))
-                for hint in exc.hints:
-                    st.markdown(f"- {hint}")
-            except Exception as exc:
-                st.error(f"OAuth 失败: {exc}")
+    if not has_oauth_client():
+        _render_oauth_setup_guide()
+        return
+
+    client_path = stored_oauth_client_path()
+    if client_path:
+        st.caption(f"配置文件：`{client_path}`")
+    st.caption("点击下方按钮，在弹出网页中登录 Google 并允许访问。")
+    connect_col, remove_col = st.columns(2)
+    with connect_col:
+        if st.button("连接 Google 账号", type="primary", key="ds_oauth_start", use_container_width=True):
+            _start_google_oauth()
+    with remove_col:
+        if st.button("删除 OAuth 配置", key="ds_remove_oauth_idle", use_container_width=True):
+            _remove_oauth_config()
 
 
 
@@ -151,7 +223,7 @@ def _run_sheet_test(
 ) -> None:
     credentials = get_session_credentials()
     if credentials is None:
-        st.warning("请先上传服务账号 JSON 或完成 OAuth 授权。")
+        st.warning("请先点击「连接 Google 账号」完成授权。")
         return
     with st.spinner("正在连接 Google Sheets..."):
         try:
@@ -252,7 +324,7 @@ def render_data_sources_tab(template_id: str, template_fields: list[str]) -> Non
         key=f"ds_sheet_url{suffix}",
     )
     max_rows = st.number_input(
-        "测试预览行数",
+        "预览行数",
         min_value=1,
         max_value=20,
         value=5,
@@ -265,7 +337,7 @@ def render_data_sources_tab(template_id: str, template_fields: list[str]) -> Non
         test_ok = False
         st.session_state[_test_ok_key(template_id)] = False
 
-    if st.button("测试连接", type="primary", key=f"ds_test{suffix}"):
+    if st.button("连接 Sheet", type="primary", key=f"ds_test{suffix}"):
         if not sheet_url.strip():
             st.warning("请先填写 Google Sheet URL。")
         else:
@@ -288,16 +360,16 @@ def render_data_sources_tab(template_id: str, template_fields: list[str]) -> Non
         default_worksheet = yaml_worksheet
 
     if not test_ok:
-        st.selectbox("工作表", options=["请先测试连接"], disabled=True, key=f"ds_worksheet_locked{suffix}")
-        st.selectbox("ID 列", options=["请先测试连接"], disabled=True, key=f"ds_id_col_locked{suffix}")
+        current_worksheet = st.selectbox("工作表", options=["请先连接 Sheet"], disabled=True, key=f"ds_worksheet_locked{suffix}")
+        current_id_col = st.selectbox("ID 列", options=["请先连接 Sheet"], disabled=True, key=f"ds_id_col_locked{suffix}")
     else:
-        st.selectbox(
+        current_worksheet = st.selectbox(
             "工作表",
             worksheet_titles or [default_worksheet or "默认"],
             index=_default_worksheet_index(worksheet_titles, default_worksheet),
             key=f"ds_worksheet_select{suffix}",
         )
-        st.selectbox(
+        current_id_col = st.selectbox(
             "ID 列",
             sheet_columns or [default_id_col],
             index=_default_column_index(sheet_columns, default_id_col),
@@ -333,51 +405,38 @@ def render_data_sources_tab(template_id: str, template_fields: list[str]) -> Non
                 st.error(f"⚠️ 警告：YAML 中定义的 ID 主键列「{yaml_id_col}」在当前 Google Sheet 中对齐失败，自动查询功能将无法正常工作，请检查列名拼写！")
     if not paste_config:
         _render_mapping_editor(template_id, template_fields, saved)
-    action_col, save_col = st.columns(2)
-    with action_col:
-        set_id_col = st.button("设为默认 ID 列", key=f"ds_set_id_col{suffix}", disabled=not test_ok)
-    with save_col:
-        save_config = st.button("保存数据源配置", key=f"ds_save{suffix}", disabled=not test_ok)
-    if set_id_col:
+
+    # 自动保存配置
+    if test_ok and sheet_url.strip():
         try:
-            spreadsheet_id = parse_spreadsheet_id(sheet_url)
-        except ValueError as exc:
-            st.error(str(exc))
-        else:
-            worksheet_name = st.session_state.get(f"ds_worksheet_select{suffix}", saved_worksheet)
-            id_column = st.session_state.get(f"ds_id_column_select{suffix}", saved_id_col)
-            config = DataSourceConfig(
-                sheet_url=sheet_url.strip(),
-                spreadsheet_id=spreadsheet_id,
-                worksheet_name=str(worksheet_name),
-                id_column=str(id_column) or DEFAULT_ID_COLUMN,
-                column_mappings=_extract_mappings(template_id, saved),
-            )
-            save_template_data_source(template_id, config)
-            save_template_id_column(template_id, str(id_column))
-            st.success(f"已保存默认 ID 列：{id_column}")
-            st.rerun()
-    if save_config:
-        if not sheet_url.strip():
-            st.warning("请先填写 Google Sheet URL。")
-        else:
-            try:
-                spreadsheet_id = parse_spreadsheet_id(sheet_url)
-            except ValueError as exc:
-                st.error(str(exc))
+            spreadsheet_id = parse_spreadsheet_id(sheet_url.strip())
+            current_mappings = _extract_mappings(template_id, saved)
+            ws_val = str(current_worksheet) if current_worksheet and current_worksheet != "请先连接 Sheet" else ""
+            id_val = str(current_id_col) if current_id_col and current_id_col != "请先连接 Sheet" else DEFAULT_ID_COLUMN
+            
+            needs_save = False
+            if not saved:
+                needs_save = True
             else:
-                worksheet_name = st.session_state.get(f"ds_worksheet_select{suffix}", saved_worksheet)
-                id_column = st.session_state.get(f"ds_id_column_select{suffix}", saved_id_col)
+                if (saved.sheet_url != sheet_url.strip() or
+                    saved.spreadsheet_id != spreadsheet_id or
+                    saved.worksheet_name != ws_val or
+                    saved.id_column != id_val or
+                    saved.column_mappings != current_mappings):
+                    needs_save = True
+            
+            if needs_save:
                 config = DataSourceConfig(
                     sheet_url=sheet_url.strip(),
                     spreadsheet_id=spreadsheet_id,
-                    worksheet_name=str(worksheet_name),
-                    id_column=str(id_column) or DEFAULT_ID_COLUMN,
-                    column_mappings=_extract_mappings(template_id, saved),
+                    worksheet_name=ws_val,
+                    id_column=id_val,
+                    column_mappings=current_mappings,
                 )
                 save_template_data_source(template_id, config)
-                st.success("已保存当前模板的数据源配置。")
-                st.rerun()
+        except Exception:
+            pass
+
     if saved and st.button("清除已保存配置", key=f"ds_clear{suffix}"):
         clear_template_data_source(template_id)
         for key in (

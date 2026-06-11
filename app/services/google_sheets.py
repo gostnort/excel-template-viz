@@ -1,53 +1,135 @@
 import json
+import os
 from pathlib import Path
 
 import gspread
 import pandas as pd
+from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google.oauth2.service_account import Credentials as ServiceAccountCredentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
 from app.services.excel_parser import parse_spreadsheet_id
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
-OAUTH_CLIENT_PATH = Path(__file__).resolve().parents[2] / "credentials" / "oauth_client.json"
+
+GOOGLE_CLOUD_HOME_URL = "https://console.cloud.google.com/"
+GOOGLE_SHEETS_API_URL = "https://console.cloud.google.com/flows/enableapi?apiid=sheets.googleapis.com"
+GOOGLE_OAUTH_CONSENT_URL = "https://console.cloud.google.com/apis/credentials/consent"
+GOOGLE_OAUTH_AUDIENCE_URL = "https://console.cloud.google.com/auth/audience"
+GOOGLE_OAUTH_CREATE_CLIENT_URL = "https://console.cloud.google.com/apis/credentials/oauthclient"
+GOOGLE_CREDENTIALS_URL = "https://console.cloud.google.com/apis/credentials"
+_APP_DIR = Path(__file__).resolve().parents[1]
+_OAUTH_DIR = _APP_DIR / "oauth"
+_OAUTH_CLIENT_PATH = _OAUTH_DIR / "oauth_client.json"
+_OAUTH_TOKEN_PATH = _OAUTH_DIR / "authorized_user.json"
+_LEGACY_CLIENT_PATH = Path(__file__).resolve().parents[2] / "credentials" / "oauth_client.json"
 
 
 class GoogleSheetsError(Exception):
-    # Google Sheets 操作失败时携带用户可读说明
     def __init__(self, message: str, hints: list[str] | None = None):
         super().__init__(message)
         self.hints = hints or []
 
 
-def credentials_from_service_account_json(raw_json: str) -> ServiceAccountCredentials:
-    # 从上传的 JSON 字符串构建服务账号凭证
+class OAuthClientNotConfiguredError(GoogleSheetsError):
+    pass
+
+
+def _gspread_credentials_path() -> Path | None:
+    appdata = os.environ.get("APPDATA", "")
+    if appdata:
+        candidate = Path(appdata) / "gspread" / "credentials.json"
+        if candidate.is_file():
+            return candidate
+    candidate = Path.home() / ".config" / "gspread" / "credentials.json"
+    if candidate.is_file():
+        return candidate
+    return None
+
+
+def find_oauth_client_path() -> Path | None:
+    for candidate in (_OAUTH_CLIENT_PATH, _LEGACY_CLIENT_PATH, _gspread_credentials_path()):
+        if candidate and candidate.is_file():
+            return candidate
+    return None
+
+
+def has_oauth_client() -> bool:
+    return find_oauth_client_path() is not None
+
+
+def stored_oauth_client_path() -> Path | None:
+    if _OAUTH_CLIENT_PATH.is_file():
+        return _OAUTH_CLIENT_PATH
+    if _LEGACY_CLIENT_PATH.is_file():
+        return _LEGACY_CLIENT_PATH
+    return None
+
+
+def remove_stored_oauth() -> list[str]:
+    removed: list[str] = []
+    for path in (_OAUTH_CLIENT_PATH, _OAUTH_TOKEN_PATH, _LEGACY_CLIENT_PATH):
+        if path.is_file():
+            path.unlink()
+            removed.append(str(path))
+    return removed
+
+
+def save_oauth_client_json(raw: bytes) -> Path:
     try:
-        info = json.loads(raw_json)
-    except json.JSONDecodeError as exc:
-        raise GoogleSheetsError("服务账号 JSON 格式无效", ["请上传 Google Cloud 控制台下载的完整 JSON 密钥"]) from exc
-    email = info.get("client_email", "")
-    creds = ServiceAccountCredentials.from_service_account_info(info, scopes=SCOPES)
-    creds.extra = {"service_account_email": email}
-    return creds
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise GoogleSheetsError("不是有效的 JSON 文件") from exc
+    if "installed" not in payload and "web" not in payload:
+        raise GoogleSheetsError(
+            "这不是 OAuth 客户端文件",
+            ["请在 Google Cloud 创建「桌面应用」OAuth 客户端并下载 JSON"],
+        )
+    _OAUTH_DIR.mkdir(parents=True, exist_ok=True)
+    _OAUTH_CLIENT_PATH.write_bytes(raw)
+    return _OAUTH_CLIENT_PATH
+
+
+def _save_token(credentials: Credentials) -> None:
+    _OAUTH_DIR.mkdir(parents=True, exist_ok=True)
+    _OAUTH_TOKEN_PATH.write_text(credentials.to_json(), encoding="utf-8")
+
+
+def _load_cached_credentials() -> Credentials | None:
+    if not _OAUTH_TOKEN_PATH.is_file():
+        return None
+    try:
+        credentials = Credentials.from_authorized_user_file(str(_OAUTH_TOKEN_PATH), SCOPES)
+    except (ValueError, json.JSONDecodeError):
+        return None
+    if credentials and credentials.valid:
+        return credentials
+    if credentials and credentials.expired and credentials.refresh_token:
+        credentials.refresh(Request())
+        _save_token(credentials)
+        return credentials
+    return None
 
 
 def run_oauth_flow() -> Credentials:
-    # 使用本地 oauth_client.json 启动 OAuth 浏览器授权
-    if not OAUTH_CLIENT_PATH.exists():
-        raise GoogleSheetsError(
-            "未找到 OAuth 客户端配置文件",
-            [
-                f"请将 Google Cloud OAuth 客户端 JSON 放到: {OAUTH_CLIENT_PATH}",
-                "API 控制台需启用 Google Sheets API",
-            ],
+    client_path = find_oauth_client_path()
+    if client_path is None:
+        raise OAuthClientNotConfiguredError(
+            "尚未配置 OAuth 客户端",
+            [],
         )
-    flow = InstalledAppFlow.from_client_secrets_file(str(OAUTH_CLIENT_PATH), SCOPES)
-    return flow.run_local_server(port=0)
+
+    cached = _load_cached_credentials()
+    if cached is not None:
+        return cached
+
+    flow = InstalledAppFlow.from_client_secrets_file(str(client_path), SCOPES)
+    credentials = flow.run_local_server(port=0, open_browser=True)
+    _save_token(credentials)
+    return credentials
 
 
 def open_gspread_client(credentials) -> gspread.Client:
-    # 统一打开 gspread 客户端
     return gspread.authorize(credentials)
 
 
@@ -57,7 +139,6 @@ def fetch_sheet_preview(
     worksheet_name: str | None,
     max_rows: int = 10,
 ) -> tuple[pd.DataFrame, dict]:
-    # 读取表格前几行，返回 DataFrame 与元信息
     spreadsheet_id = parse_spreadsheet_id(spreadsheet_id_or_url)
     try:
         client = open_gspread_client(credentials)
@@ -65,12 +146,12 @@ def fetch_sheet_preview(
     except gspread.exceptions.SpreadsheetNotFound as exc:
         raise GoogleSheetsError(
             "找不到该 Spreadsheet（404）",
-            ["确认 Sheet ID 正确", "确认已将该表格共享给服务账号邮箱或当前 OAuth 用户"],
+            ["确认 Sheet ID 正确", "确认当前 Google 账号有权访问该表格"],
         ) from exc
     except PermissionError as exc:
         raise GoogleSheetsError(
             "无权限访问该 Spreadsheet（403）",
-            ["服务账号：在 Google Sheet 共享中添加 client_email", "OAuth：使用有权限的 Google 账号登录"],
+            ["使用有权限的 Google 账号重新连接", "确认该表格已共享给你的账号"],
         ) from exc
     except Exception as exc:
         message = str(exc)
@@ -108,7 +189,6 @@ def fetch_sheet_preview(
 
 
 def list_worksheet_titles(credentials, spreadsheet_id_or_url: str) -> list[str]:
-    # 列出 Spreadsheet 下全部工作表名称
     spreadsheet_id = parse_spreadsheet_id(spreadsheet_id_or_url)
     try:
         client = open_gspread_client(credentials)
@@ -116,18 +196,20 @@ def list_worksheet_titles(credentials, spreadsheet_id_or_url: str) -> list[str]:
     except gspread.exceptions.SpreadsheetNotFound as exc:
         raise GoogleSheetsError(
             "找不到该 Spreadsheet（404）",
-            ["确认 Sheet ID 正确", "确认已将该表格共享给服务账号邮箱或当前 OAuth 用户"],
+            ["确认 Sheet ID 正确", "确认当前 Google 账号有权访问该表格"],
         ) from exc
     except Exception as exc:
         message = str(exc)
         if "403" in message or "permission" in message.lower():
-            raise GoogleSheetsError("无权限访问该 Spreadsheet", ["检查表格是否已共享"]) from exc
+            raise GoogleSheetsError(
+                "无权限访问该 Spreadsheet",
+                ["使用有权限的 Google 账号重新连接"],
+            ) from exc
         raise GoogleSheetsError(f"连接失败: {message}") from exc
     return [worksheet.title for worksheet in spreadsheet.worksheets()]
 
 
 def _resolve_worksheet(spreadsheet, worksheet_name: str | None):
-    # 按名称解析工作表，留空则取第一个
     if worksheet_name:
         try:
             return spreadsheet.worksheet(worksheet_name)
@@ -147,7 +229,6 @@ def fetch_row_by_id(
     id_column: str,
     id_value: str,
 ) -> dict[str, str] | None:
-    # 按 ID 列值查找单行，返回列名到单元格文本的映射
     spreadsheet_id = parse_spreadsheet_id(spreadsheet_id_or_url)
     search_value = id_value.strip()
     if not search_value:

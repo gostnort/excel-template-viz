@@ -7,7 +7,7 @@
   "data_source": {
     "sheet_url": "https://docs.google.com/spreadsheets/d/1XdaRK0cDnet54KzDUiSrpl_xcu4vOMSYacdipDXT14c/edit?gid=0#gid=0",
     "spreadsheet_id": "1XdaRK0cDnet54KzDUiSrpl_xcu4vOMSYacdipDXT14c",
-    "worksheet_name": "默认",
+    "worksheet_name": "Containers",
     "id_column": "PO",
     "column_mappings": [
       {

@@ -20,9 +20,9 @@ Copy your xlsx files into `templates/`; the app will detect them on startup.
 
 1. 侧边栏点击 **添加数据源**。  
    Click **Add data source** in the sidebar.
-2. 上传服务账号 JSON（并将 Sheet 共享给 `client_email`），或配置 `credentials/oauth_client.json` 后 OAuth 授权。  
-   Upload a service account JSON (share the Sheet with `client_email`) or configure `credentials/oauth_client.json` for OAuth.
-3. 填写 Sheet URL，**测试连接** 成功后 **保存为默认数据源**。  
-   Enter the Sheet URL, **Test connection**, then **Save as default**.
+2. 点击 **连接 Google 账号**，在浏览器中完成授权。  
+   Click **Connect Google account** and complete authorization in the browser.
+3. 填写 Sheet URL，**连接 Sheet** 成功后 **保存为默认数据源**。  
+   Enter the Sheet URL, **Connect Sheet**, then **Save as default**.
 4. 在模板页输入 PO（如 `10073`）→ **查询并填入**。  
    Enter a PO number (e.g. `10073`) → **Query & fill**.

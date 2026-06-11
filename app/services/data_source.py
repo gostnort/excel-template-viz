@@ -72,7 +72,7 @@ def save_template_id_column(template_id: str, id_column: str) -> None:
         raise ValueError(f"模板 {template_id!r} 不存在")
     raw = payload.get("data_source") or {}
     if not raw.get("spreadsheet_id"):
-        raise ValueError("请先保存数据源配置后再设置默认 ID 列")
+        raise ValueError("缺少数据源连接配置（无法设置默认 ID 列）")
     raw["id_column"] = id_column.strip() or DEFAULT_ID_COLUMN
     payload["data_source"] = raw
     save_template_payload(template_id, payload)
