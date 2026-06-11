@@ -26,40 +26,14 @@ from app.services.google_sheets import (
     run_oauth_flow,
 )
 
-from pathlib import Path
-
 CREDENTIALS_SESSION_KEY = "gs_credentials"
 AUTH_METHOD_SESSION_KEY = "gs_auth_method"
 ID_LOOKUP_DELAY_SECONDS = 2.0
 
 
-def _find_service_account_path() -> Path | None:
-    credentials_dir = Path(__file__).resolve().parents[2] / "credentials"
-    if not credentials_dir.exists():
-        return None
-    for p in credentials_dir.glob("*.json"):
-        if p.name != "oauth_client.json":
-            return p
-    return None
-
-
 def get_session_credentials():
-    # 优先读取当前 session 中的凭证
-    creds = st.session_state.get(CREDENTIALS_SESSION_KEY)
-    if creds is not None:
-        return creds
-    # 自动静默从 credentials/ 目录加载服务账号 JSON
-    sa_path = _find_service_account_path()
-    if sa_path and sa_path.exists():
-        try:
-            raw = sa_path.read_text(encoding="utf-8")
-            creds = credentials_from_service_account_json(raw)
-            st.session_state[CREDENTIALS_SESSION_KEY] = creds
-            st.session_state[AUTH_METHOD_SESSION_KEY] = "service_account"
-            return creds
-        except Exception:
-            pass
-    return None
+    # 从 session 读取当前 Google 凭证
+    return st.session_state.get(CREDENTIALS_SESSION_KEY)
 
 
 
@@ -126,23 +100,46 @@ def _restore_validation_state(template_id: str, saved: DataSourceConfig | None) 
 
 
 def _render_auth_controls() -> None:
-    creds = get_session_credentials()
-    if creds is not None:
-        email = getattr(creds, "service_account_email", "") or getattr(creds, "signer_email", "")
-        if not email:
+    if CREDENTIALS_SESSION_KEY in st.session_state:
+        auth_method_saved = st.session_state.get(AUTH_METHOD_SESSION_KEY, "service_account")
+        auth_label = "服务账号 JSON" if auth_method_saved == "service_account" else "OAuth 用户授权"
+        st.success(f"✅ Google Sheets 认证成功！当前已加载并激活「{auth_label}」会话凭证。")
+        if st.button("重新认证 / 切换账号", key="ds_reauth_btn"):
+            st.session_state.pop(CREDENTIALS_SESSION_KEY, None)
+            st.session_state.pop(AUTH_METHOD_SESSION_KEY, None)
+            st.rerun()
+        return
+
+    auth_method = st.radio("认证方式", ["服务账号 JSON", "OAuth 用户授权"], horizontal=True, key="ds_auth_method")
+    if auth_method == "服务账号 JSON":
+        uploaded = st.file_uploader("上传服务账号 JSON 密钥", type=["json"], key="ds_sa_upload")
+        if uploaded is not None:
+            raw = uploaded.getvalue().decode("utf-8")
             try:
-                email = getattr(creds, "extra", {}).get("service_account_email", "")
-            except Exception:
-                pass
-        email_str = f"（`{email}`）" if email else ""
-        st.success(f"✅ Google Sheets 认证成功！已自动加载本地服务账号凭证 {email_str}。")
+                credentials = credentials_from_service_account_json(raw)
+                st.session_state[CREDENTIALS_SESSION_KEY] = credentials
+                st.session_state[AUTH_METHOD_SESSION_KEY] = "service_account"
+                email = json.loads(raw).get("client_email", "")
+                if email:
+                    st.info(f"服务账号邮箱: `{email}` — 请确保 Google Sheet 已共享给该邮箱。")
+            except GoogleSheetsError as exc:
+                st.error(str(exc))
+                for hint in exc.hints:
+                    st.markdown(f"- {hint}")
     else:
-        st.error("❌ 未找到 Google 凭证文件！")
-        st.markdown(
-            "请将您的 Google 服务账号 JSON 密钥文件放置在项目根目录的以下路径：\n"
-            "📂 `credentials/service_account.json`\n\n"
-            "系统检测到该文件后将**自动完成静默后台认证**，无需任何手动交互操作。"
-        )
+        st.caption("OAuth 需要项目根目录 `credentials/oauth_client.json`。")
+        if st.button("启动 OAuth 授权", key="ds_oauth_start"):
+            try:
+                credentials = run_oauth_flow()
+                st.session_state[CREDENTIALS_SESSION_KEY] = credentials
+                st.session_state[AUTH_METHOD_SESSION_KEY] = "oauth"
+                st.success("OAuth 授权成功。")
+            except GoogleSheetsError as exc:
+                st.error(str(exc))
+                for hint in exc.hints:
+                    st.markdown(f"- {hint}")
+            except Exception as exc:
+                st.error(f"OAuth 失败: {exc}")
 
 
 
