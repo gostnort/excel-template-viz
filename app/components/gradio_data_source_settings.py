@@ -138,11 +138,18 @@ def build_datasource_tab(
         outputs=[connection_status, worksheet_group, worksheet_dropdown]
     )
     
-    # Worksheet selected - load columns
+    # Worksheet selected - load columns and auto-save
     worksheet_dropdown.change(
         fn=handle_worksheet_change,
-        inputs=[worksheet_dropdown, sheet_url, credentials_state],
+        inputs=[worksheet_dropdown, sheet_url, credentials_state, current_template],
         outputs=[id_column_dropdown, test_group]
+    )
+    
+    # ID column selected - auto-save configuration
+    id_column_dropdown.change(
+        fn=handle_id_column_change,
+        inputs=[current_template, sheet_url, worksheet_dropdown, id_column_dropdown],
+        outputs=[]
     )
     
     # Save configuration
@@ -240,7 +247,8 @@ def handle_sheet_connect(
 def handle_worksheet_change(
     worksheet_name: str | None,
     sheet_url: str | None,
-    credentials: Any
+    credentials: Any,
+    template: TemplateConfig | None
 ) -> tuple:
     """Handle worksheet selection change"""
     if not worksheet_name or not sheet_url or not credentials:
@@ -268,6 +276,40 @@ def handle_worksheet_change(
         logger.error(f"Worksheet loading failed: {e}")
         gr.Warning(f"加载工作表失败：{str(e)}")
         return gr.update(), gr.update(visible=False)
+
+
+def handle_id_column_change(
+    template: TemplateConfig | None,
+    sheet_url: str | None,
+    worksheet_name: str | None,
+    id_column: str | None
+) -> None:
+    """Auto-save configuration when ID column is selected"""
+    if not template:
+        gr.Warning("请先选择模板")
+        return
+    
+    if not all([sheet_url, worksheet_name, id_column]):
+        # Incomplete configuration, skip auto-save
+        return
+    
+    try:
+        from app.services.data_source import save_template_data_source, DataSourceConfig
+        
+        config = DataSourceConfig(
+            template_id=template.id,
+            sheet_url=sheet_url,
+            worksheet_name=worksheet_name,
+            id_column=id_column
+        )
+        
+        save_template_data_source(config)
+        
+        gr.Info("✅ 配置已自动保存")
+        
+    except Exception as e:
+        logger.error(f"Auto-save config failed: {e}")
+        gr.Warning(f"自动保存失败：{str(e)}")
 
 
 def handle_save_config(

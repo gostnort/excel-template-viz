@@ -135,15 +135,15 @@ def build_form_tab(
     # Refresh button for bulk import
     refresh_btn.click(
         fn=handle_refresh_unrecorded,
-        inputs=[current_template, credentials_state],
+        inputs=[current_template, credentials_state, form_data_state],
         outputs=[import_preview, import_btn]
     )
     
     # Import selected rows
     import_btn.click(
         fn=handle_import_selected,
-        inputs=[import_preview, current_template, form_data_state],
-        outputs=[form_data_state, row_selector]
+        inputs=[import_preview, current_template, form_data_state, credentials_state, detected_areas_state],
+        outputs=[form_data_state, row_selector, import_preview]
     )
     
     # Export button
@@ -213,10 +213,12 @@ def on_sheet_change(
 
 def handle_refresh_unrecorded(
     template: TemplateConfig | None,
-    credentials: Any
+    credentials: Any,
+    form_data: list[dict[str, str]]
 ) -> tuple:
     """
     Refresh unrecorded data from Google Sheet
+    Filters out IDs that are already in form_data
     
     Returns:
         Updated preview dataframe and import button visibility
@@ -247,23 +249,45 @@ def handle_refresh_unrecorded(
             gr.Info("Sheet 中没有数据")
             return gr.update(), gr.update(visible=False)
         
-        # Convert to preview format (with selection checkboxes)
-        # For now, show first 3 columns as preview
-        preview_data = []
+        # Get list of already-recorded IDs
+        recorded_ids = set()
+        id_field_key = None
+        
+        # Find the ID field key in form_data
+        paste_config = load_paste_parse_config(template.id)
+        if paste_config:
+            for field_key, field_config in paste_config.to_dict().items():
+                if isinstance(field_config, dict) and field_config.get('type') == 'id':
+                    id_field_key = field_key
+                    break
+        
+        # Extract recorded IDs from form_data
+        if id_field_key:
+            for row_data in form_data:
+                if id_field_key in row_data:
+                    recorded_ids.add(str(row_data[id_field_key]))
+        
+        # Filter unrecorded rows
+        unrecorded_rows = []
         for i in range(df.height):
             row = df.row(i, named=True)
-            # Get ID column value
-            id_val = row.get(data_source.id_column, "")
-            # Get preview of other values
-            preview_vals = [str(v) for k, v in list(row.items())[:3]]
-            preview_str = " | ".join(preview_vals)
+            id_val = str(row.get(data_source.id_column, ""))
             
-            preview_data.append([False, str(id_val), preview_str])
+            if id_val not in recorded_ids:
+                # Get preview of values
+                preview_vals = [str(v) for k, v in list(row.items())[:3]]
+                preview_str = " | ".join(preview_vals)
+                
+                unrecorded_rows.append([False, id_val, preview_str])
         
-        gr.Info(f"找到 {len(preview_data)} 行数据")
+        if not unrecorded_rows:
+            gr.Info("所有数据均已录入")
+            return gr.update(), gr.update(visible=False)
+        
+        gr.Info(f"找到 {len(unrecorded_rows)} 行未录入数据")
         
         return (
-            gr.update(value=preview_data, visible=True),
+            gr.update(value=unrecorded_rows, visible=True),
             gr.update(visible=True)
         )
         
@@ -279,16 +303,18 @@ def handle_refresh_unrecorded(
 def handle_import_selected(
     preview_data: list[list[Any]],
     template: TemplateConfig | None,
-    form_data: list[dict[str, str]]
+    form_data: list[dict[str, str]],
+    credentials: Any,
+    detected_areas: list
 ) -> tuple:
     """
-    Import selected rows from preview
+    Import selected rows from preview using Phi-4 field matching
     
     Returns:
-        Updated form_data and row_selector
+        Updated form_data, row_selector, and import_preview visibility
     """
     if not preview_data or not template:
-        return form_data, gr.update()
+        return form_data, gr.update(), gr.update()
     
     try:
         # Get selected rows (where first column is True)
@@ -296,27 +322,71 @@ def handle_import_selected(
         
         if not selected_rows:
             gr.Warning("请勾选要导入的行")
-            return form_data, gr.update()
+            return form_data, gr.update(), gr.update()
         
-        # TODO: Use Phi-4 field matcher to map Sheet data to template fields
-        # For now, just show count
-        gr.Info(f"已导入 {len(selected_rows)} 行数据")
+        # Load data source config and paste config
+        from app.services.data_source import load_template_data_source
+        from app.services.google_sheets import fetch_row_by_id
         
-        # Update form data
-        new_form_data = form_data + []  # Add matched data
+        data_source = load_template_data_source(template.id)
+        if not data_source or not credentials:
+            gr.Warning("请先配置数据源")
+            return form_data, gr.update(), gr.update()
+        
+        paste_config = load_paste_parse_config(template.id)
+        if not paste_config:
+            gr.Warning("模板配置加载失败")
+            return form_data, gr.update(), gr.update()
+        
+        # Get field matcher
+        field_matcher = get_field_matcher()
+        imported_count = 0
+        
+        # Process each selected row
+        for row in selected_rows:
+            id_value = str(row[1])  # Second column is ID
+            
+            # Fetch full row data from Sheet
+            sheet_row = fetch_row_by_id(
+                credentials,
+                data_source.sheet_url,
+                data_source.worksheet_name,
+                data_source.id_column,
+                id_value
+            )
+            
+            if not sheet_row:
+                logger.warning(f"Row not found for ID: {id_value}")
+                continue
+            
+            # Use Phi-4 to match fields
+            matched_fields = field_matcher.match_sheet_fields_to_yaml(
+                sheet_row,
+                paste_config.to_dict()
+            )
+            
+            if matched_fields:
+                form_data.append(matched_fields)
+                imported_count += 1
+        
+        if imported_count > 0:
+            gr.Info(f"✅ 成功导入 {imported_count} 行数据")
+        else:
+            gr.Warning("未能导入任何数据，请检查配置")
         
         # Update row selector
-        row_choices = [f"Row {i+1}" for i in range(len(new_form_data))]
+        row_choices = [f"Row {i+1}" for i in range(len(form_data))]
         
         return (
-            new_form_data,
-            gr.update(choices=row_choices, value=row_choices[0] if row_choices else None)
+            form_data,
+            gr.update(choices=row_choices, value=row_choices[0] if row_choices else None),
+            gr.update(visible=False)  # Hide import preview after import
         )
         
     except Exception as e:
         logger.error(f"Import failed: {e}")
         gr.Warning(f"导入失败：{str(e)}")
-        return form_data, gr.update()
+        return form_data, gr.update(), gr.update()
 
 
 def handle_export(
