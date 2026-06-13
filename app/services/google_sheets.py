@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 import gspread
-import pandas as pd
+import polars as pl
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -138,7 +138,19 @@ def fetch_sheet_preview(
     spreadsheet_id_or_url: str,
     worksheet_name: str | None,
     max_rows: int = 10,
-) -> tuple[pd.DataFrame, dict]:
+) -> tuple[pl.DataFrame, dict]:
+    """
+    Fetch preview of Google Sheet data using polars
+    
+    Args:
+        credentials: Google OAuth credentials
+        spreadsheet_id_or_url: Sheet ID or full URL
+        worksheet_name: Optional worksheet name (defaults to first sheet)
+        max_rows: Maximum number of rows to preview
+    
+    Returns:
+        Tuple of (polars DataFrame, metadata dict)
+    """
     spreadsheet_id = parse_spreadsheet_id(spreadsheet_id_or_url)
     try:
         client = open_gspread_client(credentials)
@@ -172,13 +184,20 @@ def fetch_sheet_preview(
             ) from exc
     else:
         worksheet = spreadsheet.sheet1
+    
     values = worksheet.get_all_values()
     if not values:
-        dataframe = pd.DataFrame()
+        dataframe = pl.DataFrame()
     else:
         header = values[0]
         rows = values[1 : max_rows + 1] if len(values) > 1 else []
-        dataframe = pd.DataFrame(rows, columns=header)
+        if rows:
+            # Create polars DataFrame with explicit schema
+            dataframe = pl.DataFrame(rows, schema=header, orient="row")
+        else:
+            # Empty DataFrame with column names
+            dataframe = pl.DataFrame({col: [] for col in header})
+    
     meta = {
         "spreadsheet_title": spreadsheet.title,
         "worksheet_title": worksheet.title,
@@ -186,6 +205,49 @@ def fetch_sheet_preview(
         "row_count": len(values),
     }
     return dataframe, meta
+
+
+def fetch_all_rows(
+    credentials,
+    spreadsheet_id_or_url: str,
+    worksheet_name: str | None
+) -> pl.DataFrame:
+    """
+    Fetch all rows from Google Sheet using polars (for bulk import)
+    
+    Args:
+        credentials: Google OAuth credentials
+        spreadsheet_id_or_url: Sheet ID or full URL
+        worksheet_name: Optional worksheet name (defaults to first sheet)
+    
+    Returns:
+        polars DataFrame with all rows
+    """
+    spreadsheet_id = parse_spreadsheet_id(spreadsheet_id_or_url)
+    try:
+        client = open_gspread_client(credentials)
+        spreadsheet = client.open_by_key(spreadsheet_id)
+    except gspread.exceptions.SpreadsheetNotFound as exc:
+        raise GoogleSheetsError("找不到该 Spreadsheet（404）") from exc
+    except Exception as exc:
+        message = str(exc)
+        if "403" in message or "permission" in message.lower():
+            raise GoogleSheetsError("无权限访问该 Spreadsheet") from exc
+        raise GoogleSheetsError(f"连接失败: {message}") from exc
+    
+    worksheet = _resolve_worksheet(spreadsheet, worksheet_name)
+    values = worksheet.get_all_values()
+    
+    if not values:
+        return pl.DataFrame()
+    
+    header = values[0]
+    rows = values[1:]
+    
+    if rows:
+        return pl.DataFrame(rows, schema=header, orient="row")
+    else:
+        return pl.DataFrame({col: [] for col in header})
 
 
 def list_worksheet_titles(credentials, spreadsheet_id_or_url: str) -> list[str]:
@@ -229,10 +291,24 @@ def fetch_row_by_id(
     id_column: str,
     id_value: str,
 ) -> dict[str, str] | None:
+    """
+    Fetch a single row by ID using polars for query, return as dict
+    
+    Args:
+        credentials: Google OAuth credentials
+        spreadsheet_id_or_url: Sheet ID or full URL
+        worksheet_name: Optional worksheet name
+        id_column: Column name containing ID
+        id_value: ID value to search for
+    
+    Returns:
+        Dict of column_name: value, or None if not found
+    """
     spreadsheet_id = parse_spreadsheet_id(spreadsheet_id_or_url)
     search_value = id_value.strip()
     if not search_value:
         raise GoogleSheetsError("ID 值不能为空")
+    
     try:
         client = open_gspread_client(credentials)
         spreadsheet = client.open_by_key(spreadsheet_id)
@@ -243,22 +319,34 @@ def fetch_row_by_id(
         if "403" in message or "permission" in message.lower():
             raise GoogleSheetsError("无权限访问该 Spreadsheet") from exc
         raise GoogleSheetsError(f"连接失败: {message}") from exc
+    
     worksheet = _resolve_worksheet(spreadsheet, worksheet_name)
     values = worksheet.get_all_values()
+    
     if not values:
         return None
+    
     header = values[0]
+    rows = values[1:]
+    
+    if not rows:
+        return None
+    
+    # Use polars for efficient filtering
+    df = pl.DataFrame(rows, schema=header, orient="row")
+    
     id_col = id_column.strip()
-    try:
-        id_index = header.index(id_col)
-    except ValueError as exc:
+    if id_col not in df.columns:
         raise GoogleSheetsError(
             f"未找到 ID 列「{id_col}」",
-            [f"可用列: {', '.join(header)}"],
-        ) from exc
-    for row in values[1:]:
-        if id_index >= len(row):
-            continue
-        if row[id_index].strip() == search_value:
-            return {header[idx]: row[idx] if idx < len(row) else "" for idx in range(len(header))}
-    return None
+            [f"可用列: {', '.join(df.columns)}"],
+        )
+    
+    # Filter by ID value
+    result = df.filter(pl.col(id_col).str.strip_chars() == search_value)
+    
+    if result.height == 0:
+        return None
+    
+    # Return first matching row as dict
+    return result.row(0, named=True)
