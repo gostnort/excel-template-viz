@@ -13,7 +13,7 @@ from app.services.excel_parser import list_sheet_names, read_template_sheet
 from app.services.section_detector import (
     detect_multi_areas, parse_sections_from_yaml, SectionConfig
 )
-from app.services.paste_parse_config import load_paste_parse_config
+from app.services.paste_parse_config import load_paste_parse_config, DEFAULT_FIELDS_PER_ROW
 from app.services.google_sheets import fetch_row_by_id, fetch_all_rows, GoogleSheetsError
 from app.services.phi4_field_matcher import create_field_matcher
 from app.services.import_history import (
@@ -24,7 +24,14 @@ from app.services.import_history import (
 logger = logging.getLogger(__name__)
 
 MAX_FORM_FIELDS = 40
-COLS_PER_ROW = 11
+
+
+def get_fields_per_row(template_id: str) -> int:
+    """Load fields-per-row layout from paste config (default 7)."""
+    paste_config = load_paste_parse_config(template_id)
+    if paste_config is None:
+        return DEFAULT_FIELDS_PER_ROW
+    return paste_config.fields_per_row
 
 
 def resolve_default_sheet_name(
@@ -321,13 +328,18 @@ def build_form_tab(
 
             form_field_boxes: list[gr.Textbox] = []
             with gr.Column() as fields_container:
-                for index in range(MAX_FORM_FIELDS):
-                    field_box = gr.Textbox(
-                        label=f"字段 {index + 1}",
-                        visible=False,
-                        interactive=True,
-                    )
-                    form_field_boxes.append(field_box)
+                for row_start in range(0, MAX_FORM_FIELDS, DEFAULT_FIELDS_PER_ROW):
+                    with gr.Row():
+                        row_end = min(row_start + DEFAULT_FIELDS_PER_ROW, MAX_FORM_FIELDS)
+                        for index in range(row_start, row_end):
+                            field_box = gr.Textbox(
+                                label=f"字段 {index + 1}",
+                                visible=False,
+                                interactive=True,
+                                scale=1,
+                                min_width=100,
+                            )
+                            form_field_boxes.append(field_box)
 
             components["form_field_boxes"] = form_field_boxes
             components["fields_container"] = fields_container

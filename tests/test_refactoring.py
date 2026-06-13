@@ -41,6 +41,7 @@ def test_paste_config_to_dict():
     assert "sections" in result, "Sections should be in result"
     assert result["determiner"] == "tab", "Determiner should be preserved"
     assert result["sections"][0]["move_to"] == "down", "Sections should be preserved"
+    assert result["fields_per_row"] == 7, "fields_per_row should default to 7"
     
     print("[PASS] PasteParseConfig.to_dict() works correctly")
     return True
@@ -378,6 +379,64 @@ def test_yaml_auto_generation_from_sections():
     return True
 
 
+def test_fields_per_row_config():
+    """Test fields_per_row YAML round-trip and defaults."""
+    print("\n=== Test 8: fields_per_row Config ===")
+
+    from app.services.paste_parse_config import (
+        DEFAULT_FIELDS_PER_ROW,
+        config_from_dict,
+        config_to_yaml,
+        load_paste_parse_config,
+        paste_config_path,
+    )
+    from app.components.gradio_template_form import get_fields_per_row
+
+    config_without_key = {
+        "determiner": "tab",
+        "Name": [{"filed": "name", "index": 0}],
+    }
+    parsed = config_from_dict(config_without_key)
+    assert parsed is not None
+    assert parsed.fields_per_row == DEFAULT_FIELDS_PER_ROW == 7
+
+    config_with_custom = dict(config_without_key)
+    config_with_custom["fields_per_row"] = 5
+    parsed_custom = config_from_dict(config_with_custom)
+    assert parsed_custom is not None
+    assert parsed_custom.fields_per_row == 5
+
+    yaml_output = config_to_yaml(config_without_key)
+    assert "fields_per_row: 7" in yaml_output
+
+    reloaded = config_from_dict(
+        __import__("yaml").safe_load(yaml_output)
+    )
+    assert reloaded is not None
+    assert reloaded.fields_per_row == 7
+
+    template_id = "test_fields_per_row"
+    template_dir = Path("templates") / template_id
+    template_dir.mkdir(parents=True, exist_ok=True)
+    config_path = paste_config_path(template_id)
+    config_path.write_text(
+        'determiner: "tab"\nfields_per_row: 5\nName:\n  - filed: "name"\n    index: 0\n',
+        encoding="utf-8",
+    )
+    loaded = load_paste_parse_config(template_id)
+    assert loaded is not None
+    assert loaded.fields_per_row == 5
+    assert get_fields_per_row(template_id) == 5
+
+    config_path.unlink(missing_ok=True)
+    template_dir.rmdir()
+
+    assert get_fields_per_row("nonexistent_template_xyz") == DEFAULT_FIELDS_PER_ROW
+
+    print("[PASS] fields_per_row config round-trip and defaults work correctly")
+    return True
+
+
 def run_all_tests():
     """Run all tests"""
     print("=" * 60)
@@ -393,6 +452,7 @@ def run_all_tests():
         ("Form Field Loading Helpers", test_form_field_loading_helpers),
         ("Refresh Data Entry Form", test_refresh_data_entry_form_uses_configured_area),
         ("YAML Auto-Generation from Sections", test_yaml_auto_generation_from_sections),
+        ("fields_per_row Config", test_fields_per_row_config),
     ]
     
     passed = 0

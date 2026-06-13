@@ -8,7 +8,8 @@ import yaml
 from app.services.registry import TEMPLATES_DIR
 
 PASTE_CONFIG_SUFFIX = ".paste.yaml"
-RESERVED_TOP_KEYS = frozenset({"determiner", "order", "worksheet", "sections"})
+DEFAULT_FIELDS_PER_ROW = 7
+RESERVED_TOP_KEYS = frozenset({"determiner", "order", "worksheet", "sections", "fields_per_row"})
 
 
 @dataclass
@@ -26,6 +27,7 @@ class PasteParseConfig:
     order: list[dict[str, Any]] | None = None
     worksheet: str | None = None
     sections: list[dict[str, Any]] | None = None  # Section configurations for multi-area detection
+    fields_per_row: int = DEFAULT_FIELDS_PER_ROW
     
     def to_dict(self) -> dict[str, Any]:
         """
@@ -57,6 +59,7 @@ class PasteParseConfig:
             result["sections"] = self.sections
         
         result["determiner"] = self.determiner
+        result["fields_per_row"] = self.fields_per_row
         
         return result
 
@@ -127,13 +130,18 @@ def config_from_dict(raw: dict[str, Any]) -> PasteParseConfig | None:
     sections = raw.get("sections")
     if sections is not None and not isinstance(sections, list):
         sections = None
+
+    fields_per_row = raw.get("fields_per_row", DEFAULT_FIELDS_PER_ROW)
+    if not isinstance(fields_per_row, int) or fields_per_row < 1:
+        fields_per_row = DEFAULT_FIELDS_PER_ROW
     
     return PasteParseConfig(
         determiner=_normalize_determiner(str(raw.get("determiner", "tab"))),
         field_rules=field_rules,
         order=order,
         worksheet=worksheet,
-        sections=sections
+        sections=sections,
+        fields_per_row=fields_per_row,
     )
 
 
@@ -225,6 +233,10 @@ def _normalize_field_rule_lists(raw: dict[str, Any]) -> dict[str, Any]:
 def config_to_yaml(config: dict[str, Any]) -> str:
     config = _normalize_field_rule_lists(config)
     lines: list[str] = [f'determiner: {_yaml_scalar(str(config.get("determiner", "tab")))}']
+    fields_per_row = config.get("fields_per_row", DEFAULT_FIELDS_PER_ROW)
+    if not isinstance(fields_per_row, int) or fields_per_row < 1:
+        fields_per_row = DEFAULT_FIELDS_PER_ROW
+    lines.append(f"fields_per_row: {fields_per_row}")
     worksheet = config.get("worksheet")
     if worksheet is not None:
         lines.append(f'worksheet: {_yaml_scalar(str(worksheet))}')
@@ -245,7 +257,7 @@ def config_to_yaml(config: dict[str, Any]) -> str:
                 lines.append("    offset: " + str(section.get("offset", 0)))
     
     for key, value in config.items():
-        if key in RESERVED_TOP_KEYS or key == "determiner":
+        if key in RESERVED_TOP_KEYS or key == "determiner" or key == "fields_per_row":
             continue
         if not isinstance(value, list):
             continue
@@ -617,7 +629,8 @@ def create_default_config_from_template(template_path: Path, worksheet_name: str
             field_rules=field_rules,
             order=None,
             worksheet=ws.title if ws.title else None,
-            sections=sections
+            sections=sections,
+            fields_per_row=DEFAULT_FIELDS_PER_ROW,
         )
         
     except Exception as e:
