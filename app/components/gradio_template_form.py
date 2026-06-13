@@ -5,16 +5,19 @@ Handles dynamic form rendering, area selection, ID lookup, and bulk import.
 """
 import gradio as gr
 import logging
+import polars as pl
 from pathlib import Path
 from typing import Any
 
 from app.services.registry import TemplateConfig
 from app.services.excel_parser import list_sheet_names, read_template_sheet
-from app.services.section_detector import (
-    detect_multi_areas, parse_sections_from_yaml, SectionConfig
-)
 from app.services.paste_parse_config import load_paste_parse_config, DEFAULT_FIELDS_PER_ROW
-from app.services.google_sheets import fetch_row_by_id, fetch_all_rows, GoogleSheetsError
+from app.services.google_sheets import (
+    fetch_all_rows,
+    GoogleSheetsError,
+    invalidate_sheet_cache,
+    lookup_row_by_id,
+)
 from app.services.phi4_field_matcher import create_field_matcher
 from app.services.import_history import (
     load_import_history, mark_as_processed, mark_as_trash, 
@@ -24,6 +27,8 @@ from app.services.import_history import (
 logger = logging.getLogger(__name__)
 
 MAX_FORM_FIELDS = 40
+MAX_IMPORT_PREVIEW_ROWS = 1000
+HIDE_PROGRESS = {"show_progress": "hidden"}
 
 
 def _get_template_id(template: TemplateConfig | dict[str, Any] | None) -> str | None:
@@ -311,21 +316,6 @@ def refresh_data_entry_form(
     active_area_range: str | None = None
 
     if paste_config and paste_config.sections:
-        sections = parse_sections_from_yaml({"sections": paste_config.sections})
-        if sections:
-            try:
-                detected_areas = detect_multi_areas(
-                    Path(template.file_path),
-                    sheet_name,
-                    sections[0],
-                )
-            except Exception as exc:
-                logger.error(f"Area detection failed: {exc}")
-                gr.Warning(f"区域检测失败：{exc}")
-
-    if detected_areas:
-        active_area_range = detected_areas[0].area
-    elif paste_config and paste_config.sections:
         section = paste_config.sections[0]
         active_area_range = str(section.get("input_area", "")).strip() or None
 
@@ -384,6 +374,59 @@ def update_import_stats(template: TemplateConfig | dict[str, Any] | None) -> str
     except Exception as e:
         logger.error(f"Failed to get import stats: {e}")
         return "📊 导入统计：加载失败"
+
+
+def _begin_bulk_refresh() -> tuple[Any, str]:
+    """Fast UI feedback before a Google Sheet fetch."""
+    return (
+        gr.update(interactive=False),
+        "📊 **导入统计** | 正在从 Google Sheet 加载数据...",
+    )
+
+
+def _preview_columns(df: pl.DataFrame, id_column: str, limit: int = 3) -> list[str]:
+    return [column for column in df.columns if column != id_column][:limit]
+
+
+def _build_import_preview_rows(
+    df: pl.DataFrame,
+    id_column: str,
+    include_ids: set[str] | None,
+    exclude_ids: set[str] | None,
+    status_label: str,
+    max_rows: int,
+) -> list[list[Any]]:
+    if df.height == 0 or id_column not in df.columns:
+        return []
+
+    id_expr = pl.col(id_column).cast(pl.Utf8).str.strip_chars()
+    filtered = df
+    if include_ids is not None:
+        filtered = filtered.filter(id_expr.is_in(list(include_ids)))
+    if exclude_ids:
+        filtered = filtered.filter(~id_expr.is_in(list(exclude_ids)))
+
+    preview_cols = _preview_columns(df, id_column)
+    rows: list[list[Any]] = []
+    for record in filtered.head(max_rows).iter_rows(named=True):
+        id_val = str(record.get(id_column, ""))
+        preview_vals = [str(record.get(column, "")) for column in preview_cols]
+        rows.append([False, id_val, status_label, " | ".join(preview_vals)])
+    return rows
+
+
+def _load_template_sheet_df(
+    credentials: Any,
+    data_source: Any,
+    *,
+    force_refresh: bool = False,
+) -> pl.DataFrame:
+    return fetch_all_rows(
+        credentials,
+        data_source.sheet_url,
+        data_source.worksheet_name,
+        force_refresh=force_refresh,
+    )
 
 
 def _find_id_field_key(template_id: str) -> str | None:
@@ -533,7 +576,8 @@ def build_form_tab(
     current_template.change(
         fn=update_import_stats,
         inputs=[current_template],
-        outputs=[import_stats]
+        outputs=[import_stats],
+        **HIDE_PROGRESS,
     )
     
     form_refresh_outputs = [
@@ -550,41 +594,51 @@ def build_form_tab(
         fn=refresh_data_entry_form,
         inputs=[current_template, sheet_selector, form_data_state],
         outputs=form_refresh_outputs,
+        **HIDE_PROGRESS,
     )
     
-    # Refresh button for bulk import
+    # Refresh button for bulk import: fast UI feedback, then sheet fetch
     refresh_btn.click(
+        fn=_begin_bulk_refresh,
+        outputs=[refresh_btn, import_stats],
+        **HIDE_PROGRESS,
+    ).then(
         fn=handle_refresh_unrecorded,
         inputs=[current_template, credentials_state, form_data_state],
-        outputs=[import_preview, import_btn, mark_trash_btn, clear_history_btn, refresh_btn, import_stats]
+        outputs=[import_preview, import_btn, mark_trash_btn, clear_history_btn, refresh_btn, import_stats],
+        **HIDE_PROGRESS,
     )
     
     # Show processed data
     show_processed_btn.click(
         fn=handle_show_processed,
         inputs=[current_template, credentials_state],
-        outputs=[import_preview, import_btn, mark_trash_btn, clear_history_btn]
+        outputs=[import_preview, import_btn, mark_trash_btn, clear_history_btn],
+        **HIDE_PROGRESS,
     )
     
     # Show trash data
     show_trash_btn.click(
         fn=handle_show_trash,
         inputs=[current_template, credentials_state],
-        outputs=[import_preview, import_btn, mark_trash_btn, clear_history_btn]
+        outputs=[import_preview, import_btn, mark_trash_btn, clear_history_btn],
+        **HIDE_PROGRESS,
     )
     
     # Import selected rows
     import_btn.click(
         fn=handle_import_selected,
         inputs=[import_preview, current_template, form_data_state, credentials_state, detected_areas_state],
-        outputs=[form_data_state, row_selector, import_preview, import_btn, mark_trash_btn, import_stats]
+        outputs=[form_data_state, row_selector, import_preview, import_btn, mark_trash_btn, import_stats],
+        **HIDE_PROGRESS,
     )
     
     # Mark as trash
     mark_trash_btn.click(
         fn=handle_mark_trash,
         inputs=[import_preview, current_template],
-        outputs=[import_preview, mark_trash_btn, import_stats]
+        outputs=[import_preview, mark_trash_btn, import_stats],
+        **HIDE_PROGRESS,
     )
     
     # Clear history
@@ -609,7 +663,7 @@ def build_form_tab(
 def handle_refresh_unrecorded(
     template: TemplateConfig | None,
     credentials: Any,
-    form_data: list[dict[str, str]]
+    form_data: list[dict[str, str]],
 ) -> tuple:
     """
     Refresh unrecorded data from Google Sheet
@@ -618,8 +672,6 @@ def handle_refresh_unrecorded(
     Returns:
         (import_preview, import_btn, mark_trash_btn, clear_history_btn, refresh_btn, import_stats)
     """
-    MAX_ROWS = 1000  # Limit to prevent memory issues
-    
     if not template or not credentials:
         gr.Warning("请先配置数据源并连接 Google 账号")
         return (
@@ -632,7 +684,6 @@ def handle_refresh_unrecorded(
         )
     
     try:
-        # Load data source config and import history
         from app.services.data_source import load_template_data_source
         
         data_source = load_template_data_source(template.id)
@@ -647,17 +698,12 @@ def handle_refresh_unrecorded(
                 update_import_stats(template)
             )
         
-        # Load import history
         history = load_import_history(template.id)
-        
-        # Fetch all rows from sheet
+        exclude_ids = history.processed_ids | history.trash_ids
+
         logger.info(f"Fetching all rows from sheet: {data_source.worksheet_name}")
-        
-        df = fetch_all_rows(
-            credentials,
-            data_source.sheet_url,
-            data_source.worksheet_name
-        )
+        invalidate_sheet_cache(data_source.sheet_url, data_source.worksheet_name)
+        df = _load_template_sheet_df(credentials, data_source, force_refresh=True)
         
         if df.height == 0:
             gr.Info("Sheet 中没有数据")
@@ -670,30 +716,19 @@ def handle_refresh_unrecorded(
                 update_import_stats(template)
             )
         
-        # Check for large data and warn user
-        if df.height > MAX_ROWS:
-            gr.Warning(f"数据量过大（{df.height} 行），仅显示前 {MAX_ROWS} 行未录入数据")
-        
-        # Filter unrecorded rows (exclude processed and trash)
-        unrecorded_rows = []
-        for i in range(min(df.height, MAX_ROWS * 2)):
-            if len(unrecorded_rows) >= MAX_ROWS:
-                break
-                
-            row = df.row(i, named=True)
-            id_val = str(row.get(data_source.id_column, ""))
-            
-            # Skip if processed or trash
-            if id_val in history.processed_ids:
-                continue
-            if id_val in history.trash_ids:
-                continue
-            
-            # Get preview of values
-            preview_vals = [str(v) for k, v in list(row.items())[:3]]
-            preview_str = " | ".join(preview_vals)
-            
-            unrecorded_rows.append([False, id_val, "新数据", preview_str])
+        if df.height > MAX_IMPORT_PREVIEW_ROWS:
+            gr.Warning(
+                f"数据量过大（{df.height} 行），仅显示前 {MAX_IMPORT_PREVIEW_ROWS} 行未录入数据"
+            )
+
+        unrecorded_rows = _build_import_preview_rows(
+            df,
+            data_source.id_column,
+            include_ids=None,
+            exclude_ids=exclude_ids,
+            status_label="新数据",
+            max_rows=MAX_IMPORT_PREVIEW_ROWS,
+        )
         
         if not unrecorded_rows:
             gr.Info("所有数据均已处理或标记")
@@ -707,16 +742,16 @@ def handle_refresh_unrecorded(
             )
         
         info_msg = f"找到 {len(unrecorded_rows)} 行未处理数据"
-        if len(unrecorded_rows) >= MAX_ROWS:
-            info_msg += f"（已达到显示上限 {MAX_ROWS} 行）"
+        if len(unrecorded_rows) >= MAX_IMPORT_PREVIEW_ROWS:
+            info_msg += f"（已达到显示上限 {MAX_IMPORT_PREVIEW_ROWS} 行）"
         gr.Info(info_msg)
         
         return (
             gr.update(value=unrecorded_rows, visible=True),
-            gr.update(visible=True),  # import_btn
-            gr.update(visible=True),  # mark_trash_btn
-            gr.update(visible=True),  # clear_history_btn
-            gr.update(interactive=True),  # refresh_btn
+            gr.update(visible=True),
+            gr.update(visible=True),
+            gr.update(visible=True),
+            gr.update(interactive=True),
             update_import_stats(template)
         )
         
@@ -785,7 +820,6 @@ def handle_import_selected(
         
         # Load data source config and paste config
         from app.services.data_source import load_template_data_source
-        from app.services.google_sheets import fetch_row_by_id
         
         data_source = load_template_data_source(template_id)
         if not data_source or not credentials:
@@ -826,6 +860,7 @@ def handle_import_selected(
                 update_import_stats(template)
             )
         
+        sheet_df = _load_template_sheet_df(credentials, data_source)
         imported_count = 0
         imported_ids = []
         
@@ -833,13 +868,10 @@ def handle_import_selected(
         for row in selected_rows:
             id_value = str(row[1])  # Second column is ID
             
-            # Fetch full row data from Sheet
-            sheet_row = fetch_row_by_id(
-                credentials,
-                data_source.sheet_url,
-                data_source.worksheet_name,
+            sheet_row = lookup_row_by_id(
+                sheet_df,
                 data_source.id_column,
-                id_value
+                id_value,
             )
             
             if not sheet_row:
@@ -919,18 +951,15 @@ def handle_show_processed(
             gr.Info("没有已处理的数据")
             return gr.update(), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
         
-        # Fetch processed rows
-        df = fetch_all_rows(credentials, data_source.sheet_url, data_source.worksheet_name)
-        
-        processed_rows = []
-        for i in range(df.height):
-            row = df.row(i, named=True)
-            id_val = str(row.get(data_source.id_column, ""))
-            
-            if id_val in history.processed_ids:
-                preview_vals = [str(v) for k, v in list(row.items())[:3]]
-                preview_str = " | ".join(preview_vals)
-                processed_rows.append([False, id_val, "已处理", preview_str])
+        df = _load_template_sheet_df(credentials, data_source)
+        processed_rows = _build_import_preview_rows(
+            df,
+            data_source.id_column,
+            include_ids=history.processed_ids,
+            exclude_ids=None,
+            status_label="已处理",
+            max_rows=MAX_IMPORT_PREVIEW_ROWS,
+        )
         
         gr.Info(f"找到 {len(processed_rows)} 行已处理数据")
         
@@ -974,18 +1003,15 @@ def handle_show_trash(
             gr.Info("没有垃圾数据")
             return gr.update(), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
         
-        # Fetch trash rows
-        df = fetch_all_rows(credentials, data_source.sheet_url, data_source.worksheet_name)
-        
-        trash_rows = []
-        for i in range(df.height):
-            row = df.row(i, named=True)
-            id_val = str(row.get(data_source.id_column, ""))
-            
-            if id_val in history.trash_ids:
-                preview_vals = [str(v) for k, v in list(row.items())[:3]]
-                preview_str = " | ".join(preview_vals)
-                trash_rows.append([False, id_val, "垃圾", preview_str])
+        df = _load_template_sheet_df(credentials, data_source)
+        trash_rows = _build_import_preview_rows(
+            df,
+            data_source.id_column,
+            include_ids=history.trash_ids,
+            exclude_ids=None,
+            status_label="垃圾",
+            max_rows=MAX_IMPORT_PREVIEW_ROWS,
+        )
         
         gr.Info(f"找到 {len(trash_rows)} 行垃圾数据")
         

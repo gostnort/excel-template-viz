@@ -1,5 +1,7 @@
 import json
+import logging
 import os
+import time
 from pathlib import Path
 
 import gspread
@@ -9,6 +11,11 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
 from app.services.excel_parser import parse_spreadsheet_id
+
+logger = logging.getLogger(__name__)
+
+_SHEET_CACHE: dict[tuple[str, str], tuple[pl.DataFrame, float]] = {}
+_SHEET_CACHE_TTL_SECONDS = 120.0
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 
@@ -207,10 +214,28 @@ def fetch_sheet_preview(
     return dataframe, meta
 
 
+def _sheet_cache_key(spreadsheet_id_or_url: str, worksheet_name: str | None) -> tuple[str, str]:
+    return (parse_spreadsheet_id(spreadsheet_id_or_url), worksheet_name or "")
+
+
+def invalidate_sheet_cache(
+    spreadsheet_id_or_url: str | None = None,
+    worksheet_name: str | None = None,
+) -> None:
+    """Drop cached sheet data. Omit args to clear the entire cache."""
+    if spreadsheet_id_or_url is None:
+        _SHEET_CACHE.clear()
+        return
+    _SHEET_CACHE.pop(_sheet_cache_key(spreadsheet_id_or_url, worksheet_name), None)
+
+
 def fetch_all_rows(
     credentials,
     spreadsheet_id_or_url: str,
-    worksheet_name: str | None
+    worksheet_name: str | None,
+    *,
+    use_cache: bool = True,
+    force_refresh: bool = False,
 ) -> pl.DataFrame:
     """
     Fetch all rows from Google Sheet using polars (for bulk import)
@@ -219,11 +244,21 @@ def fetch_all_rows(
         credentials: Google OAuth credentials
         spreadsheet_id_or_url: Sheet ID or full URL
         worksheet_name: Optional worksheet name (defaults to first sheet)
+        use_cache: Reuse a recent in-memory copy when available
+        force_refresh: Bypass cache and fetch from Google Sheets
     
     Returns:
         polars DataFrame with all rows
     """
-    spreadsheet_id = parse_spreadsheet_id(spreadsheet_id_or_url)
+    cache_key = _sheet_cache_key(spreadsheet_id_or_url, worksheet_name)
+    now = time.monotonic()
+    if use_cache and not force_refresh and cache_key in _SHEET_CACHE:
+        cached_df, cached_at = _SHEET_CACHE[cache_key]
+        if now - cached_at < _SHEET_CACHE_TTL_SECONDS:
+            logger.debug("Sheet cache hit: %s / %s", cache_key[0], cache_key[1] or "(default)")
+            return cached_df.clone()
+
+    spreadsheet_id = cache_key[0]
     try:
         client = open_gspread_client(credentials)
         spreadsheet = client.open_by_key(spreadsheet_id)
@@ -239,15 +274,18 @@ def fetch_all_rows(
     values = worksheet.get_all_values()
     
     if not values:
-        return pl.DataFrame()
-    
-    header = values[0]
-    rows = values[1:]
-    
-    if rows:
-        return pl.DataFrame(rows, schema=header, orient="row")
+        df = pl.DataFrame()
     else:
-        return pl.DataFrame({col: [] for col in header})
+        header = values[0]
+        rows = values[1:]
+        if rows:
+            df = pl.DataFrame(rows, schema=header, orient="row")
+        else:
+            df = pl.DataFrame({col: [] for col in header})
+
+    if use_cache:
+        _SHEET_CACHE[cache_key] = (df.clone(), now)
+    return df
 
 
 def list_worksheet_titles(credentials, spreadsheet_id_or_url: str) -> list[str]:
@@ -284,12 +322,38 @@ def _resolve_worksheet(spreadsheet, worksheet_name: str | None):
     return spreadsheet.sheet1
 
 
+def lookup_row_by_id(
+    df: pl.DataFrame,
+    id_column: str,
+    id_value: str,
+) -> dict[str, str] | None:
+    """Find a row in a preloaded sheet DataFrame by ID column value."""
+    search_value = id_value.strip()
+    if not search_value:
+        raise GoogleSheetsError("ID 值不能为空")
+
+    id_col = id_column.strip()
+    if id_col not in df.columns:
+        raise GoogleSheetsError(
+            f"未找到 ID 列「{id_col}」",
+            [f"可用列: {', '.join(df.columns)}"],
+        )
+
+    result = df.filter(pl.col(id_col).cast(pl.Utf8).str.strip_chars() == search_value)
+    if result.height == 0:
+        return None
+    return result.row(0, named=True)
+
+
 def fetch_row_by_id(
     credentials,
     spreadsheet_id_or_url: str,
     worksheet_name: str | None,
     id_column: str,
     id_value: str,
+    *,
+    use_cache: bool = True,
+    force_refresh: bool = False,
 ) -> dict[str, str] | None:
     """
     Fetch a single row by ID using polars for query, return as dict
@@ -300,56 +364,22 @@ def fetch_row_by_id(
         worksheet_name: Optional worksheet name
         id_column: Column name containing ID
         id_value: ID value to search for
+        use_cache: Reuse cached sheet data when available
+        force_refresh: Bypass cache and fetch from Google Sheets
     
     Returns:
         Dict of column_name: value, or None if not found
     """
-    spreadsheet_id = parse_spreadsheet_id(spreadsheet_id_or_url)
-    search_value = id_value.strip()
-    if not search_value:
-        raise GoogleSheetsError("ID 值不能为空")
-    
-    try:
-        client = open_gspread_client(credentials)
-        spreadsheet = client.open_by_key(spreadsheet_id)
-    except gspread.exceptions.SpreadsheetNotFound as exc:
-        raise GoogleSheetsError("找不到该 Spreadsheet（404）") from exc
-    except Exception as exc:
-        message = str(exc)
-        if "403" in message or "permission" in message.lower():
-            raise GoogleSheetsError("无权限访问该 Spreadsheet") from exc
-        raise GoogleSheetsError(f"连接失败: {message}") from exc
-    
-    worksheet = _resolve_worksheet(spreadsheet, worksheet_name)
-    values = worksheet.get_all_values()
-    
-    if not values:
+    df = fetch_all_rows(
+        credentials,
+        spreadsheet_id_or_url,
+        worksheet_name,
+        use_cache=use_cache,
+        force_refresh=force_refresh,
+    )
+    if df.height == 0:
         return None
-    
-    header = values[0]
-    rows = values[1:]
-    
-    if not rows:
-        return None
-    
-    # Use polars for efficient filtering
-    df = pl.DataFrame(rows, schema=header, orient="row")
-    
-    id_col = id_column.strip()
-    if id_col not in df.columns:
-        raise GoogleSheetsError(
-            f"未找到 ID 列「{id_col}」",
-            [f"可用列: {', '.join(df.columns)}"],
-        )
-    
-    # Filter by ID value
-    result = df.filter(pl.col(id_col).str.strip_chars() == search_value)
-    
-    if result.height == 0:
-        return None
-    
-    # Return first matching row as dict
-    return result.row(0, named=True)
+    return lookup_row_by_id(df, id_column, id_value)
 
 
 # Convenience aliases for Gradio UI

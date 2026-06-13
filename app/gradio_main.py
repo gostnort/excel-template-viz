@@ -244,6 +244,11 @@ def build_app() -> gr.Blocks:
             min-width: fit-content !important;
             margin: 0 !important;
         }
+        
+        /* Suppress Gradio default full-screen status tracker overlay */
+        [data-testid="status-tracker"] {
+            display: none !important;
+        }
         """
     ) as app:
         # Global state management
@@ -353,6 +358,7 @@ def build_app() -> gr.Blocks:
                 form_data_state,
             ],
             outputs=form_components["form_refresh_outputs"],
+            show_progress="hidden",
         )
 
         from app.components.gradio_config import handle_sections_save, handle_yaml_load
@@ -381,6 +387,7 @@ def build_app() -> gr.Blocks:
                 form_data_state,
             ],
             outputs=form_components["form_refresh_outputs"],
+            show_progress="hidden",
         )
         
         # Cross-tab event: Update LLM test columns when worksheet changes
