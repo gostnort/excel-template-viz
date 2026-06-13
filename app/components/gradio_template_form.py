@@ -303,10 +303,10 @@ def update_import_stats(template: TemplateConfig | None) -> str:
     try:
         stats = get_import_stats(template.id)
         
-        last_import = stats.get("last_import", "从未")
+        last_import = stats.get("last_import") or "从未"
         if last_import != "从未":
             from datetime import datetime
-            dt = datetime.fromisoformat(last_import)
+            dt = datetime.fromisoformat(str(last_import))
             last_import = dt.strftime("%Y-%m-%d %H:%M")
         
         return (
@@ -413,9 +413,9 @@ def build_form_tab(
         components["export_btn"] = export_btn
         components["print_btn"] = print_btn
         
-        # Bulk import section
-        with gr.Accordion("批量导入", open=False) as bulk_import_accordion:
-            # Import history stats
+        # Bulk import section (always visible)
+        with gr.Group():
+            gr.Markdown("## 批量导入")
             with gr.Row():
                 import_stats = gr.Markdown("📊 导入统计：加载中...")
             
