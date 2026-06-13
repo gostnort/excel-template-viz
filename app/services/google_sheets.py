@@ -350,3 +350,14 @@ def fetch_row_by_id(
     
     # Return first matching row as dict
     return result.row(0, named=True)
+
+
+# Convenience aliases for Gradio UI
+def authenticate_google_sheets_desktop():
+    """Alias for run_oauth_flow() - for Gradio UI"""
+    return run_oauth_flow()
+
+
+def list_worksheets(credentials, spreadsheet_id_or_url: str) -> list[str]:
+    """Alias for list_worksheet_titles() - for Gradio UI"""
+    return list_worksheet_titles(credentials, spreadsheet_id_or_url)
