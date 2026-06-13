@@ -215,13 +215,20 @@ def handle_yaml_load(
         return "", "❌ 请先选择模板"
     
     try:
+        # Ensure config exists (create default if not)
+        from pathlib import Path
+        from app.services.paste_parse_config import ensure_config_exists
+        
+        template_path = Path(template.file_path)
+        ensure_config_exists(template.id, template_path)
+        
         paste_config = load_paste_parse_config(template.id)
         
         if not paste_config:
             return "", f"❌ 未找到模板 '{template.id}' 的配置文件"
         
         # Convert config to YAML string
-        yaml_str = config_to_yaml(paste_config)
+        yaml_str = config_to_yaml(paste_config.to_dict())
         
         return yaml_str, f"✓ 已加载配置文件（{len(yaml_str.split(chr(10)))} 行）"
         
@@ -437,6 +444,13 @@ def handle_sections_save(
         return "❌ 请输入区域范围"
     
     try:
+        # Ensure config exists (create default if not)
+        from pathlib import Path
+        from app.services.paste_parse_config import ensure_config_exists
+        
+        template_path = Path(template.file_path)
+        ensure_config_exists(template.id, template_path)
+        
         # Load existing config
         paste_config = load_paste_parse_config(template.id)
         
@@ -455,7 +469,7 @@ def handle_sections_save(
         
         # Save to file
         config_path = Path(f"templates/{template.id}/{template.id}.paste.yaml")
-        yaml_str = config_to_yaml(paste_config)
+        yaml_str = config_to_yaml(paste_config.to_dict())
         
         with open(config_path, 'w', encoding='utf-8') as f:
             f.write(yaml_str)

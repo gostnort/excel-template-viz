@@ -521,3 +521,142 @@ def parse_text_with_config(
         rows.append(parse_line_with_config(line, config, order, reference_year))
         order += 1
     return rows
+
+
+def create_default_config_from_template(template_path: Path, worksheet_name: str | None = None) -> PasteParseConfig:
+    """
+    Create default configuration from Excel template
+    
+    Reads the first row of the template as field names and creates a basic configuration
+    with default field mappings and sections (if applicable).
+    
+    Args:
+        template_path: Path to the Excel template file
+        worksheet_name: Optional worksheet name (uses first sheet if None)
+        
+    Returns:
+        PasteParseConfig with default settings
+        
+    Raises:
+        ValueError: If template cannot be read or has no data
+    """
+    from openpyxl import load_workbook
+    
+    try:
+        wb = load_workbook(template_path, read_only=True, data_only=True)
+        
+        # Select worksheet
+        if worksheet_name and worksheet_name in wb.sheetnames:
+            ws = wb[worksheet_name]
+        else:
+            ws = wb.active
+        
+        if ws is None:
+            raise ValueError("No worksheet found in template")
+        
+        # Read first row as field names
+        first_row = []
+        last_col_with_data = 0
+        
+        for col_idx, cell in enumerate(ws[1], start=1):
+            value = cell.value
+            if value is not None and str(value).strip():
+                first_row.append(str(value).strip())
+                last_col_with_data = col_idx
+            elif last_col_with_data > 0:
+                # Keep empty columns between filled columns
+                first_row.append("")
+        
+        if not first_row:
+            raise ValueError("Template first row has no field names")
+        
+        # Remove trailing empty columns
+        first_row = first_row[:last_col_with_data]
+        
+        # Create field rules (filed = field name itself)
+        field_rules: dict[str, list[PasteParseRule]] = {}
+        
+        for field_name in first_row:
+            if not field_name:  # Skip empty columns
+                continue
+            
+            # Create simple rule: filed = field name
+            rule = PasteParseRule(
+                filed=field_name,
+                index=0,  # Will be set dynamically
+                regex=None,
+                id_flag=False
+            )
+            
+            field_rules[field_name] = [rule]
+        
+        # Create sections configuration if there are multiple columns
+        sections = None
+        if len(first_row) > 1:
+            # Detect data area from row 2, column 1 to last column with data
+            from openpyxl.utils import get_column_letter
+            
+            start_col = get_column_letter(1)
+            end_col = get_column_letter(last_col_with_data)
+            
+            sections = [{
+                "input_area": f"{start_col}2:{end_col}2",  # Second row as input area
+                "move_to": "down",  # Move down by default
+                "offset": 1  # Offset by 1 row
+            }]
+        
+        wb.close()
+        
+        return PasteParseConfig(
+            determiner="tab",
+            field_rules=field_rules,
+            order=None,
+            worksheet=ws.title if ws.title else None,
+            sections=sections
+        )
+        
+    except Exception as e:
+        raise ValueError(f"Failed to create default config from template: {e}") from e
+
+
+def ensure_config_exists(template_id: str, template_path: Path) -> bool:
+    """
+    Ensure a configuration file exists for the template
+    
+    Creates a default configuration if none exists.
+    
+    Args:
+        template_id: Template identifier
+        template_path: Path to the Excel template file
+        
+    Returns:
+        True if config exists or was created successfully
+    """
+    config_path = paste_config_path(template_id)
+    
+    # If config already exists, nothing to do
+    if config_path.exists():
+        return True
+    
+    try:
+        # Create default config from template
+        default_config = create_default_config_from_template(template_path)
+        
+        # Convert to YAML and save
+        config_dict = default_config.to_dict()
+        yaml_text = config_to_yaml(config_dict)
+        
+        # Ensure directory exists
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Save config
+        config_path.write_text(yaml_text, encoding='utf-8')
+        
+        return True
+    except Exception as e:
+        # Log error but don't fail
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to create default config for {template_id}: {e}")
+        return False
+
