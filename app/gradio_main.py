@@ -110,7 +110,10 @@ def build_app() -> gr.Blocks:
         /* 输入框默认样式：无背景，只有底部边框 */
         .wrap.svelte-1w1j06g,
         input.svelte-1w1j06g,
-        textarea.svelte-1w1j06g {
+        textarea.svelte-1w1j06g,
+        textarea.svelte-1hguek3,
+        input[type="text"],
+        textarea {
             background: transparent !important;
             border: none !important;
             border-bottom: 1px solid #d1d5db !important;
@@ -133,6 +136,9 @@ def build_app() -> gr.Blocks:
         .wrap.svelte-1w1j06g:focus-within,
         input.svelte-1w1j06g:focus,
         textarea.svelte-1w1j06g:focus,
+        textarea.svelte-1hguek3:focus,
+        input[type="text"]:focus,
+        textarea:focus,
         select:focus {
             border-bottom: 2px solid #4f46e5 !important;
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.15), 
