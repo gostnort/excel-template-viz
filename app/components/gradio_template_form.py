@@ -405,6 +405,14 @@ def build_form_tab(
         
         components["form_container"] = form_container
         
+        # Action buttons
+        with gr.Row():
+            export_btn = gr.Button("导出 Excel", variant="primary")
+            print_btn = gr.Button("打印预览")
+        
+        components["export_btn"] = export_btn
+        components["print_btn"] = print_btn
+        
         # Bulk import section
         with gr.Accordion("批量导入", open=False) as bulk_import_accordion:
             # Import history stats
@@ -452,14 +460,6 @@ def build_form_tab(
         components["import_btn"] = import_btn
         components["mark_trash_btn"] = mark_trash_btn
         components["clear_history_btn"] = clear_history_btn
-        
-        # Action buttons
-        with gr.Row():
-            export_btn = gr.Button("导出 Excel", variant="primary")
-            print_btn = gr.Button("打印预览")
-        
-        components["export_btn"] = export_btn
-        components["print_btn"] = print_btn
     
     # Event bindings
     
