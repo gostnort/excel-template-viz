@@ -85,15 +85,6 @@ if errorlevel 1 (
 )
 
 echo.
-echo Downloading Phi-4 GGUF model (auto quantization)...
-python scripts\download_phi4_model.py --auto
-if errorlevel 1 (
-    echo WARNING: Model download failed
-    echo You can try downloading manually later with:
-    echo   python scripts\download_phi4_model.py --auto
-)
-
-echo.
 echo ========================================
 echo Installation completed successfully!
 echo ========================================
