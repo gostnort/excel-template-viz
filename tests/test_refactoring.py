@@ -221,9 +221,9 @@ def test_form_field_loading_helpers():
 
     headers = get_form_field_headers("Ginger_Lots")
     assert headers, "Ginger_Lots paste config should expose field headers"
-    assert headers[0] == "order", "order should be the first form field"
+    assert headers[0] == "YY", "first mapped template field should lead headers"
     assert "P.O. No." in headers, "Expected template field in headers"
-    assert len(headers) == 12, "Ginger_Lots should expose all 12 template columns"
+    assert len(headers) == 11, "Ginger_Lots should expose 11 template columns (order pseudo skipped)"
     print("[PASS] get_form_field_headers() loads configured fields")
 
     template = TemplateConfig(
@@ -314,26 +314,26 @@ def test_refresh_data_entry_form_uses_configured_area():
 
     status_update = result[4]
     assert status_update.get("visible") is True
-    assert "12" in str(status_update.get("value", ""))
+    assert "11" in str(status_update.get("value", ""))
 
     fields_container_update = result[5]
     assert fields_container_update.get("visible") is True
 
     row_updates = result[6:6 + FORM_ROW_COUNT]
     visible_rows = sum(1 for update in row_updates if update.get("visible") is True)
-    assert visible_rows == 2, "12 fields at 7/row should show 2 rows"
+    assert visible_rows == 2, "11 fields at 7/row should show 2 rows"
 
     field_updates = result[6 + FORM_ROW_COUNT:]
     visible_fields = sum(1 for update in field_updates if update.get("visible") is True)
-    assert visible_fields == 12
+    assert visible_fields == 11
     assert len(field_updates) == MAX_FORM_FIELDS
 
     form_data = result[2]
     assert len(form_data) == 1
-    assert form_data[0].get("order") == "24"
-    assert form_data[0].get("YY") == "06"
-    assert form_data[0].get("MM") == "13"
-    assert form_data[0].get("DD") == "PO-001"
+    assert form_data[0].get("YY") == "24"
+    assert form_data[0].get("MM") == "06"
+    assert form_data[0].get("DD") == "13"
+    assert form_data[0].get("P.O. No.") == "PO-001"
 
     try:
         temp_path.unlink(missing_ok=True)
@@ -550,6 +550,128 @@ def test_fields_per_row_config():
     return True
 
 
+def test_unmapped_field_defaults():
+    """Test unmapped filed/index defaults and regex None normalization."""
+    print("\n=== Test 9: Unmapped Field Defaults ===")
+
+    from app.services.paste_parse_config import (
+        UNMAPPED_FILED,
+        UNMAPPED_INDEX,
+        PasteParseRule,
+        _default_unmapped_rule,
+        _parse_rules,
+        _rule_to_dict,
+        build_empty_mapping_yaml,
+        config_from_dict,
+    )
+
+    assert UNMAPPED_FILED == "?"
+    assert UNMAPPED_INDEX == -1
+
+    rule_dict = _rule_to_dict(_default_unmapped_rule())
+    assert rule_dict["filed"] == "?"
+    assert rule_dict["index"] == -1
+    assert rule_dict["regex"] == "None"
+    assert rule_dict["ID"] is False
+
+    parsed_rules = _parse_rules([{"filed": "?", "index": -1, "regex": "None", "ID": False}])
+    assert len(parsed_rules) == 1
+    assert parsed_rules[0].regex is None
+
+    yaml_text = build_empty_mapping_yaml(["YY", "MM"])
+    assert 'filed: "?"' in yaml_text
+    assert "index: -1" in yaml_text
+    loaded = config_from_dict(__import__("yaml").safe_load(yaml_text))
+    assert loaded is not None
+    assert loaded.field_rules["YY"][0].filed == "?"
+    assert loaded.field_rules["YY"][0].index == -1
+
+    mapped = _rule_to_dict(PasteParseRule(filed="Name", index=0, regex=None, id_flag=False))
+    assert mapped["filed"] == "Name"
+    assert mapped["index"] == 0
+
+    print("[PASS] Unmapped defaults and regex normalization work correctly")
+    return True
+
+
+def test_import_without_llm_matcher():
+    """Bulk import should fall back to rule-based mapping when LLM is unavailable."""
+    print("\n=== Test 9b: Import Without LLM Matcher ===")
+
+    from unittest.mock import patch
+
+    from app.components.gradio_template_form import handle_import_selected
+    from app.services.paste_parse_config import PasteParseConfig, PasteParseRule
+    from app.services.registry import TemplateConfig
+
+    template = TemplateConfig(
+        id="Ginger_Lots",
+        display_name="Ginger Lots",
+        description="",
+        file_path=Path("templates/Ginger_Lots/Ginger_Lots.xlsx"),
+        sheet_name="",
+        header_row=0,
+        data_start_row=1,
+        config_path=Path("templates/Ginger_Lots/Ginger_Lots.config.json"),
+    )
+    paste_config = PasteParseConfig(
+        determiner="tab",
+        field_rules={
+            "YY": [PasteParseRule(filed="YY", index=0)],
+            "MM": [PasteParseRule(filed="MM", index=0)],
+        },
+    )
+    preview_data = [[True, "test-id-1"]]
+    sheet_row = {"YY": "24", "MM": "06", "ID": "test-id-1"}
+
+    with patch("app.components.gradio_template_form.create_field_matcher", return_value=None), patch(
+        "app.components.gradio_template_form.load_paste_parse_config",
+        return_value=paste_config,
+    ), patch(
+        "app.services.data_source.load_template_data_source",
+        return_value=type("DS", (), {"worksheet_name": "List", "id_column": "ID"})(),
+    ), patch(
+        "app.components.gradio_template_form._load_template_sheet_df",
+        return_value=object(),
+    ), patch(
+        "app.components.gradio_template_form.lookup_row_by_id",
+        return_value=sheet_row,
+    ), patch(
+        "app.components.gradio_template_form.mark_as_processed",
+    ), patch(
+        "app.components.gradio_template_form.update_import_stats",
+        return_value="stats",
+    ), patch(
+        "app.components.gradio_template_form.gr.Warning",
+    ), patch(
+        "app.components.gradio_template_form.gr.Info",
+    ):
+        result = handle_import_selected(preview_data, template, [], object(), [])
+
+    form_data = result[0]
+    assert len(form_data) == 1
+    assert form_data[0]["YY"] == "24"
+    assert form_data[0]["MM"] == "06"
+
+    print("[PASS] handle_import_selected() uses rule-based fallback without LLM")
+    return True
+
+
+def test_resolve_field_header_skips_unmapped():
+    """filed='?' should not resolve to a form header."""
+    print("\n=== Test 9c: Resolve Field Header Skips Unmapped ===")
+
+    from app.components.gradio_template_form import _resolve_field_header_name
+    from app.services.paste_parse_config import PasteParseRule
+
+    field_rules = {"YY": [PasteParseRule(filed="?", index=-1)]}
+    assert _resolve_field_header_name("?", field_rules) is None
+    assert _resolve_field_header_name("YY", field_rules) == "YY"
+
+    print("[PASS] _resolve_field_header_name() skips filed='?'")
+    return True
+
+
 def test_import_history_restore():
     """Test restoring IDs from processed/trash back to unprocessed."""
     print("\n=== Test 10: Import History Restore ===")
@@ -625,6 +747,9 @@ def run_all_tests():
         ("Refresh Output Alignment", test_refresh_output_count_stable_with_custom_fields_per_row),
         ("YAML Auto-Generation from Sections", test_yaml_auto_generation_from_sections),
         ("fields_per_row Config", test_fields_per_row_config),
+        ("Unmapped Field Defaults", test_unmapped_field_defaults),
+        ("Import Without LLM Matcher", test_import_without_llm_matcher),
+        ("Resolve Field Header Skips Unmapped", test_resolve_field_header_skips_unmapped),
         ("Import History Restore", test_import_history_restore),
     ]
     

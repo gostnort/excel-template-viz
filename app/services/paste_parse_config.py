@@ -9,6 +9,8 @@ from app.services.registry import TEMPLATES_DIR
 
 PASTE_CONFIG_SUFFIX = ".paste.yaml"
 DEFAULT_FIELDS_PER_ROW = 7
+UNMAPPED_FILED = "?"
+UNMAPPED_INDEX = -1
 RESERVED_TOP_KEYS = frozenset({"determiner", "order", "worksheet", "sections", "fields_per_row"})
 
 
@@ -40,19 +42,14 @@ class PasteParseConfig:
         
         # Convert field_rules to dict format
         for field_name, rules in self.field_rules.items():
-            result[field_name] = [
-                {
-                    "filed": rule.filed,
-                    "index": rule.index,
-                    "regex": rule.regex,
-                    "ID": rule.id_flag
-                }
-                for rule in rules
-            ]
+            result[field_name] = [_rule_to_dict(rule) for rule in rules]
         
         # Add optional fields if present
         if self.order:
-            result["order"] = self.order
+            result["order"] = [
+                _order_entry_to_dict(item) if isinstance(item, dict) else item
+                for item in self.order
+            ]
         if self.worksheet:
             result["worksheet"] = self.worksheet
         if self.sections:
@@ -88,6 +85,59 @@ def _split_line(line: str, determiner: str) -> list[str]:
     return line.split(determiner)
 
 
+def _normalize_regex_value(raw: Any) -> str | None:
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if text in {"", "None", "null"}:
+        return None
+    return text
+
+
+def _rule_to_dict(rule: PasteParseRule) -> dict[str, Any]:
+    filed = (rule.filed or "").strip() or UNMAPPED_FILED
+    if filed == UNMAPPED_FILED:
+        index = UNMAPPED_INDEX
+    else:
+        index = rule.index
+    return {
+        "ID": rule.id_flag,
+        "filed": filed,
+        "index": index,
+        "regex": "None" if rule.regex is None else rule.regex,
+    }
+
+
+def _order_entry_to_dict(entry: dict[str, Any]) -> dict[str, Any]:
+    filed = (str(entry.get("filed", UNMAPPED_FILED)).strip()) or UNMAPPED_FILED
+    index = int(entry.get("index", UNMAPPED_INDEX))
+    regex = _normalize_regex_value(entry.get("regex"))
+    return {
+        "ID": bool(entry.get("ID", False)),
+        "filed": filed,
+        "index": index,
+        "regex": "None" if regex is None else regex,
+    }
+
+
+def _default_unmapped_rule(id_flag: bool = False) -> PasteParseRule:
+    return PasteParseRule(
+        filed=UNMAPPED_FILED,
+        index=UNMAPPED_INDEX,
+        regex=None,
+        id_flag=id_flag,
+    )
+
+
+def _default_order_entry() -> dict[str, Any]:
+    return {
+        "ID": False,
+        "filed": UNMAPPED_FILED,
+        "index": UNMAPPED_INDEX,
+        "regex": "None",
+    }
+
+
 def _parse_rules(raw_rules: Any) -> list[PasteParseRule]:
     if not isinstance(raw_rules, list):
         return []
@@ -97,11 +147,13 @@ def _parse_rules(raw_rules: Any) -> list[PasteParseRule]:
             continue
         if "index" not in item:
             continue
+        filed_raw = str(item.get("filed", UNMAPPED_FILED)).strip()
+        filed = filed_raw if filed_raw else UNMAPPED_FILED
         rules.append(
             PasteParseRule(
-                filed=str(item.get("filed", "?")),
+                filed=filed,
                 index=int(item["index"]),
-                regex=str(item["regex"]) if item.get("regex") is not None else None,
+                regex=_normalize_regex_value(item.get("regex")),
                 id_flag=bool(item.get("ID", False)),
             )
         )
@@ -271,13 +323,20 @@ def config_to_yaml(config: dict[str, Any]) -> str:
 def build_empty_mapping_yaml(template_headers: list[str]) -> str:
     skip_fields = frozenset({"order"})
     config: dict[str, Any] = {"determiner": "tab"}
+    order_entries: list[dict[str, Any]] = [_default_order_entry()]
     for header in template_headers:
-        if header.strip() in skip_fields:
+        header_stripped = header.strip()
+        if header_stripped in skip_fields:
             continue
-        rule: dict[str, Any] = {"filed": "?", "index": -1}
-        if header.strip() == "P.O. No.":
-            rule["ID"] = True
+        rule: dict[str, Any] = {
+            "ID": header_stripped == "P.O. No.",
+            "filed": UNMAPPED_FILED,
+            "index": UNMAPPED_INDEX,
+            "regex": "None",
+        }
         config[header] = [rule]
+        order_entries.append(_order_entry_to_dict({"filed": header_stripped, "index": UNMAPPED_INDEX}))
+    config["order"] = order_entries
     return config_to_yaml(config)
 
 
@@ -590,22 +649,18 @@ def create_default_config_from_template(template_path: Path, worksheet_name: str
         # Remove trailing empty columns
         first_row = first_row[:last_col_with_data]
         
-        # Create field rules (filed = field name itself)
+        # Create field rules with unmapped defaults (filed="?", index=-1)
         field_rules: dict[str, list[PasteParseRule]] = {}
+        order_entries: list[dict[str, Any]] = [_default_order_entry()]
         
         for field_name in first_row:
             if not field_name:  # Skip empty columns
                 continue
             
-            # Create simple rule: filed = field name
-            rule = PasteParseRule(
-                filed=field_name,
-                index=0,  # Will be set dynamically
-                regex=None,
-                id_flag=False
+            field_rules[field_name] = [_default_unmapped_rule()]
+            order_entries.append(
+                _order_entry_to_dict({"filed": field_name, "index": UNMAPPED_INDEX})
             )
-            
-            field_rules[field_name] = [rule]
         
         # Create sections configuration if there are multiple columns
         sections = None
@@ -627,7 +682,7 @@ def create_default_config_from_template(template_path: Path, worksheet_name: str
         return PasteParseConfig(
             determiner="tab",
             field_rules=field_rules,
-            order=None,
+            order=order_entries,
             worksheet=ws.title if ws.title else None,
             sections=sections,
             fields_per_row=DEFAULT_FIELDS_PER_ROW,

@@ -11,7 +11,11 @@ from typing import Any
 
 from app.services.registry import TemplateConfig
 from app.services.excel_parser import list_sheet_names, read_template_sheet
-from app.services.paste_parse_config import load_paste_parse_config, DEFAULT_FIELDS_PER_ROW
+from app.services.paste_parse_config import (
+    load_paste_parse_config,
+    map_sheet_row_from_paste_config,
+    DEFAULT_FIELDS_PER_ROW,
+)
 from app.services.google_sheets import (
     fetch_all_rows,
     GoogleSheetsError,
@@ -148,7 +152,7 @@ def _resolve_field_header_name(
 ) -> str | None:
     """Map a paste-config filed value to the form header name."""
     filed_stripped = filed.strip()
-    if not filed_stripped:
+    if not filed_stripped or filed_stripped == "?":
         return None
     if filed_stripped in field_rules:
         return filed_stripped
@@ -890,20 +894,10 @@ def handle_import_selected(
                 update_import_stats(template)
             )
         
-        # Get field matcher (create new instance each time)
-        try:
-            field_matcher = create_field_matcher()
-        except Exception as e:
-            logger.error(f"Failed to create field matcher: {e}")
-            gr.Warning(f"字段匹配器加载失败：{str(e)}")
-            return (
-                form_data, 
-                gr.update(), 
-                gr.update(), 
-                gr.update(interactive=True), 
-                gr.update(interactive=True),
-                update_import_stats(template)
-            )
+        # Get field matcher (optional — fall back to rule-based mapping)
+        field_matcher = create_field_matcher()
+        if field_matcher is None:
+            gr.Warning("LLM 模型未加载，使用规则匹配")
         
         sheet_df = _load_template_sheet_df(credentials, data_source)
         imported_count = 0
@@ -923,11 +917,13 @@ def handle_import_selected(
                 logger.warning(f"Row not found for ID: {id_value}")
                 continue
             
-            # Use Phi-4 to match fields
-            matched_fields = field_matcher.match_sheet_fields_to_yaml(
-                sheet_row,
-                paste_config.to_dict()
-            )
+            if field_matcher is not None:
+                matched_fields = field_matcher.match_sheet_fields_to_yaml(
+                    sheet_row,
+                    paste_config.to_dict()
+                )
+            else:
+                matched_fields = map_sheet_row_from_paste_config(sheet_row, paste_config)
             
             if matched_fields:
                 form_data.append(matched_fields)
