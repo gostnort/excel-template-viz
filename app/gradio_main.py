@@ -25,8 +25,82 @@ def build_app() -> gr.Blocks:
         title="Excel 模板可视化 - Gradio",
         theme=gr.themes.Soft(),
         css="""
+        /* 模板选择器样式 */
         .template-selector { font-size: 1.1em !important; }
         .main-tabs { margin-top: 10px; }
+        
+        /* 标签样式：添加冒号，移除背景色 */
+        label.svelte-1gfkn6j::after {
+            content: ":";
+        }
+        label.svelte-1gfkn6j {
+            background: transparent !important;
+            font-weight: 500;
+            color: #374151;
+        }
+        
+        /* 输入框默认样式：无背景，只有底部边框 */
+        .wrap.svelte-1w1j06g,
+        input.svelte-1w1j06g,
+        textarea.svelte-1w1j06g {
+            background: transparent !important;
+            border: none !important;
+            border-bottom: 1px solid #d1d5db !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            transition: all 0.2s ease;
+        }
+        
+        /* 下拉框和数字输入框 */
+        .block.padded select,
+        .block.padded input[type="number"] {
+            background: transparent !important;
+            border: none !important;
+            border-bottom: 1px solid #d1d5db !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+        }
+        
+        /* 激活状态：深色阴影和下划线 */
+        .wrap.svelte-1w1j06g:focus-within,
+        input.svelte-1w1j06g:focus,
+        textarea.svelte-1w1j06g:focus,
+        select:focus {
+            border-bottom: 2px solid #4f46e5 !important;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.15), 
+                        0 2px 4px -1px rgba(0, 0, 0, 0.1) !important;
+            outline: none !important;
+        }
+        
+        /* 按钮激活状态 */
+        button:focus {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.15), 
+                        0 2px 4px -1px rgba(0, 0, 0, 0.1) !important;
+        }
+        
+        /* 代码编辑器激活状态 */
+        .cm-editor.cm-focused {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.15), 
+                        0 2px 4px -1px rgba(0, 0, 0, 0.1) !important;
+            outline: 2px solid #4f46e5 !important;
+        }
+        
+        /* Checkbox 和 Radio 激活状态 */
+        input[type="checkbox"]:focus,
+        input[type="radio"]:focus {
+            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.2) !important;
+        }
+        
+        /* 移除非激活状态的阴影 */
+        .block.padded {
+            box-shadow: none !important;
+        }
+        
+        /* Accordion 激活状态 */
+        .accordion.svelte-90oupt:focus-within {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.15), 
+                        0 2px 4px -1px rgba(0, 0, 0, 0.1) !important;
+        }
         """
     ) as app:
         # Global state management
