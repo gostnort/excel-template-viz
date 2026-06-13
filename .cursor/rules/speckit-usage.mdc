@@ -3,7 +3,7 @@ description: Speckit 文档规范与目录约定
 alwaysApply: true
 ---
 
-# Speckit 使用规范
+# Speckit usage
 
 - Speckit plan documents will remain in Chinese only; no new bilingual versions will be created.
 - The directory structure for plans is fixed as `plans/<plan>/`.

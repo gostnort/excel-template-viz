@@ -1,0 +1,10 @@
+---
+description: Prefer CodeGraph for structure, dependencies, and impact analysis
+alwaysApply: true
+---
+
+# CodeGraph Usage
+
+- For code structure, dependency analysis, impact scope, or refactoring, **prefer `codegraph_context` or `codegraph_explore`** over reading many files directly.
+- Use traditional file-read tools only when CodeGraph does not provide enough information.
+- In responses, prioritize key symbols and relationship summaries; avoid unnecessary code snippets.
