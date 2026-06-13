@@ -505,11 +505,10 @@ def build_form_tab(
         outputs=[import_stats]
     )
     
-    # Export button
+    # Export button (no File output until export is implemented)
     export_btn.click(
         fn=handle_export,
         inputs=[current_template, form_data_state],
-        outputs=[gr.File()]
     )
     
     components["form_refresh_outputs"] = form_refresh_outputs
@@ -983,13 +982,8 @@ def handle_clear_history(template: TemplateConfig | None) -> str:
 def handle_export(
     template: TemplateConfig | None,
     form_data: list[dict[str, str]]
-) -> gr.File:
-    """
-    Export form data to Excel
-    
-    Returns:
-        File download
-    """
+) -> None:
+    """Export form data to Excel (not yet implemented)."""
     if not template:
         gr.Warning("请先选择模板")
         return None
