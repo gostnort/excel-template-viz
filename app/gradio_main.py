@@ -241,6 +241,25 @@ def build_app() -> gr.Blocks:
             margin: 0 !important;
         }
         
+        .app-shutdown-btn button {
+            font-size: 1rem !important;
+            font-weight: 600 !important;
+            padding: 10px 20px !important;
+            min-height: 42px !important;
+            min-width: 120px !important;
+            border: 2px solid #dc2626 !important;
+            color: #dc2626 !important;
+            background: #fef2f2 !important;
+            box-shadow: 0 1px 3px rgba(220, 38, 38, 0.2) !important;
+            transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease !important;
+        }
+        
+        .app-shutdown-btn button:hover {
+            background: #dc2626 !important;
+            color: #ffffff !important;
+            box-shadow: 0 2px 6px rgba(220, 38, 38, 0.35) !important;
+        }
+        
         /* Suppress Gradio default full-screen status tracker overlay */
         [data-testid="status-tracker"] {
             display: none !important;
@@ -261,8 +280,8 @@ def build_app() -> gr.Blocks:
             )
             shutdown_btn = gr.Button(
                 "关闭应用",
-                variant="secondary",
-                size="sm",
+                variant="stop",
+                size="lg",
                 elem_classes=["app-shutdown-btn"],
             )
         
