@@ -26,6 +26,39 @@ class PasteParseConfig:
     order: list[dict[str, Any]] | None = None
     worksheet: str | None = None
     sections: list[dict[str, Any]] | None = None  # Section configurations for multi-area detection
+    
+    def to_dict(self) -> dict[str, Any]:
+        """
+        Convert config to dict for field matching and other operations
+        
+        Returns:
+            Dict representation of the config with field rules converted to dict format
+        """
+        result: dict[str, Any] = {}
+        
+        # Convert field_rules to dict format
+        for field_name, rules in self.field_rules.items():
+            result[field_name] = [
+                {
+                    "filed": rule.filed,
+                    "index": rule.index,
+                    "regex": rule.regex,
+                    "ID": rule.id_flag
+                }
+                for rule in rules
+            ]
+        
+        # Add optional fields if present
+        if self.order:
+            result["order"] = self.order
+        if self.worksheet:
+            result["worksheet"] = self.worksheet
+        if self.sections:
+            result["sections"] = self.sections
+        
+        result["determiner"] = self.determiner
+        
+        return result
 
 
 def paste_config_path(template_id: str) -> Path:
@@ -195,6 +228,17 @@ def config_to_yaml(config: dict[str, Any]) -> str:
         lines.append("order:")
         for item in order:
             lines.extend(_format_rule_lines(item, indent=2))
+    
+    # Handle sections configuration
+    sections = config.get("sections")
+    if isinstance(sections, list) and sections:
+        lines.append("sections:")
+        for section in sections:
+            if isinstance(section, dict):
+                lines.append("  - input_area: " + _yaml_scalar(str(section.get("input_area", ""))))
+                lines.append("    move_to: " + _yaml_scalar(str(section.get("move_to", ""))))
+                lines.append("    offset: " + str(section.get("offset", 0)))
+    
     for key, value in config.items():
         if key in RESERVED_TOP_KEYS or key == "determiner":
             continue

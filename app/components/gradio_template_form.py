@@ -19,17 +19,6 @@ from app.services.phi4_field_matcher import create_field_matcher
 
 logger = logging.getLogger(__name__)
 
-# Global field matcher (lazy loaded)
-_field_matcher = None
-
-
-def get_field_matcher():
-    """Get or create field matcher instance"""
-    global _field_matcher
-    if _field_matcher is None:
-        _field_matcher = create_field_matcher()
-    return _field_matcher
-
 
 def build_form_tab(
     current_template: gr.State,
@@ -136,14 +125,14 @@ def build_form_tab(
     refresh_btn.click(
         fn=handle_refresh_unrecorded,
         inputs=[current_template, credentials_state, form_data_state],
-        outputs=[import_preview, import_btn]
+        outputs=[import_preview, import_btn, refresh_btn]
     )
     
     # Import selected rows
     import_btn.click(
         fn=handle_import_selected,
         inputs=[import_preview, current_template, form_data_state, credentials_state, detected_areas_state],
-        outputs=[form_data_state, row_selector, import_preview]
+        outputs=[form_data_state, row_selector, import_preview, import_btn]
     )
     
     # Export button
@@ -221,11 +210,11 @@ def handle_refresh_unrecorded(
     Filters out IDs that are already in form_data
     
     Returns:
-        Updated preview dataframe and import button visibility
+        (import_preview, import_btn, refresh_btn)
     """
     if not template or not credentials:
         gr.Warning("请先配置数据源并连接 Google 账号")
-        return gr.update(), gr.update(visible=False)
+        return gr.update(), gr.update(visible=False), gr.update(interactive=True)
     
     try:
         # Load data source config
@@ -234,7 +223,7 @@ def handle_refresh_unrecorded(
         data_source = load_template_data_source(template.id)
         if not data_source:
             gr.Warning("模板未配置数据源")
-            return gr.update(), gr.update(visible=False)
+            return gr.update(), gr.update(visible=False), gr.update(interactive=True)
         
         # Fetch all rows from sheet
         logger.info(f"Fetching all rows from sheet: {data_source.worksheet_name}")
@@ -247,7 +236,7 @@ def handle_refresh_unrecorded(
         
         if df.height == 0:
             gr.Info("Sheet 中没有数据")
-            return gr.update(), gr.update(visible=False)
+            return gr.update(), gr.update(visible=False), gr.update(interactive=True)
         
         # Get list of already-recorded IDs
         recorded_ids = set()
@@ -257,8 +246,12 @@ def handle_refresh_unrecorded(
         paste_config = load_paste_parse_config(template.id)
         if paste_config:
             for field_key, field_config in paste_config.to_dict().items():
-                if isinstance(field_config, dict) and field_config.get('type') == 'id':
-                    id_field_key = field_key
+                if isinstance(field_config, list):
+                    for rule in field_config:
+                        if isinstance(rule, dict) and rule.get('ID'):
+                            id_field_key = field_key
+                            break
+                if id_field_key:
                     break
         
         # Extract recorded IDs from form_data
@@ -282,22 +275,23 @@ def handle_refresh_unrecorded(
         
         if not unrecorded_rows:
             gr.Info("所有数据均已录入")
-            return gr.update(), gr.update(visible=False)
+            return gr.update(), gr.update(visible=False), gr.update(interactive=True)
         
         gr.Info(f"找到 {len(unrecorded_rows)} 行未录入数据")
         
         return (
             gr.update(value=unrecorded_rows, visible=True),
-            gr.update(visible=True)
+            gr.update(visible=True),
+            gr.update(interactive=True)  # Re-enable refresh button
         )
         
     except GoogleSheetsError as e:
         gr.Warning(f"获取 Sheet 数据失败：{e}")
-        return gr.update(), gr.update(visible=False)
+        return gr.update(), gr.update(visible=False), gr.update(interactive=True)
     except Exception as e:
         logger.error(f"Refresh failed: {e}")
         gr.Warning(f"刷新失败：{str(e)}")
-        return gr.update(), gr.update(visible=False)
+        return gr.update(), gr.update(visible=False), gr.update(interactive=True)
 
 
 def handle_import_selected(
@@ -311,10 +305,10 @@ def handle_import_selected(
     Import selected rows from preview using Phi-4 field matching
     
     Returns:
-        Updated form_data, row_selector, and import_preview visibility
+        (form_data_state, row_selector, import_preview, import_btn)
     """
     if not preview_data or not template:
-        return form_data, gr.update(), gr.update()
+        return form_data, gr.update(), gr.update(), gr.update(interactive=True)
     
     try:
         # Get selected rows (where first column is True)
@@ -322,7 +316,7 @@ def handle_import_selected(
         
         if not selected_rows:
             gr.Warning("请勾选要导入的行")
-            return form_data, gr.update(), gr.update()
+            return form_data, gr.update(), gr.update(), gr.update(interactive=True)
         
         # Load data source config and paste config
         from app.services.data_source import load_template_data_source
@@ -331,15 +325,21 @@ def handle_import_selected(
         data_source = load_template_data_source(template.id)
         if not data_source or not credentials:
             gr.Warning("请先配置数据源")
-            return form_data, gr.update(), gr.update()
+            return form_data, gr.update(), gr.update(), gr.update(interactive=True)
         
         paste_config = load_paste_parse_config(template.id)
         if not paste_config:
             gr.Warning("模板配置加载失败")
-            return form_data, gr.update(), gr.update()
+            return form_data, gr.update(), gr.update(), gr.update(interactive=True)
         
-        # Get field matcher
-        field_matcher = get_field_matcher()
+        # Get field matcher (create new instance each time)
+        try:
+            field_matcher = create_field_matcher()
+        except Exception as e:
+            logger.error(f"Failed to create field matcher: {e}")
+            gr.Warning(f"字段匹配器加载失败：{str(e)}")
+            return form_data, gr.update(), gr.update(), gr.update(interactive=True)
+        
         imported_count = 0
         
         # Process each selected row
@@ -380,13 +380,14 @@ def handle_import_selected(
         return (
             form_data,
             gr.update(choices=row_choices, value=row_choices[0] if row_choices else None),
-            gr.update(visible=False)  # Hide import preview after import
+            gr.update(visible=False),  # Hide import preview after import
+            gr.update(interactive=True)  # Re-enable import button
         )
         
     except Exception as e:
         logger.error(f"Import failed: {e}")
         gr.Warning(f"导入失败：{str(e)}")
-        return form_data, gr.update(), gr.update()
+        return form_data, gr.update(), gr.update(), gr.update(interactive=True)
 
 
 def handle_export(

@@ -123,40 +123,67 @@ def load_template_list() -> gr.Dropdown:
 def on_template_change(
     template_name: str | None,
     current_template: TemplateConfig | None
-) -> tuple[Any, ...]:
+) -> tuple[Any, Any, Any, Any]:
     """
     Handle template selection change
     
-    Returns updated states and components
+    Returns: (current_template, form_container, sheet_selector, area_selector)
     """
     if not template_name:
-        return (None,) + (gr.update(),) * 10  # Placeholder for multiple outputs
+        # Return 4 values for all outputs
+        return (
+            None,                           # current_template
+            gr.update(visible=False),       # form_container
+            gr.update(choices=[], value=None),  # sheet_selector
+            gr.update(visible=False)        # area_selector
+        )
     
     try:
+        from app.services.excel_parser import list_sheet_names
+        from pathlib import Path
+        
         # Find template config
         templates = load_templates()
         template_dict = {t.display_name: t for t in templates}
         
         if template_name not in template_dict:
             gr.Warning(f"模板 '{template_name}' 未找到")
-            return (None,) + (gr.update(),) * 10
+            return (
+                None,
+                gr.update(visible=False),
+                gr.update(choices=[], value=None),
+                gr.update(visible=False)
+            )
         
         new_template = template_dict[template_name]
         logger.info(f"Switched to template: {new_template.id}")
         
-        # TODO: Trigger area detection here
-        # detected_areas = detect_areas_for_template(new_template)
+        # Load sheet names from template
+        try:
+            sheet_names = list_sheet_names(Path(new_template.file_path))
+            if not sheet_names:
+                sheet_names = []
+                logger.warning(f"No sheets found in template: {new_template.id}")
+        except Exception as e:
+            logger.error(f"Failed to load sheet names: {e}")
+            sheet_names = []
         
         gr.Info(f"已切换到模板：{template_name}")
         
-        # Return updated template and component updates
+        # Return 4 values matching outputs
         return (
-            new_template,
-            gr.update(visible=True),  # Show form
-            gr.update(),  # Other components...
+            new_template,                                  # current_template
+            gr.update(visible=True),                       # form_container
+            gr.update(choices=sheet_names, value=sheet_names[0] if sheet_names else None),  # sheet_selector
+            gr.update(visible=False)                       # area_selector (hidden initially)
         )
         
     except Exception as e:
         logger.error(f"Failed to change template: {e}")
         gr.Warning(f"切换模板失败：{str(e)}")
-        return (None,) + (gr.update(),) * 10
+        return (
+            None,
+            gr.update(visible=False),
+            gr.update(choices=[], value=None),
+            gr.update(visible=False)
+        )
