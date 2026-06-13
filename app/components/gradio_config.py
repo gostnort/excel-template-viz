@@ -29,6 +29,7 @@ from app.services.phi4_field_matcher import (
     create_field_matcher,
     ensure_model_downloaded,
     find_model_file,
+    get_last_load_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -836,7 +837,14 @@ def handle_llm_test(
         matcher = create_field_matcher()
         
         if not matcher:
-            return "// Phi-4 模型加载失败"
+            detail = get_last_load_error()
+            if detail:
+                return f"// Phi-4 模型加载失败\n// {detail}"
+            return (
+                "// Phi-4 模型加载失败\n"
+                "// 请确认 models/phi4/ 下已有 GGUF 文件，并运行 install.bat 安装 "
+                "torch、transformers>=5.0、gguf>=0.10.0"
+            )
         
         # Perform matching
         matched = matcher.match_sheet_fields_to_yaml(

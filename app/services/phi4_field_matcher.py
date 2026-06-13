@@ -4,6 +4,7 @@ Phi-4 Field Matcher (Transformers + GGUF)
 Uses Phi-4-mini-instruct via Transformers with GGUF support (pure Python, no compilation).
 Automatically selects quantization based on available memory.
 """
+import importlib.metadata
 import json
 import logging
 import re
@@ -11,6 +12,9 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Last load failure message for UI feedback (set by create_field_matcher).
+_last_load_error: str | None = None
 
 # Model configuration
 MODEL_REPO = "bartowski/microsoft_Phi-4-mini-instruct-GGUF"
@@ -32,6 +36,87 @@ QUANT_SPECS: list[tuple[str, float, str]] = [
 
 class ModelDownloadError(Exception):
     """Model download failed; message is user-facing and actionable."""
+
+
+class ModelLoadError(Exception):
+    """Phi-4 GGUF model could not be loaded; message is user-facing and actionable."""
+
+
+def get_last_load_error() -> str | None:
+    """Return the most recent model load failure message, if any."""
+    return _last_load_error
+
+
+def _ensure_gguf_version() -> None:
+    """
+    Work around gguf package missing __version__ (breaks transformers>=5 is_gguf_available).
+    Must run before any transformers GGUF code path.
+    """
+    import gguf
+
+    if getattr(gguf, "__version__", None):
+        return
+    try:
+        gguf.__version__ = importlib.metadata.version("gguf")
+    except importlib.metadata.PackageNotFoundError:
+        gguf.__version__ = "0.10.0"
+
+
+def _ensure_gguf_hub_accessible(hub_filename: str) -> None:
+    """
+    Ensure GGUF can be loaded via MODEL_REPO + gguf_file (HF hub cache).
+
+    Transformers resolves GGUF by repo id + filename, not by passing a local path
+    as pretrained_model_name_or_path. local_dir must not be passed to model loading.
+    """
+    from huggingface_hub import hf_hub_download
+
+    try:
+        hf_hub_download(
+            repo_id=MODEL_REPO,
+            filename=hub_filename,
+            local_files_only=True,
+        )
+        return
+    except Exception:
+        pass
+
+    local_path = MODEL_DIR / hub_filename
+    if local_path.is_file():
+        hf_hub_download(repo_id=MODEL_REPO, filename=hub_filename)
+        return
+
+    raise FileNotFoundError(
+        f"GGUF file not found: {local_path}. "
+        f"Run install.bat or: python scripts/download_phi4_model.py"
+    )
+
+
+def _resolve_gguf_source(
+    model_path: str | Path | None,
+) -> tuple[str, Path]:
+    """
+    Resolve (hub_filename, local_path) for the GGUF weights.
+
+    Returns:
+        hub_filename: filename on the Hugging Face repo (not a directory path)
+        local_path: resolved local file path under MODEL_DIR
+    """
+    if model_path is not None:
+        local_path = Path(model_path).resolve()
+        if not local_path.is_file():
+            raise FileNotFoundError(f"Model file not found: {local_path}")
+        return local_path.name, local_path
+
+    found = find_model_file()
+    if found:
+        hub_filename, local_path = found
+        return hub_filename, local_path.resolve()
+
+    raise FileNotFoundError(
+        f"No Phi-4 GGUF model in {MODEL_DIR.resolve()}. "
+        f"Download with: python scripts/download_phi4_model.py"
+    )
 
 
 def _check_download_dependencies() -> None:
@@ -198,95 +283,51 @@ class Phi4FieldMatcher:
     def __init__(self, model_path: str | Path | None = None):
         """
         Initialize Phi-4 field matcher
-        
+
         Args:
-            model_path: Path to local GGUF file. If None, auto-detects or downloads.
-        
+            model_path: Path to local GGUF file. If None, auto-detects under MODEL_DIR.
+
         Raises:
-            FileNotFoundError: If model file doesn't exist and can't download
-            ImportError: If transformers is not installed
+            FileNotFoundError: If model file doesn't exist
+            ImportError: If transformers/gguf/torch are not installed
+            ModelLoadError: If GGUF loading fails
         """
+        _ensure_gguf_version()
+
         try:
+            import torch  # noqa: F401
+            import gguf  # noqa: F401
             from transformers import AutoModelForCausalLM, AutoTokenizer
         except ImportError as exc:
             raise ImportError(
-                "transformers is not installed. "
-                "Please run: pip install transformers>=4.45.0 accelerate"
+                "缺少 LLM 依赖。请运行 install.bat 重新安装，或手动执行: "
+                "pip install torch transformers>=5.0 gguf>=0.10.0 accelerate"
             ) from exc
-        
-        # Determine model source
-        if model_path is None:
-            # Try to find local GGUF file
-            found = find_model_file()
-            if found:
-                hub_filename, local_path = found
-                logger.info(f"Using local GGUF: {local_path}")
-                model_source = str(local_path)
-            else:
-                # Download from Hub (will auto-select Q4_K_M)
-                logger.info(f"No local model found, will download from {MODEL_REPO}")
-                logger.info("Downloading Q4_K_M quantization (~3.5GB)...")
-                model_source = MODEL_REPO
-                hub_filename = "microsoft_Phi-4-mini-instruct-Q4_K_M.gguf"
-        else:
-            model_source = str(Path(model_path))
-            logger.info(f"Using specified model: {model_source}")
-            hub_filename = None
-        
-        logger.info("Loading Phi-4 model via Transformers (GGUF support)...")
-        
-        # Load tokenizer (from base model)
+
+        hub_filename, local_path = _resolve_gguf_source(model_path)
+        logger.info("Using local GGUF: %s (hub file: %s)", local_path, hub_filename)
+
+        _ensure_gguf_hub_accessible(hub_filename)
+
+        logger.info("Loading Phi-4 via Transformers GGUF (repo=%s)...", MODEL_REPO)
+
+        load_kwargs = {
+            "gguf_file": hub_filename,
+            "device_map": "cpu",
+            "trust_remote_code": True,
+            "low_cpu_mem_usage": True,
+        }
+
         try:
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                "microsoft/Phi-4-mini-instruct",
-                trust_remote_code=True
-            )
-        except Exception:
-            # Fallback to quantized repo
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                MODEL_REPO,
-                trust_remote_code=True
-            )
-        
-        # Load model with GGUF support
-        # Transformers v4.45+ supports loading GGUF directly
-        try:
-            if model_source == MODEL_REPO:
-                # Download from Hub
-                self.model = AutoModelForCausalLM.from_pretrained(
-                    MODEL_REPO,
-                    gguf_file=hub_filename,
-                    device_map="cpu",
-                    trust_remote_code=True,
-                    low_cpu_mem_usage=True
-                )
-            else:
-                # Load local GGUF file
-                self.model = AutoModelForCausalLM.from_pretrained(
-                    model_source,
-                    device_map="cpu",
-                    trust_remote_code=True,
-                    low_cpu_mem_usage=True
-                )
-        except Exception as e:
-            logger.error(f"Failed to load GGUF via Transformers: {e}")
-            logger.info("Trying alternative loading method...")
-            
-            # Alternative: load base model with quantization
-            from transformers import BitsAndBytesConfig
-            quantization_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_compute_dtype="float16"
-            )
-            
-            self.model = AutoModelForCausalLM.from_pretrained(
-                "microsoft/Phi-4-mini-instruct",
-                quantization_config=quantization_config,
-                device_map="cpu",
-                trust_remote_code=True,
-                low_cpu_mem_usage=True
-            )
-        
+            self.tokenizer = AutoTokenizer.from_pretrained(MODEL_REPO, **load_kwargs)
+            self.model = AutoModelForCausalLM.from_pretrained(MODEL_REPO, **load_kwargs)
+        except Exception as exc:
+            raise ModelLoadError(
+                f"GGUF 加载失败 ({hub_filename}): {exc}. "
+                "请确认已安装 torch、transformers>=5.0、gguf>=0.10.0，"
+                "并重新运行 install.bat。"
+            ) from exc
+
         self.model.eval()
         logger.info("Phi-4 model loaded successfully (pure Python, CPU mode)")
     
@@ -489,10 +530,13 @@ Output ONLY valid JSON, no explanations:"""
 
 
 def create_field_matcher(model_path: str | Path | None = None) -> Phi4FieldMatcher | None:
-    """Create field matcher instance, returning None if model is not available"""
+    """Create field matcher instance, returning None if model is not available."""
+    global _last_load_error
+    _last_load_error = None
     try:
         return Phi4FieldMatcher(model_path)
-    except (FileNotFoundError, ImportError) as e:
-        logger.warning(f"Phi-4 model not available: {e}")
+    except (FileNotFoundError, ImportError, ModelLoadError) as exc:
+        _last_load_error = str(exc)
+        logger.warning("Phi-4 model not available: %s", exc)
         logger.warning("Field matching will use exact name matching only")
         return None
