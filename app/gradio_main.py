@@ -29,6 +29,33 @@ def build_app() -> gr.Blocks:
         .template-selector { font-size: 1.1em !important; }
         .main-tabs { margin-top: 10px; }
         
+        /* Toast 通知样式优化 */
+        .toast-wrap.svelte-1qhecvt {
+            animation-duration: 0.2s !important;
+        }
+        
+        .toast-item.svelte-1qhecvt {
+            padding: 4px 12px !important;
+            min-height: 32px !important;
+            max-height: 48px !important;
+        }
+        
+        .toast-body.svelte-irmu64 {
+            padding: 4px 8px !important;
+            min-height: 28px !important;
+        }
+        
+        .toast-message-item.svelte-irmu64 {
+            padding: 2px 0 !important;
+            line-height: 1.3 !important;
+        }
+        
+        .toast-message-text.svelte-irmu64 {
+            font-size: 0.9rem !important;
+            padding: 0 !important;
+            line-height: 1.3 !important;
+        }
+        
         /* 标签样式：添加冒号，移除背景色 */
         label.svelte-1gfkn6j::after {
             content: ":";
@@ -100,6 +127,16 @@ def build_app() -> gr.Blocks:
         .accordion.svelte-90oupt:focus-within {
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.15), 
                         0 2px 4px -1px rgba(0, 0, 0, 0.1) !important;
+        }
+        
+        /* Toast 自动关闭时间控制 */
+        @keyframes toast-fade-out {
+            from { opacity: 1; }
+            to { opacity: 0; }
+        }
+        
+        .toast-item.svelte-1qhecvt {
+            animation: toast-fade-out 0.3s ease-in-out 2s forwards !important;
         }
         """
     ) as app:
