@@ -93,8 +93,74 @@ def on_template_change_load_config(template: TemplateConfig | None) -> tuple:
         )
 
 
+def update_llm_test_columns(
+    template: TemplateConfig | None,
+    credentials: Any
+) -> gr.Dropdown:
+    """
+    Update LLM test columns dropdown with columns from connected data source
+    
+    Returns:
+        gr.update with dropdown choices
+    """
+    if not template:
+        return gr.update(choices=[], value=None, info='从已连接的 Google Sheet 中选择列（如未显示选项，请先在"数据源"标签页连接 Sheet）')
+    
+    try:
+        from app.services.data_source import load_template_data_source
+        from app.services.google_sheets import fetch_sheet_preview
+        
+        # Load data source config
+        data_source = load_template_data_source(template.id)
+        
+        if not data_source:
+            return gr.update(
+                choices=[], 
+                value=None, 
+                info='⚠️ 未配置数据源，请先在"数据源"标签页连接 Google Sheet'
+            )
+        
+        if not credentials:
+            return gr.update(
+                choices=[], 
+                value=None, 
+                info='⚠️ 未授权，请先在"数据源"标签页授权 Google 账号'
+            )
+        
+        # Fetch columns from sheet
+        df, _ = fetch_sheet_preview(
+            credentials,
+            data_source.sheet_url,
+            data_source.worksheet_name
+        )
+        
+        if df.height == 0:
+            return gr.update(
+                choices=[], 
+                value=None, 
+                info="⚠️ 工作表为空"
+            )
+        
+        columns = list(df.columns)
+        
+        return gr.update(
+            choices=columns, 
+            value=None, 
+            info=f"✓ 已加载 {len(columns)} 列（来自 {data_source.worksheet_name}）"
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to load columns: {e}")
+        return gr.update(
+            choices=[], 
+            value=None, 
+            info=f"⚠️ 加载列失败：{str(e)}"
+        )
+
+
 def build_config_tab(
-    current_template: gr.State
+    current_template: gr.State,
+    credentials_state: gr.State
 ) -> dict:
     """
     Build the configuration tab with YAML editor and LLM settings
@@ -139,10 +205,13 @@ def build_config_tab(
                 
                 # Test LLM matching
                 with gr.Row():
-                    test_sheet_cols = gr.Textbox(
-                        label="测试 Sheet 列名（逗号分隔）",
-                        placeholder="例如: PO Number, Container, Date",
-                        lines=2
+                    test_sheet_cols = gr.Dropdown(
+                        label="测试 Sheet 列名",
+                        choices=[],
+                        value=None,
+                        multiselect=True,
+                        interactive=True,
+                        info='从已连接的 Google Sheet 中选择列（如未显示选项，请先在"数据源"标签页连接 Sheet）'
                     )
                 
                 test_llm_btn = gr.Button("🧪 测试 LLM 匹配", variant="primary")
@@ -198,6 +267,13 @@ def build_config_tab(
                 components["sections_status"] = sections_status
     
     # Event bindings
+    
+    # Update dropdown when template changes or data source connects
+    current_template.change(
+        fn=update_llm_test_columns,
+        inputs=[current_template, credentials_state],
+        outputs=[test_sheet_cols]
+    )
     
     # Load config when template changes
     current_template.change(
@@ -372,7 +448,7 @@ def handle_yaml_validate(
 
 def handle_llm_test(
     template: TemplateConfig | None,
-    test_cols: str
+    test_cols: list | None
 ) -> str:
     """
     Test LLM field matching (auto-downloads model if needed)
@@ -383,20 +459,14 @@ def handle_llm_test(
     if not template:
         return "// 请先选择模板"
     
-    if not test_cols or not test_cols.strip():
-        return "// 请输入测试列名"
+    if not test_cols or len(test_cols) == 0:
+        return "// 请从下拉列表中选择列名"
     
     try:
         import json
         
-        # Parse test columns
-        cols = [c.strip() for c in test_cols.split(',') if c.strip()]
-        
-        if not cols:
-            return "// 没有有效的列名"
-        
         # Create test sheet row
-        test_sheet_row = {col: f"测试值_{i+1}" for i, col in enumerate(cols)}
+        test_sheet_row = {col: f"测试值_{i+1}" for i, col in enumerate(test_cols)}
         
         # Load paste config
         paste_config = load_paste_parse_config(template.id)
@@ -447,7 +517,7 @@ def handle_llm_test(
         
         # Format result
         result = {
-            "输入列": cols,
+            "输入列": test_cols,
             "匹配结果": matched
         }
         

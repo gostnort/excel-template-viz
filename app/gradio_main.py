@@ -243,7 +243,8 @@ def build_app() -> gr.Blocks:
                         from app.components.gradio_config import build_config_tab
                         
                         config_components = build_config_tab(
-                            current_template
+                            current_template,
+                            credentials_state
                         )
         
         # Event: Load templates on startup
@@ -257,6 +258,14 @@ def build_app() -> gr.Blocks:
             fn=on_template_change,
             inputs=[template_selector, current_template],
             outputs=[current_template, *form_components["update_on_template_change"]]
+        )
+        
+        # Cross-tab event: Update LLM test columns when worksheet changes
+        from app.components.gradio_config import update_llm_test_columns
+        datasource_components["worksheet_dropdown"].change(
+            fn=update_llm_test_columns,
+            inputs=[current_template, credentials_state],
+            outputs=[config_components["test_sheet_cols"]]
         )
         
         # Event: Shutdown button
