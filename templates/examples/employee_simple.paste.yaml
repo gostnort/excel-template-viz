@@ -1,0 +1,49 @@
+# 简单员工信息表示例
+# 适用场景：基本的员工信息管理，单区域填充
+
+determiner: tab
+worksheet: "员工信息"
+
+# ID 字段（必需，用于查询和去重）
+Employee_ID:
+  - filed: "工号"
+    index: 0
+    ID: true
+
+# 基本信息字段
+Name:
+  - filed: "姓名"
+    index: 1
+
+Department:
+  - filed: "部门"
+    index: 2
+
+Position:
+  - filed: "职位"
+    index: 3
+
+# 联系方式（带数据清洗）
+Phone:
+  - filed: "手机号"
+    index: 4
+    regex: "\\d{11}"        # 只保留 11 位数字
+
+Email:
+  - filed: "电子邮箱"
+    index: 5
+
+# 入职信息
+Join_Date:
+  - filed: "入职日期"
+    index: 6
+
+# 字段显示顺序（在 UI 中的显示顺序）
+order:
+  - Employee_ID
+  - Name
+  - Department
+  - Position
+  - Phone
+  - Email
+  - Join_Date

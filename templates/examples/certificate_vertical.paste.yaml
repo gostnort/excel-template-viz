@@ -1,0 +1,48 @@
+# 批量证书打印示例
+# 适用场景：一页打印多个证书，垂直排列
+# 布局：每页 3 个证书，从上到下排列
+
+determiner: tab
+worksheet: "证书"
+
+# 多区域配置：垂直排列
+sections:
+  - input_area: "A1:M15"    # 第一个证书区域（13 列 × 15 行）
+    move_to: "down"         # 向下移动
+    offset: 16              # 每个证书 15 行 + 1 行空白
+
+# 字段映射
+Student_ID:
+  - filed: "学号"
+    index: 0
+    ID: true
+
+Student_Name:
+  - filed: "学生姓名"
+    index: 1
+
+Course_Name:
+  - filed: "课程名称"
+    index: 2
+
+Grade:
+  - filed: "成绩"
+    index: 3
+    regex: "\\d{1,3}"       # 保留 1-3 位数字
+
+Issue_Date:
+  - filed: "颁发日期"
+    index: 4
+
+Instructor:
+  - filed: "授课教师"
+    index: 5
+
+# 显示顺序
+order:
+  - Student_ID
+  - Student_Name
+  - Course_Name
+  - Instructor
+  - Grade
+  - Issue_Date
