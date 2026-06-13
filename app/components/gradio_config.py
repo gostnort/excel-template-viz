@@ -134,34 +134,10 @@ def build_config_tab(
                 components["yaml_status"] = yaml_status
             
             # Sub-tab 2: LLM Settings
-            with gr.TabItem("LLM 设置"):
-                gr.Markdown("配置 Phi-4 模型用于字段智能匹配")
-                
-                # Model info
-                with gr.Row():
-                    model_status = gr.Textbox(
-                        label="模型状态",
-                        value="检测中...",
-                        interactive=False,
-                        lines=2
-                    )
-                    
-                    model_refresh_btn = gr.Button("🔄 刷新状态", size="sm")
-                
-                # Model selection (quantization)
-                model_quant_selector = gr.Dropdown(
-                    label="量化版本",
-                    choices=["Q8_0", "Q6_K", "Q5_K_M", "Q4_K_M", "Q3_K_M", "Q2_K"],
-                    value="Q4_K_M",
-                    info="选择模型量化级别（越高质量越好，内存占用越大）"
-                )
-                
-                model_download_btn = gr.Button("⬇️ 下载模型", variant="primary")
+            with gr.TabItem("LLM 字段匹配"):
+                gr.Markdown("使用 Phi-4 模型智能匹配字段（首次使用会自动下载）")
                 
                 # Test LLM matching
-                gr.Markdown("---")
-                gr.Markdown("### 测试字段匹配")
-                
                 with gr.Row():
                     test_sheet_cols = gr.Textbox(
                         label="测试 Sheet 列名（逗号分隔）",
@@ -169,19 +145,15 @@ def build_config_tab(
                         lines=2
                     )
                 
-                test_llm_btn = gr.Button("🧪 测试 LLM 匹配", variant="secondary")
+                test_llm_btn = gr.Button("🧪 测试 LLM 匹配", variant="primary")
                 
                 test_result = gr.Code(
                     label="匹配结果",
                     language="json",
-                    lines=10,
+                    lines=15,
                     value=""
                 )
                 
-                components["model_status"] = model_status
-                components["model_refresh_btn"] = model_refresh_btn
-                components["model_quant_selector"] = model_quant_selector
-                components["model_download_btn"] = model_download_btn
                 components["test_sheet_cols"] = test_sheet_cols
                 components["test_llm_btn"] = test_llm_btn
                 components["test_result"] = test_result
@@ -261,17 +233,6 @@ def build_config_tab(
     )
     
     # LLM tab events
-    model_refresh_btn.click(
-        fn=handle_model_status_refresh,
-        outputs=[model_status]
-    )
-    
-    model_download_btn.click(
-        fn=handle_model_download,
-        inputs=[model_quant_selector],
-        outputs=[model_status]
-    )
-    
     test_llm_btn.click(
         fn=handle_llm_test,
         inputs=[current_template, test_sheet_cols],
@@ -409,65 +370,12 @@ def handle_yaml_validate(
         return f"❌ 验证失败：{str(e)}"
 
 
-def handle_model_status_refresh() -> str:
-    """
-    Refresh model status
-    
-    Returns:
-        Status message
-    """
-    try:
-        model_file = find_model_file()
-        
-        if model_file:
-            filename, path = model_file
-            size_gb = path.stat().st_size / (1024 ** 3)
-            return f"✓ 模型已就绪\n文件: {filename}\n大小: {size_gb:.2f} GB"
-        else:
-            return "❌ 未找到模型文件\n请点击「下载模型」按钮"
-    
-    except Exception as e:
-        logger.error(f"Model status check failed: {e}")
-        return f"❌ 检查失败：{str(e)}"
-
-
-def handle_model_download(
-    quant_version: str
-) -> str:
-    """
-    Download model
-    
-    Returns:
-        Status message
-    """
-    try:
-        gr.Info(f"开始下载 {quant_version} 量化模型，请稍候...")
-        
-        # Run download script
-        import subprocess
-        
-        result = subprocess.run(
-            ["python", "scripts/download_phi4_model.py"],
-            capture_output=True,
-            text=True
-        )
-        
-        if result.returncode == 0:
-            return "✓ 模型下载成功！"
-        else:
-            return f"❌ 下载失败：\n{result.stderr}"
-    
-    except Exception as e:
-        logger.error(f"Model download failed: {e}")
-        return f"❌ 下载失败：{str(e)}"
-
-
 def handle_llm_test(
     template: TemplateConfig | None,
     test_cols: str
 ) -> str:
     """
-    Test LLM field matching
+    Test LLM field matching (auto-downloads model if needed)
     
     Returns:
         JSON result
@@ -496,11 +404,40 @@ def handle_llm_test(
         if not paste_config:
             return "// 模板配置未找到"
         
+        # Check if model exists, if not, auto-download
+        model_file = find_model_file()
+        if not model_file:
+            gr.Info("首次使用，正在自动下载模型（根据内存自动选择量化版本）...")
+            logger.info("Model not found, starting auto-download")
+            
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ["python", "scripts/download_phi4_model.py", "--auto"],
+                    capture_output=True,
+                    text=True,
+                    timeout=600  # 10 minutes timeout
+                )
+                
+                if result.returncode != 0:
+                    error_msg = result.stderr or result.stdout
+                    logger.error(f"Model download failed: {error_msg}")
+                    return f"// 模型下载失败：{error_msg}"
+                
+                logger.info("Model downloaded successfully")
+                gr.Info("模型下载完成！正在加载...")
+            
+            except subprocess.TimeoutExpired:
+                return "// 模型下载超时，请检查网络连接"
+            except Exception as e:
+                logger.error(f"Download failed: {e}")
+                return f"// 下载失败：{str(e)}"
+        
         # Create matcher
         matcher = create_field_matcher()
         
         if not matcher:
-            return "// Phi-4 模型未就绪，请先下载模型"
+            return "// Phi-4 模型加载失败"
         
         # Perform matching
         matched = matcher.match_sheet_fields_to_yaml(

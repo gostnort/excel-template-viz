@@ -3,9 +3,14 @@ Download Phi-4 GGUF model from Hugging Face Hub
 
 This script automatically selects the best GGUF quantization based on available system memory
 and downloads from bartowski's optimized GGUF repository.
+
+Usage:
+    python download_phi4_model.py         # Interactive mode
+    python download_phi4_model.py --auto  # Auto mode (no user input)
 """
 from pathlib import Path
 import sys
+import argparse
 
 try:
     from huggingface_hub import hf_hub_download
@@ -36,9 +41,12 @@ def get_available_memory_gb() -> float:
     total_gb = mem.total / (1024 ** 3)
     return available_gb, total_gb
 
-def select_quantization() -> tuple[str, float]:
+def select_quantization(auto_mode: bool = False) -> tuple[str, float]:
     """
     Select best quantization version based on available memory
+    
+    Args:
+        auto_mode: If True, skip user input and use auto-selected version
     
     Returns:
         (quant_name, memory_required): e.g. ("Q4_K_M", 3.5)
@@ -75,6 +83,12 @@ def select_quantization() -> tuple[str, float]:
     print(f"  Memory required: ~{mem_req:.1f} GB")
     print()
     
+    # In auto mode, skip user input
+    if auto_mode:
+        print(f"Auto mode: Using {quant_name}")
+        print()
+        return quant_name, mem_req
+    
     # Ask user if they want to override
     print("Available options:")
     for i, (q_name, q_mem, q_desc) in enumerate(QUANT_VERSIONS, 1):
@@ -96,13 +110,18 @@ def select_quantization() -> tuple[str, float]:
 
 def main():
     """Download the Phi-4 GGUF model with auto-selected quantization"""
+    # Parse arguments
+    parser = argparse.ArgumentParser(description="Download Phi-4 GGUF model")
+    parser.add_argument("--auto", action="store_true", help="Auto mode (no user input)")
+    args = parser.parse_args()
+    
     print("="*60)
     print("Phi-4 Model Download - Auto-Quantization Selection")
     print("="*60)
     print()
     
     # Select quantization based on memory
-    quant_name, mem_req = select_quantization()
+    quant_name, mem_req = select_quantization(auto_mode=args.auto)
     
     model_filename = f"microsoft_Phi-4-mini-instruct-{quant_name}.gguf"
     
@@ -121,11 +140,15 @@ def main():
         print(f"File size: {model_path.stat().st_size / (1024**3):.2f} GB")
         print()
         
-        user_input = input("Do you want to re-download? (y/N): ").strip().lower()
-        if user_input not in ('y', 'yes'):
-            print("Skipping download.")
-            print()
-            print(f"Model ready to use: {model_path}")
+        if not args.auto:
+            user_input = input("Do you want to re-download? (y/N): ").strip().lower()
+            if user_input not in ('y', 'yes'):
+                print("Skipping download.")
+                print()
+                print(f"Model ready to use: {model_path}")
+                return
+        else:
+            print("Auto mode: Model already exists, skipping download.")
             return
         
         print()
