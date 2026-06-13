@@ -55,14 +55,19 @@ class Phi4FieldMatcher:
         
         logger.info(f"Loading Phi-4 model from: {model_path}")
         
+        # Auto-detect optimal thread count (use half of CPU cores for efficiency)
+        import os
+        n_threads = max(1, os.cpu_count() // 2) if os.cpu_count() else 4
+        
         self.model = Llama(
             model_path=str(model_path),
-            n_ctx=4096,      # Context length
-            n_threads=4,     # CPU threads
+            n_ctx=4096,          # Context length
+            n_threads=n_threads, # Auto-detected CPU threads
+            n_gpu_layers=0,      # Force CPU-only (no GPU/NPU)
             verbose=False
         )
         
-        logger.info("Phi-4 model loaded successfully")
+        logger.info(f"Phi-4 model loaded successfully (using {n_threads} CPU threads)")
     
     def match_sheet_fields_to_yaml(
         self,

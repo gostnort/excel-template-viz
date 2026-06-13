@@ -37,9 +37,16 @@ python -m pip install --upgrade pip
 
 echo.
 echo Installing dependencies...
-pip install -r requirements.txt
+echo Note: Using pre-built wheels to avoid compilation requirements
+echo.
+pip install -r requirements.txt --prefer-binary
 if errorlevel 1 (
     echo ERROR: Failed to install dependencies
+    echo.
+    echo Troubleshooting:
+    echo - Ensure you have Python 3.9-3.12 (llama-cpp-python wheels may not support newer versions)
+    echo - Check your internet connection
+    echo - Try: pip install --upgrade pip
     pause
     exit /b 1
 )
