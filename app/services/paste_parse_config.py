@@ -8,7 +8,7 @@ import yaml
 from app.services.registry import TEMPLATES_DIR
 
 PASTE_CONFIG_SUFFIX = ".paste.yaml"
-RESERVED_TOP_KEYS = frozenset({"determiner", "order", "worksheet"})
+RESERVED_TOP_KEYS = frozenset({"determiner", "order", "worksheet", "sections"})
 
 
 @dataclass
@@ -25,6 +25,7 @@ class PasteParseConfig:
     field_rules: dict[str, list[PasteParseRule]]
     order: list[dict[str, Any]] | None = None
     worksheet: str | None = None
+    sections: list[dict[str, Any]] | None = None  # Section configurations for multi-area detection
 
 
 def paste_config_path(template_id: str) -> Path:
@@ -84,11 +85,17 @@ def config_from_dict(raw: dict[str, Any]) -> PasteParseConfig | None:
     if worksheet is not None:
         worksheet = str(worksheet).strip()
     
+    # Parse sections configuration
+    sections = raw.get("sections")
+    if sections is not None and not isinstance(sections, list):
+        sections = None
+    
     return PasteParseConfig(
         determiner=_normalize_determiner(str(raw.get("determiner", "tab"))),
         field_rules=field_rules,
         order=order,
         worksheet=worksheet,
+        sections=sections
     )
 
 
