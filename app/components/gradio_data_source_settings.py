@@ -12,6 +12,159 @@ from app.services.registry import TemplateConfig
 logger = logging.getLogger(__name__)
 
 
+def auto_load_datasource_config(
+    template: TemplateConfig | None,
+    credentials: Any
+) -> tuple:
+    """
+    Auto-load data source configuration when template changes
+    
+    Returns:
+        (oauth_status, credentials_state, sheet_url, connection_status, 
+         worksheet_group, worksheet_dropdown, id_column_dropdown, test_group)
+    """
+    if not template:
+        return (
+            "未授权",
+            credentials,
+            "",
+            "未连接",
+            gr.update(visible=False),
+            gr.update(choices=[], value=None),
+            gr.update(choices=[], value=None),
+            gr.update(visible=False)
+        )
+    
+    try:
+        from app.services.data_source import load_template_data_source
+        from app.services.google_sheets import authenticate_google_sheets_desktop, list_worksheets, fetch_sheet_preview
+        
+        # Try to load existing credentials if not provided
+        if not credentials:
+            try:
+                credentials = authenticate_google_sheets_desktop()
+                if credentials and credentials.valid:
+                    oauth_status_text = "✅ 已授权（自动加载）"
+                else:
+                    oauth_status_text = "未授权"
+                    credentials = None
+            except Exception:
+                oauth_status_text = "未授权"
+                credentials = None
+        else:
+            oauth_status_text = "✅ 已授权"
+        
+        # Load saved data source config
+        data_source = load_template_data_source(template.id)
+        
+        if not data_source:
+            # No saved config
+            return (
+                oauth_status_text,
+                credentials,
+                "",
+                "未配置",
+                gr.update(visible=False),
+                gr.update(choices=[], value=None),
+                gr.update(choices=[], value=None),
+                gr.update(visible=False)
+            )
+        
+        # Config exists - auto connect if credentials available
+        sheet_url_val = data_source.sheet_url
+        
+        if not credentials:
+            # Have config but no credentials
+            gr.Info(f"已加载配置，请先授权 Google 账号")
+            return (
+                oauth_status_text,
+                credentials,
+                sheet_url_val,
+                "需要授权",
+                gr.update(visible=False),
+                gr.update(choices=[], value=None),
+                gr.update(choices=[], value=None),
+                gr.update(visible=False)
+            )
+        
+        # Have both config and credentials - auto connect
+        try:
+            # List worksheets
+            worksheets = list_worksheets(credentials, sheet_url_val)
+            
+            if not worksheets:
+                return (
+                    oauth_status_text,
+                    credentials,
+                    sheet_url_val,
+                    "❌ 连接失败",
+                    gr.update(visible=False),
+                    gr.update(choices=[], value=None),
+                    gr.update(choices=[], value=None),
+                    gr.update(visible=False)
+                )
+            
+            # Check if saved worksheet exists
+            if data_source.worksheet_name not in worksheets:
+                gr.Warning(f"工作表 '{data_source.worksheet_name}' 不存在")
+                return (
+                    oauth_status_text,
+                    credentials,
+                    sheet_url_val,
+                    f"✅ 已连接 ({len(worksheets)} 个工作表)",
+                    gr.update(visible=True),
+                    gr.update(choices=worksheets, value=worksheets[0] if worksheets else None),
+                    gr.update(choices=[], value=None),
+                    gr.update(visible=False)
+                )
+            
+            # Load columns from worksheet
+            df, _ = fetch_sheet_preview(credentials, sheet_url_val, data_source.worksheet_name)
+            columns = df.columns if df.height > 0 else []
+            
+            # Check if saved ID column exists
+            id_col_val = data_source.id_column if data_source.id_column in columns else (columns[0] if columns else None)
+            
+            gr.Info(f"✅ 已自动连接：{data_source.worksheet_name}")
+            
+            return (
+                oauth_status_text,
+                credentials,
+                sheet_url_val,
+                f"✅ 已连接 ({len(worksheets)} 个工作表)",
+                gr.update(visible=True),
+                gr.update(choices=worksheets, value=data_source.worksheet_name),
+                gr.update(choices=columns, value=id_col_val),
+                gr.update(visible=True)
+            )
+            
+        except Exception as e:
+            logger.error(f"Auto-connect failed: {e}")
+            return (
+                oauth_status_text,
+                credentials,
+                sheet_url_val,
+                f"❌ 自动连接失败：{str(e)}",
+                gr.update(visible=False),
+                gr.update(choices=[], value=None),
+                gr.update(choices=[], value=None),
+                gr.update(visible=False)
+            )
+        
+    except Exception as e:
+        logger.error(f"Auto-load config failed: {e}")
+        return (
+            "未授权",
+            credentials,
+            "",
+            "未连接",
+            gr.update(visible=False),
+            gr.update(choices=[], value=None),
+            gr.update(choices=[], value=None),
+            gr.update(visible=False)
+        )
+
+
 def build_datasource_tab(
     current_template: gr.State,
     credentials_state: gr.State
@@ -116,6 +269,22 @@ def build_datasource_tab(
         components["test_result"] = test_result
     
     # Event bindings
+    
+    # Auto-load configuration when template changes
+    current_template.change(
+        fn=auto_load_datasource_config,
+        inputs=[current_template, credentials_state],
+        outputs=[
+            oauth_status,
+            credentials_state,
+            sheet_url,
+            connection_status,
+            worksheet_group,
+            worksheet_dropdown,
+            id_column_dropdown,
+            test_group
+        ]
+    )
     
     # OAuth authorization
     oauth_btn.click(
