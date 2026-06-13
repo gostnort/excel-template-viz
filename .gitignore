@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Streamlit
+.streamlit/secrets.toml
+.run.pid
+
+# Google OAuth 凭证（勿提交）
+credentials/
+*-service-account*.json
+oauth_token.json
+client_secret*.json
+app/oauth/
+
+# 本地模板副本（可选，若含敏感数据）
+templates/*.xlsx
+templates/*.json
+!templates/README.txt
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 本地视觉模型权重（app/vllm/ 下可整目录删除重装）
+app/vllm/
+
+# 导出 xlsx（打开/打印用）
+exports/
+
