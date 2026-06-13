@@ -188,30 +188,26 @@ def build_app() -> gr.Blocks:
         
         /* 模板侧边栏折叠 */
         .template-sidebar {
+            display: flex !important;
+            flex-direction: column !important;
             transition: opacity 0.2s ease, max-width 0.25s ease;
         }
         
-        .template-nav-header {
-            align-items: center !important;
-            flex-wrap: nowrap !important;
-            gap: 8px !important;
-            margin-bottom: 4px !important;
+        .template-nav-title p {
+            margin: 0 0 4px 0 !important;
         }
         
-        .template-nav-header .template-nav-title {
+        .template-sidebar .template-selector {
             flex: 1 1 auto !important;
-            min-width: 0 !important;
-        }
-        
-        .template-nav-header .template-nav-title p {
-            margin: 0 !important;
+            min-height: 0 !important;
         }
         
         .sidebar-toggle-btn {
             min-width: 110px !important;
             width: fit-content !important;
             flex: 0 0 auto !important;
-            margin: 0 !important;
+            margin: 12px 0 0 0 !important;
+            align-self: flex-start !important;
         }
         
         .sidebar-show-btn {
@@ -278,23 +274,23 @@ def build_app() -> gr.Blocks:
                 elem_id="template-sidebar",
                 elem_classes=["template-sidebar"],
             ) as sidebar_column:
-                with gr.Row(elem_classes=["template-nav-header"]):
-                    gr.Markdown(
-                        "## 选择模板",
-                        elem_classes=["template-nav-title"],
-                    )
-                    sidebar_toggle_btn = gr.Button(
-                        "◀ 隐藏模板",
-                        variant="secondary",
-                        size="sm",
-                        elem_classes=["sidebar-toggle-btn"],
-                    )
+                gr.Markdown(
+                    "## 选择模板",
+                    elem_classes=["template-nav-title", "template-nav-header"],
+                )
                 
                 template_selector = gr.Radio(
                     choices=[],
                     value=None,
                     show_label=False,
                     elem_classes=["template-selector"]
+                )
+                
+                sidebar_toggle_btn = gr.Button(
+                    "◀ 隐藏模板",
+                    variant="secondary",
+                    size="sm",
+                    elem_classes=["sidebar-toggle-btn"],
                 )
             
             # Right main area: Tabs
