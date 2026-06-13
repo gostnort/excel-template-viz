@@ -9,10 +9,88 @@ from pathlib import Path
 from typing import Any
 
 from app.services.registry import TemplateConfig
-from app.services.paste_parse_config import load_paste_parse_config, config_to_yaml, config_from_dict
+from app.services.paste_parse_config import (
+    load_paste_parse_config, config_to_yaml, config_from_dict,
+    ensure_config_exists, create_default_config_from_template
+)
 from app.services.phi4_field_matcher import create_field_matcher, find_model_file
 
 logger = logging.getLogger(__name__)
+
+
+def on_template_change_load_config(template: TemplateConfig | None) -> tuple:
+    """
+    Load configuration when template changes
+    
+    Returns:
+        (sections_enabled, sections_config_panel, input_area, move_direction, offset_value, sections_status)
+    """
+    if not template:
+        return (
+            gr.update(value=False),
+            gr.update(visible=False),
+            gr.update(value=""),
+            gr.update(value="down"),
+            gr.update(value=1),
+            "未配置多区域"
+        )
+    
+    try:
+        from pathlib import Path
+        
+        # Ensure config exists (create default if not)
+        template_path = Path(template.file_path)
+        ensure_config_exists(template.id, template_path)
+        
+        # Load config
+        paste_config = load_paste_parse_config(template.id)
+        
+        if not paste_config:
+            # Create default config
+            default_config = create_default_config_from_template(template_path)
+            sections = default_config.sections
+        else:
+            sections = paste_config.sections
+        
+        # If no sections, try to create default
+        if not sections:
+            try:
+                default_config = create_default_config_from_template(template_path)
+                sections = default_config.sections
+            except Exception as e:
+                logger.error(f"Failed to create default sections: {e}")
+                sections = None
+        
+        if sections and len(sections) > 0:
+            section = sections[0]
+            return (
+                gr.update(value=True),
+                gr.update(visible=True),
+                gr.update(value=section.get("input_area", "")),
+                gr.update(value=section.get("move_to", "down")),
+                gr.update(value=section.get("offset", 1)),
+                f"✓ 已加载区域配置：{section.get('input_area', '')}"
+            )
+        else:
+            return (
+                gr.update(value=False),
+                gr.update(visible=False),
+                gr.update(value=""),
+                gr.update(value="down"),
+                gr.update(value=1),
+                "未检测到区域配置"
+            )
+    
+    except Exception as e:
+        logger.error(f"Failed to load config: {e}")
+        return (
+            gr.update(value=False),
+            gr.update(visible=False),
+            gr.update(value=""),
+            gr.update(value="down"),
+            gr.update(value=1),
+            f"❌ 加载失败：{str(e)}"
+        )
 
 
 def build_config_tab(
@@ -148,6 +226,20 @@ def build_config_tab(
                 components["sections_status"] = sections_status
     
     # Event bindings
+    
+    # Load config when template changes
+    current_template.change(
+        fn=on_template_change_load_config,
+        inputs=[current_template],
+        outputs=[
+            sections_enabled,
+            sections_config_panel,
+            input_area,
+            move_direction,
+            offset_value,
+            sections_status
+        ]
+    )
     
     # YAML tab events
     yaml_load_btn.click(
