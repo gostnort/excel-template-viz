@@ -243,7 +243,7 @@ def build_app() -> gr.Blocks:
         
         .app-shutdown-btn button {
             font-size: 1rem !important;
-            font-weight: 600 !important;
+            font-weight: normal !important;
             padding: 10px 20px !important;
             min-height: 42px !important;
             min-width: 120px !important;
