@@ -75,48 +75,13 @@ echo Upgrading pip...
 %PYTHON_CMD% -m pip install --upgrade pip
 
 echo.
-echo Installing dependencies...
+echo Installing dependencies (pure Python, no compilation)...
 echo.
-
-REM Install base dependencies first (no compilation needed)
-pip install gradio pandas polars openpyxl gspread google-auth google-auth-oauthlib PyYAML Pillow huggingface-hub
+pip install -r requirements.txt
 if errorlevel 1 (
-    echo ERROR: Failed to install base dependencies
+    echo ERROR: Failed to install dependencies
     pause
     exit /b 1
-)
-
-echo.
-echo Installing llama-cpp-python (using pre-built wheel)...
-pip install llama-cpp-python --only-binary=llama-cpp-python
-if errorlevel 1 (
-    echo.
-    echo WARNING: No pre-built wheel available for your Python version
-    echo.
-    echo Your Python version may not be supported (requires Python 3.9-3.12)
-    echo Current Python:
-    python --version
-    echo.
-    echo Options:
-    echo 1. Install Python 3.11 (recommended, best wheel support)
-    echo 2. Allow compilation (requires cmake and MSVC, ~5-10 minutes)
-    echo.
-    choice /C 12 /N /M "Choose option (1 or 2): "
-    if errorlevel 2 (
-        echo.
-        echo Installing with compilation...
-        pip install llama-cpp-python
-        if errorlevel 1 (
-            echo ERROR: Compilation failed - cmake or MSVC not found
-            pause
-            exit /b 1
-        )
-    ) else (
-        echo.
-        echo Installation cancelled. Please install Python 3.11 and retry.
-        pause
-        exit /b 1
-    )
 )
 
 echo.
