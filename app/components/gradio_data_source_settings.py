@@ -436,25 +436,36 @@ def handle_worksheet_change(
     """Handle worksheet selection change"""
     if not worksheet_name or not sheet_url or not credentials:
         return gr.update(), gr.update(visible=False)
-    
+
     try:
         from app.services.google_sheets import fetch_sheet_preview
-        
+
         # Fetch preview to get columns
         df, _ = fetch_sheet_preview(credentials, sheet_url, worksheet_name)
-        
+
         if df.height == 0:
             gr.Warning("工作表为空")
             return gr.update(), gr.update(visible=False)
-        
+
         columns = df.columns
-        gr.Info(f"工作表有 {len(columns)} 列")
         
+        # Auto-save config with first column as default ID column
+        if template and columns:
+            default_id_col = columns[0]
+            if _save_datasource_config_internal(
+                template, sheet_url, worksheet_name, default_id_col, show_incomplete_warning=False
+            ):
+                gr.Info(f"✅ 工作表已保存 ({len(columns)} 列)")
+            else:
+                gr.Info(f"工作表有 {len(columns)} 列")
+        else:
+            gr.Info(f"工作表有 {len(columns)} 列")
+
         return (
             gr.update(choices=columns, value=columns[0] if columns else None),
             gr.update(visible=True)
         )
-        
+
     except Exception as e:
         logger.error(f"Worksheet loading failed: {e}")
         gr.Warning(f"加载工作表失败：{str(e)}")
