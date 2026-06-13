@@ -233,11 +233,6 @@ def build_config_tab(
             with gr.TabItem("YAML 配置"):
                 gr.Markdown("编辑模板的字段映射配置")
                 
-                with gr.Row():
-                    auto_config_btn = gr.Button("🤖 自动配置", variant="secondary")
-                    yaml_save_btn = gr.Button("💾 保存配置", variant="primary")
-                    yaml_validate_btn = gr.Button("✓ 验证语法", variant="secondary")
-                
                 yaml_editor = gr.Code(
                     label="YAML 配置内容",
                     language="yaml",
@@ -245,6 +240,11 @@ def build_config_tab(
                     value="",
                     interactive=True
                 )
+                
+                with gr.Row():
+                    auto_config_btn = gr.Button("🤖 自动配置", variant="secondary")
+                    yaml_save_btn = gr.Button("💾 保存配置", variant="primary")
+                    yaml_validate_btn = gr.Button("✓ 验证语法", variant="secondary")
                 
                 yaml_status = gr.Markdown("等待操作...")
                 
