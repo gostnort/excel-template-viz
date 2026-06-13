@@ -275,9 +275,9 @@ def test_refresh_data_entry_form_uses_configured_area():
     print("\n=== Test 6b: Refresh Data Entry Form ===")
 
     from app.components.gradio_template_form import (
-        DEFAULT_FIELDS_PER_ROW,
+        FORM_ROW_COUNT,
         MAX_FORM_FIELDS,
-        _field_row_count,
+        form_refresh_output_count,
         refresh_data_entry_form,
     )
     from app.services.registry import TemplateConfig
@@ -307,8 +307,7 @@ def test_refresh_data_entry_form_uses_configured_area():
     )
 
     result = refresh_data_entry_form(template, "List", [])
-    row_count = _field_row_count(DEFAULT_FIELDS_PER_ROW)
-    assert len(result) == 5 + row_count + MAX_FORM_FIELDS
+    assert len(result) == form_refresh_output_count()
 
     form_container_update = result[0]
     assert form_container_update.get("visible") is True
@@ -317,13 +316,17 @@ def test_refresh_data_entry_form_uses_configured_area():
     assert status_update.get("visible") is True
     assert "12" in str(status_update.get("value", ""))
 
-    row_updates = result[5:5 + row_count]
+    fields_container_update = result[5]
+    assert fields_container_update.get("visible") is True
+
+    row_updates = result[6:6 + FORM_ROW_COUNT]
     visible_rows = sum(1 for update in row_updates if update.get("visible") is True)
     assert visible_rows == 2, "12 fields at 7/row should show 2 rows"
 
-    field_updates = result[5 + row_count:]
+    field_updates = result[6 + FORM_ROW_COUNT:]
     visible_fields = sum(1 for update in field_updates if update.get("visible") is True)
     assert visible_fields == 12
+    assert len(field_updates) == MAX_FORM_FIELDS
 
     form_data = result[2]
     assert len(form_data) == 1
@@ -337,6 +340,89 @@ def test_refresh_data_entry_form_uses_configured_area():
     except OSError:
         pass
     print("[PASS] refresh_data_entry_form() loads fields from configured area")
+    return True
+
+
+def test_refresh_output_count_stable_with_custom_fields_per_row():
+    """Custom fields_per_row in YAML must not shift Gradio output alignment."""
+    print("\n=== Test 6c: Refresh Output Count With Custom fields_per_row ===")
+
+    import time
+    from openpyxl import Workbook
+
+    from app.components.gradio_template_form import (
+        FORM_ROW_COUNT,
+        MAX_FORM_FIELDS,
+        form_refresh_output_count,
+        refresh_data_entry_form,
+    )
+    from app.services.paste_parse_config import paste_config_path
+    from app.services.registry import TemplateConfig
+
+    template_id = "test_refresh_output_alignment"
+    temp_path = Path("tests/_tmp_refresh_output_alignment.xlsx")
+    temp_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path = paste_config_path(template_id)
+    template_dir = config_path.parent
+    template_dir.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        (
+            'determiner: "tab"\n'
+            "fields_per_row: 5\n"
+            "sections:\n"
+            '  - input_area: "A1:B1"\n'
+            '    move_to: "down"\n'
+            "    offset: 1\n"
+            "ColA:\n"
+            '  - filed: "ColA"\n'
+            "    index: 0\n"
+            "ColB:\n"
+            '  - filed: "ColB"\n'
+            "    index: 0\n"
+        ),
+        encoding="utf-8",
+    )
+
+    temp_path = Path("tests/_tmp_refresh_output_alignment.xlsx")
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Sheet1"
+    sheet["A1"] = "a"
+    sheet["B1"] = "b"
+    workbook.save(temp_path)
+    workbook.close()
+
+    template = TemplateConfig(
+        id=template_id,
+        display_name="Test",
+        description="",
+        file_path=temp_path,
+        sheet_name="",
+        header_row=0,
+        data_start_row=1,
+        config_path=template_dir / f"{template_id}.config.json",
+    )
+
+    t0 = time.perf_counter()
+    result = refresh_data_entry_form(template, "Sheet1", [])
+    elapsed = time.perf_counter() - t0
+
+    assert len(result) == form_refresh_output_count()
+    row_updates = result[6:6 + FORM_ROW_COUNT]
+    field_updates = result[6 + FORM_ROW_COUNT:]
+    assert len(row_updates) == FORM_ROW_COUNT
+    assert len(field_updates) == MAX_FORM_FIELDS
+    assert sum(1 for update in field_updates if update.get("visible") is True) == 2
+    assert elapsed < 2.0, f"refresh should stay fast without area scan, took {elapsed:.2f}s"
+
+    try:
+        config_path.unlink(missing_ok=True)
+        temp_path.unlink(missing_ok=True)
+        template_dir.rmdir()
+    except OSError:
+        pass
+
+    print("[PASS] refresh output count stays aligned with custom fields_per_row")
     return True
 
 
@@ -536,6 +622,7 @@ def run_all_tests():
         ("Sections Save to YAML", test_config_save_to_yaml_with_sections),
         ("Form Field Loading Helpers", test_form_field_loading_helpers),
         ("Refresh Data Entry Form", test_refresh_data_entry_form_uses_configured_area),
+        ("Refresh Output Alignment", test_refresh_output_count_stable_with_custom_fields_per_row),
         ("YAML Auto-Generation from Sections", test_yaml_auto_generation_from_sections),
         ("fields_per_row Config", test_fields_per_row_config),
         ("Import History Restore", test_import_history_restore),
