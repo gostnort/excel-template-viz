@@ -174,60 +174,7 @@ def build_config_tab(
         gr.Markdown("## 参数配置")
         
         with gr.Tabs() as config_tabs:
-            # Sub-tab 1: YAML Configuration
-            with gr.TabItem("YAML 配置"):
-                gr.Markdown("编辑模板的字段映射配置")
-                
-                yaml_editor = gr.Code(
-                    label="YAML 配置内容",
-                    language="yaml",
-                    lines=20,
-                    value="",
-                    interactive=True
-                )
-                
-                with gr.Row():
-                    yaml_load_btn = gr.Button("🔄 重新加载", variant="secondary")
-                    yaml_save_btn = gr.Button("💾 保存配置", variant="primary")
-                    yaml_validate_btn = gr.Button("✓ 验证语法", variant="secondary")
-                
-                yaml_status = gr.Markdown("等待操作...")
-                
-                components["yaml_editor"] = yaml_editor
-                components["yaml_load_btn"] = yaml_load_btn
-                components["yaml_save_btn"] = yaml_save_btn
-                components["yaml_validate_btn"] = yaml_validate_btn
-                components["yaml_status"] = yaml_status
-            
-            # Sub-tab 2: LLM Settings
-            with gr.TabItem("LLM 字段匹配"):
-                gr.Markdown("使用 Phi-4 模型智能匹配字段（首次使用会自动下载）")
-                
-                # Test LLM matching
-                with gr.Row():
-                    test_sheet_cols = gr.Dropdown(
-                        label="测试 Sheet 列名",
-                        choices=[],
-                        value=None,
-                        multiselect=True,
-                        interactive=True,
-                        info='从已连接的 Google Sheet 中选择列（如未显示选项，请先在"数据源"标签页连接 Sheet）'
-                    )
-                
-                test_llm_btn = gr.Button("🧪 测试 LLM 匹配", variant="primary")
-                
-                test_result = gr.Code(
-                    label="匹配结果",
-                    language="json",
-                    lines=15,
-                    value=""
-                )
-                
-                components["test_sheet_cols"] = test_sheet_cols
-                components["test_llm_btn"] = test_llm_btn
-                components["test_result"] = test_result
-            
-            # Sub-tab 3: Sections Configuration (for multi-area templates)
+            # Sub-tab 1: Sections Configuration (for multi-area templates)
             with gr.TabItem("区域配置"):
                 gr.Markdown("配置多区域检测（适用于重复区域模板）")
                 
@@ -265,6 +212,59 @@ def build_config_tab(
                 components["offset_value"] = offset_value
                 components["sections_save_btn"] = sections_save_btn
                 components["sections_status"] = sections_status
+            
+            # Sub-tab 2: YAML Configuration
+            with gr.TabItem("YAML 配置"):
+                gr.Markdown("编辑模板的字段映射配置")
+                
+                yaml_editor = gr.Code(
+                    label="YAML 配置内容",
+                    language="yaml",
+                    lines=20,
+                    value="",
+                    interactive=True
+                )
+                
+                with gr.Row():
+                    yaml_load_btn = gr.Button("🔄 重新加载", variant="secondary")
+                    yaml_save_btn = gr.Button("💾 保存配置", variant="primary")
+                    yaml_validate_btn = gr.Button("✓ 验证语法", variant="secondary")
+                
+                yaml_status = gr.Markdown("等待操作...")
+                
+                components["yaml_editor"] = yaml_editor
+                components["yaml_load_btn"] = yaml_load_btn
+                components["yaml_save_btn"] = yaml_save_btn
+                components["yaml_validate_btn"] = yaml_validate_btn
+                components["yaml_status"] = yaml_status
+            
+            # Sub-tab 3: LLM Settings
+            with gr.TabItem("LLM 字段匹配"):
+                gr.Markdown("使用 Phi-4 模型智能匹配字段（首次使用会自动下载）")
+                
+                # Test LLM matching
+                with gr.Row():
+                    test_sheet_cols = gr.Dropdown(
+                        label="测试 Sheet 列名",
+                        choices=[],
+                        value=None,
+                        multiselect=True,
+                        interactive=True,
+                        info='从已连接的 Google Sheet 中选择列（如未显示选项，请先在"数据源"标签页连接 Sheet）'
+                    )
+                
+                test_llm_btn = gr.Button("🧪 测试 LLM 匹配", variant="primary")
+                
+                test_result = gr.Code(
+                    label="匹配结果",
+                    language="json",
+                    lines=15,
+                    value=""
+                )
+                
+                components["test_sheet_cols"] = test_sheet_cols
+                components["test_llm_btn"] = test_llm_btn
+                components["test_result"] = test_result
     
     # Event bindings
     
