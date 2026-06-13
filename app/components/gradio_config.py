@@ -321,13 +321,7 @@ def build_config_tab(
         inputs=[sections_enabled],
         outputs=[sections_config_panel]
     )
-    
-    sections_save_btn.click(
-        fn=handle_sections_save,
-        inputs=[current_template, input_area, move_direction, offset_value],
-        outputs=[sections_status]
-    )
-    
+
     return components
 
 

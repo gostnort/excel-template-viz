@@ -185,6 +185,17 @@ def build_app() -> gr.Blocks:
         .toast-item.svelte-1qhecvt {
             animation: toast-fade-out 0.3s ease-in-out 2s forwards !important;
         }
+        
+        /* 模板侧边栏折叠 */
+        .template-sidebar {
+            transition: opacity 0.2s ease, max-width 0.25s ease;
+        }
+        
+        .sidebar-toggle-btn {
+            min-width: 110px !important;
+            width: fit-content !important;
+            margin-bottom: 4px !important;
+        }
         """
     ) as app:
         # Global state management
@@ -192,18 +203,24 @@ def build_app() -> gr.Blocks:
         credentials_state = gr.State(value=None)  # Google OAuth credentials
         form_data_state = gr.State(value=[])  # list[dict[str, str]]
         detected_areas_state = gr.State(value=[])  # list[DetectedArea]
+        sidebar_visible = gr.State(value=True)
         
         gr.Markdown("# Excel 模板可视化")
         
         with gr.Row():
             # Left sidebar: Template selector
-            with gr.Column(scale=1, min_width=200):
+            with gr.Column(
+                scale=1,
+                min_width=200,
+                elem_id="template-sidebar",
+                elem_classes=["template-sidebar"],
+            ) as sidebar_column:
                 gr.Markdown("## 选择模板")
                 
                 template_selector = gr.Radio(
                     choices=[],
                     value=None,
-                    label="模板列表",
+                    show_label=False,
                     elem_classes=["template-selector"]
                 )
                 
@@ -217,6 +234,13 @@ def build_app() -> gr.Blocks:
             
             # Right main area: Tabs
             with gr.Column(scale=4):
+                sidebar_toggle_btn = gr.Button(
+                    "◀ 隐藏模板",
+                    variant="secondary",
+                    size="sm",
+                    elem_classes=["sidebar-toggle-btn"],
+                )
+                
                 with gr.Tabs(elem_classes=["main-tabs"]) as tabs:
                     # Tab 1: Data Entry
                     with gr.TabItem("数据录入", id="data_entry"):
@@ -254,10 +278,43 @@ def build_app() -> gr.Blocks:
         )
         
         # Event: Template selection changed
+        from app.components.gradio_template_form import refresh_data_entry_form
+
         template_selector.change(
             fn=on_template_change,
             inputs=[template_selector, current_template],
-            outputs=[current_template, *form_components["update_on_template_change"]]
+            outputs=[current_template, form_components["sheet_selector"]],
+        ).then(
+            fn=refresh_data_entry_form,
+            inputs=[
+                current_template,
+                form_components["sheet_selector"],
+                form_components["area_selector"],
+                form_data_state,
+            ],
+            outputs=form_components["form_refresh_outputs"],
+        )
+
+        from app.components.gradio_config import handle_sections_save
+
+        config_components["sections_save_btn"].click(
+            fn=handle_sections_save,
+            inputs=[
+                current_template,
+                config_components["input_area"],
+                config_components["move_direction"],
+                config_components["offset_value"],
+            ],
+            outputs=[config_components["sections_status"]],
+        ).then(
+            fn=refresh_data_entry_form,
+            inputs=[
+                current_template,
+                form_components["sheet_selector"],
+                form_components["area_selector"],
+                form_data_state,
+            ],
+            outputs=form_components["form_refresh_outputs"],
         )
         
         # Cross-tab event: Update LLM test columns when worksheet changes
@@ -268,6 +325,13 @@ def build_app() -> gr.Blocks:
             outputs=[config_components["test_sheet_cols"]]
         )
         
+        # Event: Sidebar toggle
+        sidebar_toggle_btn.click(
+            fn=toggle_sidebar_visibility,
+            inputs=[sidebar_visible],
+            outputs=[sidebar_column, sidebar_visible, sidebar_toggle_btn],
+        )
+        
         # Event: Shutdown button
         shutdown_btn.click(
             fn=handle_shutdown,
@@ -275,6 +339,20 @@ def build_app() -> gr.Blocks:
         )
     
     return app
+
+
+def _sidebar_toggle_label(is_visible: bool) -> str:
+    return "◀ 隐藏模板" if is_visible else "▶ 显示模板"
+
+
+def toggle_sidebar_visibility(is_visible: bool) -> tuple[Any, bool, Any]:
+    """Toggle template selector sidebar visibility."""
+    new_visible = not is_visible
+    return (
+        gr.update(visible=new_visible),
+        new_visible,
+        gr.update(value=_sidebar_toggle_label(new_visible)),
+    )
 
 
 def load_template_list() -> gr.Dropdown:
@@ -330,42 +408,30 @@ def handle_shutdown():
 def on_template_change(
     template_name: str | None,
     current_template: TemplateConfig | None
-) -> tuple[Any, Any, Any, Any]:
+) -> tuple[Any, Any]:
     """
     Handle template selection change
-    
-    Returns: (current_template, form_container, sheet_selector, area_selector)
+
+    Returns: (current_template, sheet_selector)
     """
     if not template_name:
-        # Return 4 values for all outputs
-        return (
-            None,                           # current_template
-            gr.update(visible=False),       # form_container
-            gr.update(choices=[], value=None),  # sheet_selector
-            gr.update(visible=False)        # area_selector
-        )
-    
+        return None, gr.update(choices=[], value=None)
+
     try:
+        from app.components.gradio_template_form import resolve_default_sheet_name
         from app.services.excel_parser import list_sheet_names
         from pathlib import Path
-        
-        # Find template config
+
         templates = load_templates()
         template_dict = {t.display_name: t for t in templates}
-        
+
         if template_name not in template_dict:
             gr.Warning(f"模板 '{template_name}' 未找到")
-            return (
-                None,
-                gr.update(visible=False),
-                gr.update(choices=[], value=None),
-                gr.update(visible=False)
-            )
-        
+            return None, gr.update(choices=[], value=None)
+
         new_template = template_dict[template_name]
         logger.info(f"Switched to template: {new_template.id}")
-        
-        # Load sheet names from template
+
         try:
             sheet_names = list_sheet_names(Path(new_template.file_path))
             if not sheet_names:
@@ -374,23 +440,16 @@ def on_template_change(
         except Exception as e:
             logger.error(f"Failed to load sheet names: {e}")
             sheet_names = []
-        
+
+        default_sheet = resolve_default_sheet_name(new_template, sheet_names)
         gr.Info(f"已切换到模板：{template_name}")
-        
-        # Return 4 values matching outputs
+
         return (
-            new_template,                                  # current_template
-            gr.update(visible=True),                       # form_container
-            gr.update(choices=sheet_names, value=sheet_names[0] if sheet_names else None),  # sheet_selector
-            gr.update(visible=False)                       # area_selector (hidden initially)
+            new_template,
+            gr.update(choices=sheet_names, value=default_sheet),
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to change template: {e}")
         gr.Warning(f"切换模板失败：{str(e)}")
-        return (
-            None,
-            gr.update(visible=False),
-            gr.update(choices=[], value=None),
-            gr.update(visible=False)
-        )
+        return None, gr.update(choices=[], value=None)

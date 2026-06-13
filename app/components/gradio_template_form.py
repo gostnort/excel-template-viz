@@ -23,6 +23,238 @@ from app.services.import_history import (
 
 logger = logging.getLogger(__name__)
 
+MAX_FORM_FIELDS = 40
+COLS_PER_ROW = 11
+
+
+def resolve_default_sheet_name(
+    template: TemplateConfig,
+    workbook_sheets: list[str],
+) -> str | None:
+    """Prefer paste-config worksheet, then template default, then first sheet."""
+    paste_config = load_paste_parse_config(template.id)
+    preferred: list[str] = []
+    if paste_config and paste_config.worksheet:
+        preferred.append(paste_config.worksheet)
+    if template.sheet_name:
+        preferred.append(template.sheet_name)
+    for name in preferred:
+        target = name.strip().lower()
+        for sheet in workbook_sheets:
+            if sheet.strip().lower() == target:
+                return sheet
+    return workbook_sheets[0] if workbook_sheets else None
+
+
+def get_form_field_headers(template_id: str) -> list[str]:
+    """Load editable field names from paste parse config."""
+    paste_config = load_paste_parse_config(template_id)
+    if not paste_config:
+        return []
+
+    headers = [name for name in paste_config.field_rules if name.strip() != "order"]
+    if paste_config.order:
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for item in paste_config.order:
+            if not isinstance(item, dict):
+                continue
+            field_name = str(item.get("filed", "")).strip()
+            if field_name and field_name in paste_config.field_rules and field_name not in seen:
+                ordered.append(field_name)
+                seen.add(field_name)
+        for header in headers:
+            if header not in seen:
+                ordered.append(header)
+        return ordered
+    return headers
+
+
+def read_area_form_values(
+    workbook_path: Path,
+    sheet_name: str,
+    area_range: str,
+    headers: list[str],
+) -> dict[str, str]:
+    """Read one template row from an Excel area and map values to field headers."""
+    from openpyxl import load_workbook
+
+    from app.services.excel_parser import format_cell_display, resolve_sheet_name
+    from app.services.section_detector import parse_area_range
+
+    coords = parse_area_range(area_range)
+    resolved_sheet = resolve_sheet_name(workbook_path, sheet_name)
+    wb = load_workbook(workbook_path, read_only=True, data_only=True)
+    try:
+        ws = wb[resolved_sheet]
+        values: dict[str, str] = {}
+        area_cols = coords.end_col - coords.start_col + 1
+        area_rows = coords.end_row - coords.start_row + 1
+
+        if len(headers) <= area_cols and area_rows == 1:
+            for index, header in enumerate(headers):
+                cell = ws.cell(coords.start_row, coords.start_col + index)
+                values[header] = format_cell_display(cell.value)
+            return values
+
+        pos = 0
+        for row_idx in range(coords.start_row, coords.end_row + 1):
+            for col_idx in range(coords.start_col, coords.end_col + 1):
+                if pos >= len(headers):
+                    return values
+                cell = ws.cell(row_idx, col_idx)
+                values[headers[pos]] = format_cell_display(cell.value)
+                pos += 1
+        return values
+    finally:
+        wb.close()
+
+
+def _empty_field_updates() -> list[gr.update]:
+    return [gr.update(visible=False) for _ in range(MAX_FORM_FIELDS)]
+
+
+def _build_field_updates(
+    headers: list[str],
+    row_values: dict[str, str],
+) -> tuple[list[gr.update], gr.update]:
+    updates: list[gr.update] = []
+    for index in range(MAX_FORM_FIELDS):
+        if index < len(headers):
+            header = headers[index]
+            updates.append(
+                gr.update(
+                    label=header,
+                    value=row_values.get(header, ""),
+                    visible=True,
+                    interactive=True,
+                )
+            )
+        else:
+            updates.append(gr.update(visible=False))
+    status = gr.update(
+        value=f"已加载 {len(headers)} 个字段",
+        visible=len(headers) == 0,
+    )
+    return updates, status
+
+
+def _area_index_from_choice(area_choice: str | None) -> int:
+    if not area_choice:
+        return 0
+    if area_choice.startswith("区域 "):
+        try:
+            return max(int(area_choice.split()[1]) - 1, 0)
+        except (IndexError, ValueError):
+            return 0
+    return 0
+
+
+def _inactive_form_refresh(form_data: list[dict[str, str]]) -> tuple:
+    field_updates = _empty_field_updates()
+    return (
+        gr.update(visible=False),
+        gr.update(visible=False),
+        [],
+        form_data,
+        gr.update(choices=[], value=None),
+        gr.update(value="请先选择模板和工作表", visible=True),
+        *field_updates,
+    )
+
+
+def refresh_data_entry_form(
+    template: TemplateConfig | None,
+    sheet_name: str | None,
+    area_choice: str | None,
+    form_data: list[dict[str, str]],
+) -> tuple:
+    """
+    Detect areas and populate dynamic form fields from paste/sections config.
+
+    Returns updates for:
+    area_selector, form_container, detected_areas_state, form_data_state,
+    row_selector, fields_status, *form_field_boxes
+    """
+    if not template or not sheet_name:
+        return _inactive_form_refresh(form_data)
+
+    headers = get_form_field_headers(template.id)
+    if not headers:
+        gr.Warning("未找到字段配置，请先在「参数配置」中保存 YAML 或区域配置")
+        inactive = _inactive_form_refresh(form_data)
+        return (
+            inactive[0],
+            gr.update(visible=True),
+            inactive[2],
+            inactive[3],
+            inactive[4],
+            gr.update(value="未找到字段配置，请先在「参数配置」中保存配置", visible=True),
+            *inactive[6:],
+        )
+
+    paste_config = load_paste_parse_config(template.id)
+    detected_areas = []
+    area_selector_update = gr.update(visible=False)
+    active_area_range: str | None = None
+
+    if paste_config and paste_config.sections:
+        sections = parse_sections_from_yaml({"sections": paste_config.sections})
+        if sections:
+            try:
+                detected_areas = detect_multi_areas(
+                    Path(template.file_path),
+                    sheet_name,
+                    sections[0],
+                )
+            except Exception as exc:
+                logger.error(f"Area detection failed: {exc}")
+                gr.Warning(f"区域检测失败：{exc}")
+
+    if detected_areas:
+        if len(detected_areas) > 1:
+            area_choices = [f"区域 {area.index} ({area.area})" for area in detected_areas]
+            selected_choice = area_choice if area_choice in area_choices else area_choices[0]
+            area_selector_update = gr.update(
+                choices=area_choices,
+                value=selected_choice,
+                visible=True,
+            )
+            area_index = _area_index_from_choice(selected_choice)
+        else:
+            area_selector_update = gr.update(visible=False)
+            area_index = 0
+        if 0 <= area_index < len(detected_areas):
+            active_area_range = detected_areas[area_index].area
+    elif paste_config and paste_config.sections:
+        section = paste_config.sections[0]
+        active_area_range = str(section.get("input_area", "")).strip() or None
+
+    row_values: dict[str, str] = {header: "" for header in headers}
+    if active_area_range:
+        try:
+            row_values = read_area_form_values(
+                Path(template.file_path),
+                sheet_name,
+                active_area_range,
+                headers,
+            )
+        except Exception as exc:
+            logger.error(f"Failed to read area values: {exc}")
+            gr.Warning(f"读取区域数据失败：{exc}")
+
+    form_data = [row_values]
+    field_updates, status_update = _build_field_updates(headers, row_values)
+    return (
+        area_selector_update,
+        gr.update(visible=True),
+        detected_areas,
+        form_data,
+        gr.update(choices=["Row 1"], value="Row 1"),
+        status_update,
+        *field_updates,
+    )
+
 
 def update_import_stats(template: TemplateConfig | None) -> str:
     """
@@ -123,18 +355,20 @@ def build_form_tab(
             )
             components["row_selector"] = row_selector
             
-            # Dynamic form fields (will be populated dynamically)
-            # For now, create placeholder fields
-            form_fields = {}
+            fields_status = gr.Markdown("字段加载中...", visible=True)
+            components["fields_status"] = fields_status
+
+            form_field_boxes: list[gr.Textbox] = []
             with gr.Column() as fields_container:
-                # Placeholder - actual fields will be created dynamically
-                placeholder_field = gr.Textbox(
-                    label="字段加载中...",
-                    interactive=False,
-                    visible=True
-                )
-            
-            components["form_fields"] = form_fields
+                for index in range(MAX_FORM_FIELDS):
+                    field_box = gr.Textbox(
+                        label=f"字段 {index + 1}",
+                        visible=False,
+                        interactive=True,
+                    )
+                    form_field_boxes.append(field_box)
+
+            components["form_field_boxes"] = form_field_boxes
             components["fields_container"] = fields_container
         
         components["form_container"] = form_container
@@ -204,11 +438,26 @@ def build_form_tab(
         outputs=[import_stats]
     )
     
-    # Sheet selector change
+    form_refresh_outputs = [
+        area_selector,
+        form_container,
+        detected_areas_state,
+        form_data_state,
+        row_selector,
+        fields_status,
+        *form_field_boxes,
+    ]
+
     sheet_selector.change(
-        fn=on_sheet_change,
-        inputs=[sheet_selector, current_template],
-        outputs=[area_selector, form_container, detected_areas_state]
+        fn=refresh_data_entry_form,
+        inputs=[current_template, sheet_selector, area_selector, form_data_state],
+        outputs=form_refresh_outputs,
+    )
+
+    area_selector.change(
+        fn=refresh_data_entry_form,
+        inputs=[current_template, sheet_selector, area_selector, form_data_state],
+        outputs=form_refresh_outputs,
     )
     
     # Refresh button for bulk import
@@ -260,75 +509,10 @@ def build_form_tab(
         outputs=[gr.File()]
     )
     
-    # Components that need updating on template change
-    components["update_on_template_change"] = [
-        form_container,
-        sheet_selector,
-        area_selector
-    ]
-    
+    components["form_refresh_outputs"] = form_refresh_outputs
+    components["update_on_template_change"] = [sheet_selector]
+
     return components
-
-
-def on_sheet_change(
-    sheet_name: str | None,
-    template: TemplateConfig | None
-) -> tuple:
-    """
-    Handle sheet selection change
-    
-    Returns: (area_selector, form_container, detected_areas_state)
-    """
-    if not sheet_name or not template:
-        return gr.update(visible=False), gr.update(visible=False), []
-    
-    try:
-        # Load paste config to check for sections
-        paste_config = load_paste_parse_config(template.id)
-        
-        if paste_config and paste_config.sections:
-            # Multi-area template - detect areas
-            sections = parse_sections_from_yaml({"sections": paste_config.sections})
-            if sections:
-                section_config = sections[0]  # Use first section config
-                
-                try:
-                    detected_areas = detect_multi_areas(
-                        Path(template.file_path),
-                        sheet_name,
-                        section_config
-                    )
-                    
-                    if len(detected_areas) > 1:
-                        # Show area selector and return detected areas
-                        area_choices = [f"区域 {a.index} ({a.area_range})" for a in detected_areas]
-                        return (
-                            gr.update(choices=area_choices, value=area_choices[0], visible=True),
-                            gr.update(visible=True),
-                            detected_areas  # Update state with detected areas
-                        )
-                    else:
-                        # Single area detected
-                        return (
-                            gr.update(visible=False),
-                            gr.update(visible=True),
-                            detected_areas if detected_areas else []
-                        )
-                except Exception as e:
-                    logger.error(f"Area detection failed: {e}")
-                    gr.Warning(f"区域检测失败：{str(e)}")
-        
-        # Single area or detection failed - show form directly
-        return (
-            gr.update(visible=False),
-            gr.update(visible=True),
-            []  # No detected areas
-        )
-        
-    except Exception as e:
-        logger.error(f"Sheet change error: {e}")
-        gr.Warning(f"切换工作表失败：{str(e)}")
-        return gr.update(visible=False), gr.update(visible=False), []
 
 
 def handle_refresh_unrecorded(

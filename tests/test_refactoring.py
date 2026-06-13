@@ -206,6 +206,63 @@ def test_config_save_to_yaml_with_sections():
     return True
 
 
+def test_form_field_loading_helpers():
+    """Test form header resolution and default sheet selection."""
+    print("\n=== Test 6: Form Field Loading Helpers ===")
+
+    from app.components.gradio_template_form import (
+        get_form_field_headers,
+        read_area_form_values,
+        resolve_default_sheet_name,
+    )
+    from app.services.registry import TemplateConfig
+    from openpyxl import Workbook
+
+    headers = get_form_field_headers("Ginger_Lots")
+    assert headers, "Ginger_Lots paste config should expose field headers"
+    assert "P.O. No." in headers, "Expected template field in headers"
+    print("[PASS] get_form_field_headers() loads configured fields")
+
+    template = TemplateConfig(
+        id="Ginger_Lots",
+        display_name="Ginger Lots",
+        description="",
+        file_path=Path("templates/Ginger_Lots.xlsx"),
+        sheet_name="",
+        header_row=0,
+        data_start_row=1,
+        config_path=Path("templates/Ginger_Lots.config.json"),
+    )
+    resolved = resolve_default_sheet_name(template, ["Summary", "List", "Archive"])
+    assert resolved == "List", "Paste config worksheet should be preferred"
+    print("[PASS] resolve_default_sheet_name() prefers paste config worksheet")
+
+    temp_path = Path("tests/_tmp_form_area.xlsx")
+    temp_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "List"
+    sheet["A2"] = "24"
+    sheet["B2"] = "06"
+    sheet["C2"] = "13"
+    sheet["D2"] = "PO-001"
+    workbook.save(temp_path)
+
+    values = read_area_form_values(
+        temp_path,
+        "List",
+        "A2:D2",
+        ["YY", "MM", "DD", "P.O. No."],
+    )
+    temp_path.unlink(missing_ok=True)
+
+    assert values["YY"] == "24"
+    assert values["P.O. No."] == "PO-001"
+    print("[PASS] read_area_form_values() maps area cells to headers")
+
+    return True
+
+
 def run_all_tests():
     """Run all tests"""
     print("=" * 60)
@@ -218,6 +275,7 @@ def run_all_tests():
         ("Data Source Config", test_data_source_config),
         ("ID Field Finder", test_id_field_finder),
         ("Sections Save to YAML", test_config_save_to_yaml_with_sections),
+        ("Form Field Loading Helpers", test_form_field_loading_helpers),
     ]
     
     passed = 0
