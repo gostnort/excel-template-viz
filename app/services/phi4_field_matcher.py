@@ -2,6 +2,7 @@
 Phi-4 GGUF Field Matcher
 
 Uses Phi-4-mini-instruct GGUF model to match Google Sheets fields to YAML configuration parameters.
+Supports multiple quantization levels - automatically selects the downloaded version.
 """
 import json
 import logging
@@ -11,8 +12,37 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Default model path
-DEFAULT_MODEL_PATH = Path("models/phi4/Phi-4-mini-instruct-Q4_K_M.gguf")
+# Model directory
+MODEL_DIR = Path("models/phi4")
+
+# Supported quantization versions (in preference order)
+QUANT_VERSIONS = ["Q8_0", "Q6_K", "Q5_K_M", "Q4_K_M", "Q3_K_M", "Q2_K"]
+
+
+def find_model_file() -> Path | None:
+    """
+    Find the downloaded GGUF model file
+    
+    Returns:
+        Path to the model file, or None if not found
+    """
+    if not MODEL_DIR.exists():
+        return None
+    
+    # Try to find any quantized version
+    for quant in QUANT_VERSIONS:
+        model_file = MODEL_DIR / f"microsoft_Phi-4-mini-instruct-{quant}.gguf"
+        if model_file.exists():
+            logger.info(f"Found model: {model_file.name}")
+            return model_file
+    
+    # Try legacy format
+    legacy_file = MODEL_DIR / "Phi-4-mini-instruct-Q4_K_M.gguf"
+    if legacy_file.exists():
+        logger.info(f"Found legacy model: {legacy_file.name}")
+        return legacy_file
+    
+    return None
 
 
 class Phi4FieldMatcher:
@@ -28,7 +58,7 @@ class Phi4FieldMatcher:
         Initialize Phi-4 field matcher
         
         Args:
-            model_path: Path to Phi-4 GGUF model file. If None, uses default path.
+            model_path: Path to Phi-4 GGUF model file. If None, auto-detects from MODEL_DIR.
         
         Raises:
             FileNotFoundError: If model file doesn't exist
@@ -42,18 +72,24 @@ class Phi4FieldMatcher:
                 "Please run: pip install llama-cpp-python"
             ) from exc
         
+        # Auto-detect model path if not provided
         if model_path is None:
-            model_path = DEFAULT_MODEL_PATH
+            model_path = find_model_file()
+            if model_path is None:
+                raise FileNotFoundError(
+                    f"Phi-4 model not found in: {MODEL_DIR}\n"
+                    f"Please run: python scripts/download_phi4_model.py"
+                )
         else:
             model_path = Path(model_path)
-        
-        if not model_path.exists():
-            raise FileNotFoundError(
-                f"Phi-4 model not found at: {model_path}\n"
-                f"Please run: python scripts/download_phi4_model.py"
-            )
+            if not model_path.exists():
+                raise FileNotFoundError(
+                    f"Phi-4 model not found at: {model_path}\n"
+                    f"Please run: python scripts/download_phi4_model.py"
+                )
         
         logger.info(f"Loading Phi-4 model from: {model_path}")
+        logger.info(f"Model size: {model_path.stat().st_size / (1024**3):.2f} GB")
         
         # Auto-detect optimal thread count (use half of CPU cores for efficiency)
         import os
