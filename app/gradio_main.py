@@ -29,6 +29,47 @@ def build_app() -> gr.Blocks:
         .template-selector { font-size: 1.1em !important; }
         .main-tabs { margin-top: 10px; }
         
+        /* Radio 按钮容器：移除内边距，让选项占满宽度 */
+        .template-selector .wrap.svelte-e4x47i {
+            padding: 0 !important;
+            gap: 2px !important;
+        }
+        
+        /* Radio 按钮标签：占满宽度 */
+        .template-selector .wrap.svelte-e4x47i > label {
+            width: 100% !important;
+            margin: 0 !important;
+            padding: 10px 16px !important;
+            box-shadow: none !important;
+            border-radius: 4px !important;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            display: flex !important;
+            align-items: center !important;
+        }
+        
+        /* 未选中状态 */
+        .template-selector .wrap.svelte-e4x47i > label:not(:has(input:checked)) {
+            background: transparent !important;
+        }
+        
+        /* 未选中状态悬停 */
+        .template-selector .wrap.svelte-e4x47i > label:not(:has(input:checked)):hover {
+            background: #f3f4f6 !important;
+        }
+        
+        /* 选中状态：蓝色背景，占满宽度，无阴影 */
+        .template-selector .wrap.svelte-e4x47i > label:has(input:checked) {
+            background: #6366f1 !important;
+            color: white !important;
+            box-shadow: none !important;
+        }
+        
+        /* Radio 圆点颜色调整 */
+        .template-selector input[type="radio"]:checked {
+            accent-color: white !important;
+        }
+        
         /* Toast 通知样式优化 */
         .toast-wrap.svelte-1qhecvt {
             animation-duration: 0.2s !important;
