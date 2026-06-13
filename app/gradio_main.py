@@ -295,7 +295,7 @@ def build_app() -> gr.Blocks:
             outputs=form_components["form_refresh_outputs"],
         )
 
-        from app.components.gradio_config import handle_sections_save
+        from app.components.gradio_config import handle_sections_save, handle_yaml_load
 
         config_components["sections_save_btn"].click(
             fn=handle_sections_save,
@@ -306,6 +306,13 @@ def build_app() -> gr.Blocks:
                 config_components["offset_value"],
             ],
             outputs=[config_components["sections_status"]],
+        ).then(
+            fn=handle_yaml_load,
+            inputs=[current_template],
+            outputs=[
+                config_components["yaml_editor"],
+                config_components["yaml_status"],
+            ],
         ).then(
             fn=refresh_data_entry_form,
             inputs=[

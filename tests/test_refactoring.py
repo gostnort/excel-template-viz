@@ -263,6 +263,72 @@ def test_form_field_loading_helpers():
     return True
 
 
+def test_yaml_auto_generation_from_sections():
+    """Test ensure_config_exists + sections save produces loadable YAML."""
+    print("\n=== Test 7: YAML Auto-Generation from Sections ===")
+
+    from openpyxl import Workbook
+    from app.components.gradio_config import handle_sections_save, handle_yaml_load
+    from app.services.paste_parse_config import (
+        paste_config_path,
+        load_paste_parse_config,
+    )
+    from app.services.registry import TemplateConfig
+
+    template_id = "test_yaml_auto_gen"
+    template_dir = Path("templates") / template_id
+    template_dir.mkdir(parents=True, exist_ok=True)
+    template_path = template_dir / f"{template_id}.xlsx"
+    config_path = paste_config_path(template_id)
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Data"
+    sheet["A1"] = "Name"
+    sheet["B1"] = "Value"
+    sheet["A2"] = "sample"
+    sheet["B2"] = "123"
+    workbook.save(template_path)
+
+    if config_path.exists():
+        config_path.unlink()
+
+    template = TemplateConfig(
+        id=template_id,
+        display_name="Test YAML Auto Gen",
+        description="",
+        file_path=template_path,
+        sheet_name="",
+        header_row=0,
+        data_start_row=1,
+        config_path=template_dir / f"{template_id}.config.json",
+    )
+
+    status = handle_sections_save(template, "A2:B2", "down", 1)
+    assert "✓" in status, f"Sections save should succeed: {status}"
+
+    assert config_path.exists(), "paste.yaml should be created on sections save"
+
+    loaded = load_paste_parse_config(template_id)
+    assert loaded is not None, "Saved config should be loadable"
+    assert loaded.sections and loaded.sections[0]["input_area"] == "A2:B2"
+    assert "Name" in loaded.field_rules
+
+    yaml_text, load_status = handle_yaml_load(template)
+    assert yaml_text.strip(), "YAML editor content should not be empty"
+    assert "sections:" in yaml_text
+    assert "A2:B2" in yaml_text
+    assert "Name:" in yaml_text
+    assert "✓" in load_status
+
+    config_path.unlink(missing_ok=True)
+    template_path.unlink(missing_ok=True)
+    template_dir.rmdir()
+
+    print("[PASS] Sections save creates paste.yaml and handle_yaml_load returns content")
+    return True
+
+
 def run_all_tests():
     """Run all tests"""
     print("=" * 60)
@@ -276,6 +342,7 @@ def run_all_tests():
         ("ID Field Finder", test_id_field_finder),
         ("Sections Save to YAML", test_config_save_to_yaml_with_sections),
         ("Form Field Loading Helpers", test_form_field_loading_helpers),
+        ("YAML Auto-Generation from Sections", test_yaml_auto_generation_from_sections),
     ]
     
     passed = 0

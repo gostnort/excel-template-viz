@@ -629,6 +629,7 @@ def ensure_config_exists(template_id: str, template_path: Path) -> bool:
     Ensure a configuration file exists for the template
     
     Creates a default configuration if none exists.
+    Migrates legacy flat-path configs when present.
     
     Args:
         template_id: Template identifier
@@ -639,27 +640,23 @@ def ensure_config_exists(template_id: str, template_path: Path) -> bool:
     """
     config_path = paste_config_path(template_id)
     
-    # If config already exists, nothing to do
     if config_path.exists():
+        return True
+
+    legacy_path = TEMPLATES_DIR / f"{template_id}{PASTE_CONFIG_SUFFIX}"
+    if legacy_path.exists():
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(legacy_path.read_text(encoding="utf-8"), encoding="utf-8")
         return True
     
     try:
-        # Create default config from template
         default_config = create_default_config_from_template(template_path)
-        
-        # Convert to YAML and save
         config_dict = default_config.to_dict()
         yaml_text = config_to_yaml(config_dict)
-        
-        # Ensure directory exists
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Save config
         config_path.write_text(yaml_text, encoding='utf-8')
-        
         return True
     except Exception as e:
-        # Log error but don't fail
         import logging
         logger = logging.getLogger(__name__)
         logger.error(f"Failed to create default config for {template_id}: {e}")

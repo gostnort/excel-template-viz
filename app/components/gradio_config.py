@@ -11,7 +11,7 @@ from typing import Any
 from app.services.registry import TemplateConfig
 from app.services.paste_parse_config import (
     load_paste_parse_config, config_to_yaml, config_from_dict,
-    ensure_config_exists, create_default_config_from_template
+    ensure_config_exists, create_default_config_from_template, paste_config_path,
 )
 from app.services.phi4_field_matcher import create_field_matcher, find_model_file
 
@@ -266,6 +266,8 @@ def build_config_tab(
                 components["test_llm_btn"] = test_llm_btn
                 components["test_result"] = test_result
     
+    components["config_tabs"] = config_tabs
+
     # Event bindings
     
     # Update dropdown when template changes or data source connects
@@ -275,7 +277,7 @@ def build_config_tab(
         outputs=[test_sheet_cols]
     )
     
-    # Load config when template changes
+    # Load sections + YAML when template changes
     current_template.change(
         fn=on_template_change_load_config,
         inputs=[current_template],
@@ -287,6 +289,17 @@ def build_config_tab(
             offset_value,
             sections_status
         ]
+    ).then(
+        fn=handle_yaml_load,
+        inputs=[current_template],
+        outputs=[yaml_editor, yaml_status]
+    )
+    
+    # Auto-load YAML when user opens the YAML sub-tab
+    config_tabs.select(
+        fn=on_yaml_tab_select,
+        inputs=[current_template],
+        outputs=[yaml_editor, yaml_status]
     )
     
     # YAML tab events
@@ -323,6 +336,16 @@ def build_config_tab(
     )
 
     return components
+
+
+def on_yaml_tab_select(
+    evt: gr.SelectData,
+    template: TemplateConfig | None,
+) -> tuple:
+    """Load YAML into the editor when the YAML sub-tab is selected."""
+    if evt.selected and str(evt.value).strip() == "YAML 配置":
+        return handle_yaml_load(template)
+    return gr.skip(), gr.skip()
 
 
 def handle_yaml_load(
@@ -548,11 +571,11 @@ def handle_sections_save(
         template_path = Path(template.file_path)
         ensure_config_exists(template.id, template_path)
         
-        # Load existing config
         paste_config = load_paste_parse_config(template.id)
         
         if not paste_config:
-            return "❌ 模板配置未找到"
+            default_config = create_default_config_from_template(template_path)
+            paste_config = default_config
         
         # Create sections config
         sections_config = [{
@@ -561,13 +584,9 @@ def handle_sections_save(
             "offset": int(offset)
         }]
         
-        # Update config
         paste_config.sections = sections_config
         
-        # Save to file
-        config_path = Path(f"templates/{template.id}/{template.id}.paste.yaml")
-        
-        # Ensure directory exists
+        config_path = paste_config_path(template.id)
         config_path.parent.mkdir(parents=True, exist_ok=True)
         
         yaml_str = config_to_yaml(paste_config.to_dict())
