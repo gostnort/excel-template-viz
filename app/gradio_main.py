@@ -5,6 +5,8 @@ Builds the main Gradio application layout with template selector and tabs.
 """
 import gradio as gr
 import logging
+import os
+import signal
 from typing import Any
 
 from app.services.registry import load_templates, TemplateConfig
@@ -99,9 +101,9 @@ def build_app() -> gr.Blocks:
             outputs=[current_template, *form_components["update_on_template_change"]]
         )
         
-        # Event: Shutdown button (placeholder - actual shutdown needs special handling)
+        # Event: Shutdown button
         shutdown_btn.click(
-            fn=lambda: gr.Info("请手动关闭浏览器窗口或按 Ctrl+C 停止服务器"),
+            fn=handle_shutdown,
             outputs=None
         )
     
@@ -126,6 +128,36 @@ def load_template_list() -> gr.Dropdown:
     except Exception as e:
         logger.error(f"Failed to load templates: {e}")
         return gr.Radio(choices=[], value=None)
+
+
+def handle_shutdown():
+    """
+    Shutdown the application and backend service
+    """
+    logger.info("Shutdown requested by user")
+    gr.Info("正在关闭应用...")
+    
+    # Schedule shutdown after a short delay to allow response to be sent
+    import threading
+    import time
+    
+    def delayed_shutdown():
+        time.sleep(1)  # Wait 1 second for response to be sent
+        logger.info("Shutting down Gradio server...")
+        
+        # Close all Gradio servers
+        try:
+            gr.close_all()
+        except Exception as e:
+            logger.error(f"Error closing Gradio: {e}")
+        
+        # Force exit the process
+        os.kill(os.getpid(), signal.SIGTERM)
+    
+    shutdown_thread = threading.Thread(target=delayed_shutdown, daemon=True)
+    shutdown_thread.start()
+    
+    return None
 
 
 def on_template_change(
