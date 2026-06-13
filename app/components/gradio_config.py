@@ -13,7 +13,12 @@ from app.services.paste_parse_config import (
     load_paste_parse_config, config_to_yaml, config_from_dict,
     ensure_config_exists, create_default_config_from_template, paste_config_path,
 )
-from app.services.phi4_field_matcher import create_field_matcher, find_model_file
+from app.services.phi4_field_matcher import (
+    ModelDownloadError,
+    create_field_matcher,
+    ensure_model_downloaded,
+    find_model_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -491,34 +496,24 @@ def handle_llm_test(
         if not paste_config:
             return "// 模板配置未找到"
         
-        # Check if model exists, if not, auto-download
+        # Check if model exists, if not, auto-download in-process
         model_file = find_model_file()
         if not model_file:
-            gr.Info("首次使用，正在自动下载模型（根据内存自动选择量化版本）...")
-            logger.info("Model not found, starting auto-download")
-            
+            gr.Info("首次使用，正在下载模型（根据内存自动选择量化版本）...")
+            logger.info("Model not found, starting in-process auto-download")
             try:
-                import subprocess
-                result = subprocess.run(
-                    ["python", "scripts/download_phi4_model.py", "--auto"],
-                    capture_output=True,
-                    text=True,
-                    timeout=600  # 10 minutes timeout
-                )
-                
-                if result.returncode != 0:
-                    error_msg = result.stderr or result.stdout
-                    logger.error(f"Model download failed: {error_msg}")
-                    return f"// 模型下载失败：{error_msg}"
-                
+                ensure_model_downloaded(auto_mode=True)
+                gr.Info("模型下载完成，正在加载...")
                 logger.info("Model downloaded successfully")
-                gr.Info("模型下载完成！正在加载...")
-            
-            except subprocess.TimeoutExpired:
-                return "// 模型下载超时，请检查网络连接"
-            except Exception as e:
-                logger.error(f"Download failed: {e}")
-                return f"// 下载失败：{str(e)}"
+            except ModelDownloadError as exc:
+                logger.error("Model download failed: %s", exc)
+                return f"// 模型下载失败：{exc}"
+            except Exception as exc:
+                logger.error("Download failed: %s", exc)
+                return (
+                    f"// 下载失败：{exc}\n"
+                    "// 请运行 install.bat 安装依赖，或手动执行: pip install huggingface-hub psutil"
+                )
         
         # Create matcher
         matcher = create_field_matcher()

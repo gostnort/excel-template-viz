@@ -19,6 +19,153 @@ MODEL_DIR = Path("models/phi4")
 # Quantization versions (in preference order)
 QUANT_VERSIONS = ["Q8_0", "Q6_K", "Q5_K_M", "Q4_K_M", "Q3_K_M", "Q2_K"]
 
+# (name, memory_gb, description)
+QUANT_SPECS: list[tuple[str, float, str]] = [
+    ("Q8_0", 6.5, "Best quality, highest memory"),
+    ("Q6_K", 5.0, "Very good quality"),
+    ("Q5_K_M", 4.0, "Good quality, balanced"),
+    ("Q4_K_M", 3.5, "Balanced (recommended)"),
+    ("Q3_K_M", 3.0, "Lower quality, smaller"),
+    ("Q2_K", 2.5, "Minimal quality, smallest"),
+]
+
+
+class ModelDownloadError(Exception):
+    """Model download failed; message is user-facing and actionable."""
+
+
+def _check_download_dependencies() -> None:
+    """Verify packages required for Hugging Face model download."""
+    missing: list[str] = []
+    try:
+        import huggingface_hub  # noqa: F401
+    except ImportError:
+        missing.append("huggingface-hub")
+    try:
+        import psutil  # noqa: F401
+    except ImportError:
+        missing.append("psutil")
+    if missing:
+        packages = " ".join(missing)
+        raise ModelDownloadError(
+            f"缺少依赖包: {', '.join(missing)}。"
+            f"请运行 install.bat 重新安装，或手动执行: pip install {packages}"
+        )
+
+
+def get_available_memory_gb() -> tuple[float, float]:
+    """Return (available_gb, total_gb) of system memory."""
+    import psutil
+
+    mem = psutil.virtual_memory()
+    return mem.available / (1024 ** 3), mem.total / (1024 ** 3)
+
+
+def select_quantization(auto_mode: bool = True) -> tuple[str, float]:
+    """
+    Pick a GGUF quantization that fits available memory.
+
+    Returns:
+        (quant_name, memory_required_gb)
+    """
+    _check_download_dependencies()
+    available_gb, total_gb = get_available_memory_gb()
+    logger.info(
+        "System memory: %.1f GB total, %.1f GB available",
+        total_gb,
+        available_gb,
+    )
+
+    usable_gb = available_gb - 2.0
+    selected: tuple[str, float, str] | None = None
+    for spec in QUANT_SPECS:
+        if spec[1] <= usable_gb:
+            selected = spec
+            break
+    if selected is None:
+        selected = QUANT_SPECS[-1]
+        logger.warning(
+            "Limited memory (%.1f GB usable); using smallest quantization %s",
+            usable_gb,
+            selected[0],
+        )
+
+    quant_name, mem_req, desc = selected
+    logger.info(
+        "Selected quantization %s (~%.1f GB, %s)%s",
+        quant_name,
+        mem_req,
+        desc,
+        " [auto]" if auto_mode else "",
+    )
+    return quant_name, mem_req
+
+
+def ensure_model_downloaded(
+    *,
+    auto_mode: bool = True,
+    force_redownload: bool = False,
+    quant_name: str | None = None,
+) -> Path:
+    """
+    Ensure a local Phi-4 GGUF model exists, downloading from Hugging Face if needed.
+
+    Returns:
+        Path to the GGUF file on disk.
+
+    Raises:
+        ModelDownloadError: Missing dependencies or download failure.
+    """
+    existing = find_model_file()
+    if existing and not force_redownload:
+        logger.info("Model already present: %s", existing[1])
+        return existing[1]
+
+    _check_download_dependencies()
+    from huggingface_hub import hf_hub_download
+
+    if quant_name is None:
+        quant_name, mem_req = select_quantization(auto_mode=auto_mode)
+    else:
+        mem_req = next((m for q, m, _ in QUANT_SPECS if q == quant_name), 3.5)
+
+    model_filename = f"microsoft_Phi-4-mini-instruct-{quant_name}.gguf"
+    model_path = MODEL_DIR / model_filename
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+    if model_path.exists() and not force_redownload:
+        logger.info("Model already present: %s", model_path)
+        return model_path
+
+    logger.info(
+        "Downloading %s from %s (~%.1f GB)...",
+        model_filename,
+        MODEL_REPO,
+        mem_req,
+    )
+
+    try:
+        downloaded_path = hf_hub_download(
+            repo_id=MODEL_REPO,
+            filename=model_filename,
+            local_dir=MODEL_DIR,
+            local_dir_use_symlinks=False,
+            resume_download=True,
+        )
+    except Exception as exc:
+        raise ModelDownloadError(
+            f"模型下载失败: {exc}。"
+            f"请检查网络连接，或访问 https://huggingface.co/{MODEL_REPO} 手动下载到 {MODEL_DIR}"
+        ) from exc
+
+    path = Path(downloaded_path)
+    logger.info(
+        "Download complete: %s (%.2f GB)",
+        path,
+        path.stat().st_size / (1024 ** 3),
+    )
+    return path
+
 
 def find_model_file() -> tuple[str, Path] | None:
     """
