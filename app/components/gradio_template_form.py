@@ -26,6 +26,76 @@ logger = logging.getLogger(__name__)
 MAX_FORM_FIELDS = 40
 
 
+def _get_template_id(template: TemplateConfig | dict[str, Any] | None) -> str | None:
+    """Resolve template id from TemplateConfig or Gradio state dict."""
+    if template is None:
+        return None
+    if isinstance(template, dict):
+        template_id = template.get("id")
+        return str(template_id) if template_id else None
+    return getattr(template, "id", None)
+
+
+def _normalize_preview_rows(preview_data: Any) -> list[list[Any]]:
+    """Convert Gradio Dataframe input (pandas, etc.) to list of row lists."""
+    if preview_data is None:
+        return []
+
+    import pandas as pd
+
+    if isinstance(preview_data, pd.DataFrame):
+        return [] if preview_data.empty else preview_data.values.tolist()
+
+    import numpy as np
+
+    if isinstance(preview_data, np.ndarray):
+        return [] if preview_data.size == 0 else preview_data.tolist()
+
+    try:
+        import polars as pl
+
+        if isinstance(preview_data, pl.DataFrame):
+            return [] if preview_data.is_empty() else preview_data.rows()
+    except ImportError:
+        pass
+
+    if isinstance(preview_data, list):
+        if not preview_data:
+            return []
+        if isinstance(preview_data[0], list):
+            return preview_data
+        return [preview_data]
+
+    return []
+
+
+def _is_row_selected(row: list[Any]) -> bool:
+    """Check whether the first column (checkbox) is selected."""
+    if not row:
+        return False
+    value = row[0]
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes"}
+    return bool(value)
+
+
+def _format_last_import(last_import: Any) -> str:
+    """Format last_import timestamp for display, falling back on parse errors."""
+    if not last_import:
+        return "从未"
+    from datetime import datetime
+
+    try:
+        dt = datetime.fromisoformat(str(last_import).replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError):
+        return str(last_import)
+
+
 def _field_row_count(fields_per_row: int = DEFAULT_FIELDS_PER_ROW) -> int:
     return (MAX_FORM_FIELDS + fields_per_row - 1) // fields_per_row
 
@@ -290,24 +360,20 @@ def refresh_data_entry_form(
     )
 
 
-def update_import_stats(template: TemplateConfig | None) -> str:
+def update_import_stats(template: TemplateConfig | dict[str, Any] | None) -> str:
     """
     Update import statistics display
     
     Returns:
         Markdown formatted stats
     """
-    if not template:
+    template_id = _get_template_id(template)
+    if not template_id:
         return "📊 导入统计：未选择模板"
     
     try:
-        stats = get_import_stats(template.id)
-        
-        last_import = stats.get("last_import") or "从未"
-        if last_import != "从未":
-            from datetime import datetime
-            dt = datetime.fromisoformat(str(last_import))
-            last_import = dt.strftime("%Y-%m-%d %H:%M")
+        stats = get_import_stats(template_id)
+        last_import = _format_last_import(stats.get("last_import"))
         
         return (
             f"📊 **导入统计** | "
@@ -690,7 +756,9 @@ def handle_import_selected(
     Returns:
         (form_data_state, row_selector, import_preview, import_btn, mark_trash_btn, import_stats)
     """
-    if not preview_data or not template:
+    preview_rows = _normalize_preview_rows(preview_data)
+    template_id = _get_template_id(template)
+    if not preview_rows or not template_id:
         return (
             form_data, 
             gr.update(), 
@@ -702,7 +770,7 @@ def handle_import_selected(
     
     try:
         # Get selected rows (where first column is True)
-        selected_rows = [row for row in preview_data if row[0]]
+        selected_rows = [row for row in preview_rows if _is_row_selected(row)]
         
         if not selected_rows:
             gr.Warning("请勾选要导入的行")
@@ -719,7 +787,7 @@ def handle_import_selected(
         from app.services.data_source import load_template_data_source
         from app.services.google_sheets import fetch_row_by_id
         
-        data_source = load_template_data_source(template.id)
+        data_source = load_template_data_source(template_id)
         if not data_source or not credentials:
             gr.Warning("请先配置数据源")
             return (
@@ -731,7 +799,7 @@ def handle_import_selected(
                 update_import_stats(template)
             )
         
-        paste_config = load_paste_parse_config(template.id)
+        paste_config = load_paste_parse_config(template_id)
         if not paste_config:
             gr.Warning("模板配置加载失败")
             return (
@@ -791,7 +859,7 @@ def handle_import_selected(
         
         # Mark imported IDs as processed
         if imported_ids:
-            mark_as_processed(template.id, imported_ids)
+            mark_as_processed(template_id, imported_ids)
         
         if imported_count > 0:
             gr.Info(f"✅ 成功导入 {imported_count} 行数据")
@@ -934,8 +1002,8 @@ def handle_show_trash(
 
 
 def handle_mark_trash(
-    preview_data: list[list[Any]],
-    template: TemplateConfig | None
+    preview_data: Any,
+    template: TemplateConfig | dict[str, Any] | None
 ) -> tuple:
     """
     Mark selected rows as trash
@@ -943,35 +1011,34 @@ def handle_mark_trash(
     Returns:
         (import_preview, mark_trash_btn, import_stats)
     """
-    if not preview_data or not template:
+    preview_rows = _normalize_preview_rows(preview_data)
+    template_id = _get_template_id(template)
+    if not preview_rows or not template_id:
         return gr.update(), gr.update(interactive=True), update_import_stats(template)
     
     try:
-        # Get selected rows
-        selected_rows = [row for row in preview_data if row[0]]
+        selected_rows = [row for row in preview_rows if _is_row_selected(row)]
         
         if not selected_rows:
             gr.Warning("请勾选要标记的行")
             return gr.update(), gr.update(interactive=True), update_import_stats(template)
         
-        # Extract IDs
         ids_to_mark = [str(row[1]) for row in selected_rows]
         
-        # Mark as trash
-        if mark_as_trash(template.id, ids_to_mark):
-            gr.Info(f"✅ 已标记 {len(ids_to_mark)} 行为垃圾数据")
-            
-            # Remove marked rows from preview
-            remaining_rows = [row for row in preview_data if row[1] not in ids_to_mark]
-            
+        if mark_as_trash(template_id, ids_to_mark):
+            remaining_rows = [row for row in preview_rows if str(row[1]) not in ids_to_mark]
+            try:
+                gr.Info(f"已标记 {len(ids_to_mark)} 行为垃圾数据")
+            except Exception as notify_err:
+                logger.debug("Notification failed: %s", notify_err)
             return (
                 gr.update(value=remaining_rows, visible=len(remaining_rows) > 0),
                 gr.update(interactive=True),
                 update_import_stats(template)
             )
-        else:
-            gr.Warning("标记失败")
-            return gr.update(), gr.update(interactive=True), update_import_stats(template)
+        
+        gr.Warning("标记失败")
+        return gr.update(), gr.update(interactive=True), update_import_stats(template)
             
     except Exception as e:
         logger.error(f"Mark trash failed: {e}")
