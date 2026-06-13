@@ -292,20 +292,34 @@ def handle_worksheet_change(
         return gr.update(), gr.update(visible=False)
 
 
-def handle_id_column_change(
+def _save_datasource_config_internal(
     template: TemplateConfig | None,
     sheet_url: str | None,
     worksheet_name: str | None,
-    id_column: str | None
-) -> None:
-    """Auto-save configuration when ID column is selected"""
+    id_column: str | None,
+    show_incomplete_warning: bool = False
+) -> bool:
+    """
+    Internal helper to save data source configuration
+    
+    Args:
+        template: Current template
+        sheet_url: Google Sheet URL
+        worksheet_name: Worksheet name
+        id_column: ID column name
+        show_incomplete_warning: Whether to show warning for incomplete config
+        
+    Returns:
+        True if saved successfully, False otherwise
+    """
     if not template:
         gr.Warning("请先选择模板")
-        return
+        return False
     
     if not all([sheet_url, worksheet_name, id_column]):
-        # Incomplete configuration, skip auto-save
-        return
+        if show_incomplete_warning:
+            gr.Warning("请填写完整配置")
+        return False
     
     try:
         from app.services.data_source import save_template_data_source, DataSourceConfig
@@ -318,12 +332,24 @@ def handle_id_column_change(
         )
         
         save_template_data_source(config)
-        
-        gr.Info("✅ 配置已自动保存")
+        logger.info(f"Saved data source config for template: {template.id}")
+        return True
         
     except Exception as e:
-        logger.error(f"Auto-save config failed: {e}")
-        gr.Warning(f"自动保存失败：{str(e)}")
+        logger.error(f"Save config failed: {e}")
+        gr.Warning(f"保存配置失败：{str(e)}")
+        return False
+
+
+def handle_id_column_change(
+    template: TemplateConfig | None,
+    sheet_url: str | None,
+    worksheet_name: str | None,
+    id_column: str | None
+) -> None:
+    """Auto-save configuration when ID column is selected"""
+    if _save_datasource_config_internal(template, sheet_url, worksheet_name, id_column):
+        gr.Info("✅ 配置已自动保存")
 
 
 def handle_save_config(
@@ -333,31 +359,10 @@ def handle_save_config(
     id_column: str | None
 ) -> None:
     """Save data source configuration"""
-    if not template:
-        gr.Warning("请先选择模板")
-        return
-    
-    if not all([sheet_url, worksheet_name, id_column]):
-        gr.Warning("请填写完整配置")
-        return
-    
-    try:
-        from app.services.data_source import save_template_data_source, DataSourceConfig
-        
-        config = DataSourceConfig(
-            template_id=template.id,
-            sheet_url=sheet_url,
-            worksheet_name=worksheet_name,
-            id_column=id_column
-        )
-        
-        save_template_data_source(config)
-        
+    if _save_datasource_config_internal(
+        template, sheet_url, worksheet_name, id_column, show_incomplete_warning=True
+    ):
         gr.Info("✅ 配置已保存")
-        
-    except Exception as e:
-        logger.error(f"Save config failed: {e}")
-        gr.Warning(f"保存配置失败：{str(e)}")
 
 
 def handle_test_query(

@@ -20,6 +20,29 @@ from app.services.phi4_field_matcher import create_field_matcher
 logger = logging.getLogger(__name__)
 
 
+def _find_id_field_key(template_id: str) -> str | None:
+    """
+    Find the ID field key from paste config
+    
+    Args:
+        template_id: Template identifier
+        
+    Returns:
+        ID field key if found, None otherwise
+    """
+    paste_config = load_paste_parse_config(template_id)
+    if not paste_config:
+        return None
+    
+    for field_key, field_config in paste_config.to_dict().items():
+        if isinstance(field_config, list):
+            for rule in field_config:
+                if isinstance(rule, dict) and rule.get('ID'):
+                    return field_key
+    
+    return None
+
+
 def build_form_tab(
     current_template: gr.State,
     credentials_state: gr.State,
@@ -259,19 +282,7 @@ def handle_refresh_unrecorded(
         
         # Get list of already-recorded IDs
         recorded_ids = set()
-        id_field_key = None
-        
-        # Find the ID field key in form_data
-        paste_config = load_paste_parse_config(template.id)
-        if paste_config:
-            for field_key, field_config in paste_config.to_dict().items():
-                if isinstance(field_config, list):
-                    for rule in field_config:
-                        if isinstance(rule, dict) and rule.get('ID'):
-                            id_field_key = field_key
-                            break
-                if id_field_key:
-                    break
+        id_field_key = _find_id_field_key(template.id)
         
         # Extract recorded IDs from form_data
         if id_field_key:
