@@ -464,6 +464,64 @@ def test_fields_per_row_config():
     return True
 
 
+def test_import_history_restore():
+    """Test restoring IDs from processed/trash back to unprocessed."""
+    print("\n=== Test 10: Import History Restore ===")
+
+    import json
+    from app.services.import_history import (
+        load_import_history,
+        mark_as_processed,
+        mark_as_trash,
+        unmark_ids,
+        get_import_stats,
+    )
+
+    template_id = "Ginger_Lots"
+    history_path = Path(f"templates/{template_id}/{template_id}.history.json")
+    original_data = None
+    if history_path.exists():
+        original_data = json.loads(history_path.read_text(encoding="utf-8"))
+
+    try:
+        mark_as_trash(template_id, ["test_trash_id"])
+        mark_as_processed(template_id, ["test_processed_id"])
+
+        history = load_import_history(template_id)
+        assert "test_trash_id" in history.trash_ids
+        assert "test_processed_id" in history.processed_ids
+
+        assert unmark_ids(template_id, ["test_trash_id"])
+        history = load_import_history(template_id)
+        assert "test_trash_id" not in history.trash_ids
+        assert "test_processed_id" in history.processed_ids
+
+        assert unmark_ids(template_id, ["test_processed_id"])
+        history = load_import_history(template_id)
+        assert "test_processed_id" not in history.processed_ids
+
+        if "10034" in (original_data or {}).get("trash_ids", []):
+            assert unmark_ids(template_id, ["10034"])
+            history = load_import_history(template_id)
+            assert "10034" not in history.trash_ids
+            mark_as_trash(template_id, ["10034"])
+
+        stats = get_import_stats(template_id)
+        assert "processed_count" in stats
+        assert "trash_count" in stats
+
+        print("[PASS] unmark_ids() restores IDs from processed and trash")
+        return True
+    finally:
+        if original_data is not None:
+            history_path.write_text(
+                json.dumps(original_data, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        elif history_path.exists():
+            history_path.unlink()
+
+
 def run_all_tests():
     """Run all tests"""
     print("=" * 60)
@@ -480,6 +538,7 @@ def run_all_tests():
         ("Refresh Data Entry Form", test_refresh_data_entry_form_uses_configured_area),
         ("YAML Auto-Generation from Sections", test_yaml_auto_generation_from_sections),
         ("fields_per_row Config", test_fields_per_row_config),
+        ("Import History Restore", test_import_history_restore),
     ]
     
     passed = 0

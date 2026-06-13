@@ -170,6 +170,41 @@ def unmark_trash(template_id: str, id_values: list[str]) -> bool:
     return save_import_history(history)
 
 
+def unmark_processed(template_id: str, id_values: list[str]) -> bool:
+    """
+    Remove IDs from processed list
+    
+    Args:
+        template_id: Template identifier
+        id_values: List of ID values to remove from processed
+        
+    Returns:
+        True if successful
+    """
+    history = load_import_history(template_id)
+    history.processed_ids.difference_update(id_values)
+    
+    return save_import_history(history)
+
+
+def unmark_ids(template_id: str, id_values: list[str]) -> bool:
+    """
+    Restore IDs to unprocessed state by removing from both processed and trash sets
+    
+    Args:
+        template_id: Template identifier
+        id_values: List of ID values to restore
+        
+    Returns:
+        True if successful
+    """
+    history = load_import_history(template_id)
+    history.processed_ids.difference_update(id_values)
+    history.trash_ids.difference_update(id_values)
+    
+    return save_import_history(history)
+
+
 def is_processed(template_id: str, id_value: str) -> bool:
     """Check if an ID has been processed"""
     history = load_import_history(template_id)

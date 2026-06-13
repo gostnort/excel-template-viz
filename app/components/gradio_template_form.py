@@ -20,8 +20,8 @@ from app.services.google_sheets import (
 )
 from app.services.phi4_field_matcher import create_field_matcher
 from app.services.import_history import (
-    load_import_history, mark_as_processed, mark_as_trash, 
-    get_import_stats, clear_history
+    load_import_history, mark_as_processed, mark_as_trash,
+    unmark_ids, get_import_stats, clear_history,
 )
 
 logger = logging.getLogger(__name__)
@@ -465,6 +465,8 @@ def build_form_tab(
         Dict of component references for event binding
     """
     components = {}
+    import_view_state = gr.State("unprocessed")
+    components["import_view_state"] = import_view_state
     
     with gr.Column():
         # Sheet selector
@@ -554,6 +556,12 @@ def build_form_tab(
                     visible=False
                 )
                 
+                restore_btn = gr.Button(
+                    "↩️ 恢复为未处理",
+                    variant="secondary",
+                    visible=False,
+                )
+                
                 clear_history_btn = gr.Button(
                     "🧹 清空历史",
                     variant="stop",
@@ -568,6 +576,7 @@ def build_form_tab(
         components["import_preview"] = import_preview
         components["import_btn"] = import_btn
         components["mark_trash_btn"] = mark_trash_btn
+        components["restore_btn"] = restore_btn
         components["clear_history_btn"] = clear_history_btn
     
     # Event bindings
@@ -605,7 +614,10 @@ def build_form_tab(
     ).then(
         fn=handle_refresh_unrecorded,
         inputs=[current_template, credentials_state, form_data_state],
-        outputs=[import_preview, import_btn, mark_trash_btn, clear_history_btn, refresh_btn, import_stats],
+        outputs=[
+            import_preview, import_btn, mark_trash_btn, restore_btn,
+            clear_history_btn, refresh_btn, import_stats, import_view_state,
+        ],
         **HIDE_PROGRESS,
     )
     
@@ -613,7 +625,10 @@ def build_form_tab(
     show_processed_btn.click(
         fn=handle_show_processed,
         inputs=[current_template, credentials_state],
-        outputs=[import_preview, import_btn, mark_trash_btn, clear_history_btn],
+        outputs=[
+            import_preview, import_btn, mark_trash_btn, restore_btn,
+            clear_history_btn, import_view_state,
+        ],
         **HIDE_PROGRESS,
     )
     
@@ -621,7 +636,10 @@ def build_form_tab(
     show_trash_btn.click(
         fn=handle_show_trash,
         inputs=[current_template, credentials_state],
-        outputs=[import_preview, import_btn, mark_trash_btn, clear_history_btn],
+        outputs=[
+            import_preview, import_btn, mark_trash_btn, restore_btn,
+            clear_history_btn, import_view_state,
+        ],
         **HIDE_PROGRESS,
     )
     
@@ -638,6 +656,14 @@ def build_form_tab(
         fn=handle_mark_trash,
         inputs=[import_preview, current_template],
         outputs=[import_preview, mark_trash_btn, import_stats],
+        **HIDE_PROGRESS,
+    )
+    
+    # Restore selected rows to unprocessed
+    restore_btn.click(
+        fn=handle_restore_selected,
+        inputs=[import_preview, current_template],
+        outputs=[import_preview, restore_btn, import_stats],
         **HIDE_PROGRESS,
     )
     
@@ -670,17 +696,20 @@ def handle_refresh_unrecorded(
     Filters out processed IDs and trash IDs
     
     Returns:
-        (import_preview, import_btn, mark_trash_btn, clear_history_btn, refresh_btn, import_stats)
+        (import_preview, import_btn, mark_trash_btn, restore_btn,
+         clear_history_btn, refresh_btn, import_stats, import_view_state)
     """
     if not template or not credentials:
         gr.Warning("请先配置数据源并连接 Google 账号")
         return (
             gr.update(), 
             gr.update(visible=False), 
-            gr.update(visible=False), 
+            gr.update(visible=False),
+            gr.update(visible=False),
             gr.update(visible=False),
             gr.update(interactive=True),
-            update_import_stats(template)
+            update_import_stats(template),
+            "unprocessed",
         )
     
     try:
@@ -692,10 +721,12 @@ def handle_refresh_unrecorded(
             return (
                 gr.update(), 
                 gr.update(visible=False), 
-                gr.update(visible=False), 
+                gr.update(visible=False),
+                gr.update(visible=False),
                 gr.update(visible=False),
                 gr.update(interactive=True),
-                update_import_stats(template)
+                update_import_stats(template),
+                "unprocessed",
             )
         
         history = load_import_history(template.id)
@@ -710,10 +741,12 @@ def handle_refresh_unrecorded(
             return (
                 gr.update(), 
                 gr.update(visible=False), 
-                gr.update(visible=False), 
+                gr.update(visible=False),
+                gr.update(visible=False),
                 gr.update(visible=False),
                 gr.update(interactive=True),
-                update_import_stats(template)
+                update_import_stats(template),
+                "unprocessed",
             )
         
         if df.height > MAX_IMPORT_PREVIEW_ROWS:
@@ -735,10 +768,12 @@ def handle_refresh_unrecorded(
             return (
                 gr.update(), 
                 gr.update(visible=False), 
-                gr.update(visible=False), 
+                gr.update(visible=False),
+                gr.update(visible=False),
                 gr.update(visible=False),
                 gr.update(interactive=True),
-                update_import_stats(template)
+                update_import_stats(template),
+                "unprocessed",
             )
         
         info_msg = f"找到 {len(unrecorded_rows)} 行未处理数据"
@@ -750,9 +785,11 @@ def handle_refresh_unrecorded(
             gr.update(value=unrecorded_rows, visible=True),
             gr.update(visible=True),
             gr.update(visible=True),
+            gr.update(visible=False),
             gr.update(visible=True),
             gr.update(interactive=True),
-            update_import_stats(template)
+            update_import_stats(template),
+            "unprocessed",
         )
         
     except GoogleSheetsError as e:
@@ -760,10 +797,12 @@ def handle_refresh_unrecorded(
         return (
             gr.update(), 
             gr.update(visible=False), 
-            gr.update(visible=False), 
+            gr.update(visible=False),
+            gr.update(visible=False),
             gr.update(visible=False),
             gr.update(interactive=True),
-            update_import_stats(template)
+            update_import_stats(template),
+            "unprocessed",
         )
     except Exception as e:
         logger.error(f"Refresh failed: {e}")
@@ -771,10 +810,12 @@ def handle_refresh_unrecorded(
         return (
             gr.update(), 
             gr.update(visible=False), 
-            gr.update(visible=False), 
+            gr.update(visible=False),
+            gr.update(visible=False),
             gr.update(visible=False),
             gr.update(interactive=True),
-            update_import_stats(template)
+            update_import_stats(template),
+            "unprocessed",
         )
 
 
@@ -931,11 +972,15 @@ def handle_show_processed(
     Show processed data
     
     Returns:
-        (import_preview, import_btn, mark_trash_btn, clear_history_btn)
+        (import_preview, import_btn, mark_trash_btn, restore_btn,
+         clear_history_btn, import_view_state)
     """
     if not template or not credentials:
         gr.Warning("请先配置数据源")
-        return gr.update(), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
+        return (
+            gr.update(), gr.update(visible=False), gr.update(visible=False),
+            gr.update(visible=False), gr.update(visible=False), "unprocessed",
+        )
     
     try:
         from app.services.data_source import load_template_data_source
@@ -943,13 +988,19 @@ def handle_show_processed(
         data_source = load_template_data_source(template.id)
         if not data_source:
             gr.Warning("模板未配置数据源")
-            return gr.update(), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
+            return (
+                gr.update(), gr.update(visible=False), gr.update(visible=False),
+                gr.update(visible=False), gr.update(visible=False), "unprocessed",
+            )
         
         history = load_import_history(template.id)
         
         if not history.processed_ids:
             gr.Info("没有已处理的数据")
-            return gr.update(), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
+            return (
+                gr.update(), gr.update(visible=False), gr.update(visible=False),
+                gr.update(visible=False), gr.update(visible=False), "unprocessed",
+            )
         
         df = _load_template_sheet_df(credentials, data_source)
         processed_rows = _build_import_preview_rows(
@@ -965,14 +1016,19 @@ def handle_show_processed(
         
         return (
             gr.update(value=processed_rows, visible=True),
-            gr.update(visible=False),  # Hide import button
-            gr.update(visible=False),  # Hide mark trash button
-            gr.update(visible=True)    # Show clear history button
+            gr.update(visible=False),
+            gr.update(visible=False),
+            gr.update(visible=True),
+            gr.update(visible=True),
+            "processed",
         )
     except Exception as e:
         logger.error(f"Show processed failed: {e}")
         gr.Warning(f"加载失败：{str(e)}")
-        return gr.update(), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
+        return (
+            gr.update(), gr.update(visible=False), gr.update(visible=False),
+            gr.update(visible=False), gr.update(visible=False), "unprocessed",
+        )
 
 
 def handle_show_trash(
@@ -983,11 +1039,15 @@ def handle_show_trash(
     Show trash data
     
     Returns:
-        (import_preview, import_btn, mark_trash_btn, clear_history_btn)
+        (import_preview, import_btn, mark_trash_btn, restore_btn,
+         clear_history_btn, import_view_state)
     """
     if not template or not credentials:
         gr.Warning("请先配置数据源")
-        return gr.update(), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
+        return (
+            gr.update(), gr.update(visible=False), gr.update(visible=False),
+            gr.update(visible=False), gr.update(visible=False), "unprocessed",
+        )
     
     try:
         from app.services.data_source import load_template_data_source
@@ -995,13 +1055,19 @@ def handle_show_trash(
         data_source = load_template_data_source(template.id)
         if not data_source:
             gr.Warning("模板未配置数据源")
-            return gr.update(), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
+            return (
+                gr.update(), gr.update(visible=False), gr.update(visible=False),
+                gr.update(visible=False), gr.update(visible=False), "unprocessed",
+            )
         
         history = load_import_history(template.id)
         
         if not history.trash_ids:
             gr.Info("没有垃圾数据")
-            return gr.update(), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
+            return (
+                gr.update(), gr.update(visible=False), gr.update(visible=False),
+                gr.update(visible=False), gr.update(visible=False), "unprocessed",
+            )
         
         df = _load_template_sheet_df(credentials, data_source)
         trash_rows = _build_import_preview_rows(
@@ -1017,14 +1083,19 @@ def handle_show_trash(
         
         return (
             gr.update(value=trash_rows, visible=True),
-            gr.update(visible=False),  # Hide import button
-            gr.update(visible=False),  # Hide mark trash button
-            gr.update(visible=True)    # Show clear history button
+            gr.update(visible=False),
+            gr.update(visible=False),
+            gr.update(visible=True),
+            gr.update(visible=True),
+            "trash",
         )
     except Exception as e:
         logger.error(f"Show trash failed: {e}")
         gr.Warning(f"加载失败：{str(e)}")
-        return gr.update(), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
+        return (
+            gr.update(), gr.update(visible=False), gr.update(visible=False),
+            gr.update(visible=False), gr.update(visible=False), "unprocessed",
+        )
 
 
 def handle_mark_trash(
@@ -1069,6 +1140,50 @@ def handle_mark_trash(
     except Exception as e:
         logger.error(f"Mark trash failed: {e}")
         gr.Warning(f"标记失败：{str(e)}")
+        return gr.update(), gr.update(interactive=True), update_import_stats(template)
+
+
+def handle_restore_selected(
+    preview_data: Any,
+    template: TemplateConfig | dict[str, Any] | None,
+) -> tuple:
+    """
+    Restore selected rows from processed/trash back to unprocessed state
+    
+    Returns:
+        (import_preview, restore_btn, import_stats)
+    """
+    preview_rows = _normalize_preview_rows(preview_data)
+    template_id = _get_template_id(template)
+    if not preview_rows or not template_id:
+        return gr.update(), gr.update(interactive=True), update_import_stats(template)
+    
+    try:
+        selected_rows = [row for row in preview_rows if _is_row_selected(row)]
+        
+        if not selected_rows:
+            gr.Warning("请勾选要恢复的行")
+            return gr.update(), gr.update(interactive=True), update_import_stats(template)
+        
+        ids_to_restore = [str(row[1]) for row in selected_rows]
+        
+        if unmark_ids(template_id, ids_to_restore):
+            remaining_rows = [
+                row for row in preview_rows if str(row[1]) not in ids_to_restore
+            ]
+            gr.Info(f"已恢复 {len(ids_to_restore)} 行为未处理状态")
+            return (
+                gr.update(value=remaining_rows, visible=len(remaining_rows) > 0),
+                gr.update(interactive=True),
+                update_import_stats(template),
+            )
+        
+        gr.Warning("恢复失败")
+        return gr.update(), gr.update(interactive=True), update_import_stats(template)
+            
+    except Exception as e:
+        logger.error(f"Restore failed: {e}")
+        gr.Warning(f"恢复失败：{str(e)}")
         return gr.update(), gr.update(interactive=True), update_import_stats(template)
 
 
