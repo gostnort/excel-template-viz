@@ -26,6 +26,10 @@ logger = logging.getLogger(__name__)
 MAX_FORM_FIELDS = 40
 
 
+def _field_row_count(fields_per_row: int = DEFAULT_FIELDS_PER_ROW) -> int:
+    return (MAX_FORM_FIELDS + fields_per_row - 1) // fields_per_row
+
+
 def get_fields_per_row(template_id: str) -> int:
     """Load fields-per-row layout from paste config (default 7)."""
     paste_config = load_paste_parse_config(template_id)
@@ -121,10 +125,30 @@ def _empty_field_updates() -> list[gr.update]:
     return [gr.update(visible=False) for _ in range(MAX_FORM_FIELDS)]
 
 
+def _empty_row_updates(fields_per_row: int = DEFAULT_FIELDS_PER_ROW) -> list[gr.update]:
+    return [gr.update(visible=False) for _ in range(_field_row_count(fields_per_row))]
+
+
+def _build_row_updates(
+    headers: list[str],
+    fields_per_row: int = DEFAULT_FIELDS_PER_ROW,
+) -> list[gr.update]:
+    """Show gr.Row containers when any child field slot in that row is active."""
+    row_count = _field_row_count(fields_per_row)
+    updates: list[gr.update] = []
+    for row_idx in range(row_count):
+        row_start = row_idx * fields_per_row
+        row_end = min(row_start + fields_per_row, MAX_FORM_FIELDS)
+        has_visible = any(index < len(headers) for index in range(row_start, row_end))
+        updates.append(gr.update(visible=has_visible))
+    return updates
+
+
 def _build_field_updates(
     headers: list[str],
     row_values: dict[str, str],
-) -> tuple[list[gr.update], gr.update]:
+    fields_per_row: int = DEFAULT_FIELDS_PER_ROW,
+) -> tuple[list[gr.update], list[gr.update], gr.update]:
     updates: list[gr.update] = []
     for index in range(MAX_FORM_FIELDS):
         if index < len(headers):
@@ -139,21 +163,24 @@ def _build_field_updates(
             )
         else:
             updates.append(gr.update(visible=False))
+    row_updates = _build_row_updates(headers, fields_per_row)
     status = gr.update(
         value=f"已加载 {len(headers)} 个字段",
-        visible=len(headers) == 0,
+        visible=len(headers) > 0,
     )
-    return updates, status
+    return updates, row_updates, status
 
 
 def _inactive_form_refresh(form_data: list[dict[str, str]]) -> tuple:
     field_updates = _empty_field_updates()
+    row_updates = _empty_row_updates()
     return (
         gr.update(visible=False),
         [],
         form_data,
         gr.update(choices=[], value=None),
         gr.update(value="请先选择模板和工作表", visible=True),
+        *row_updates,
         *field_updates,
     )
 
@@ -168,7 +195,7 @@ def refresh_data_entry_form(
 
     Returns updates for:
     form_container, detected_areas_state, form_data_state,
-    row_selector, fields_status, *form_field_boxes
+    row_selector, fields_status, *field_rows, *form_field_boxes
     """
     if not template or not sheet_name:
         return _inactive_form_refresh(form_data)
@@ -223,13 +250,19 @@ def refresh_data_entry_form(
             gr.Warning(f"读取区域数据失败：{exc}")
 
     form_data = [row_values]
-    field_updates, status_update = _build_field_updates(headers, row_values)
+    fields_per_row = get_fields_per_row(template.id)
+    field_updates, row_updates, status_update = _build_field_updates(
+        headers,
+        row_values,
+        fields_per_row=fields_per_row,
+    )
     return (
         gr.update(visible=True),
         detected_areas,
         form_data,
         gr.update(choices=["Row 1"], value="Row 1"),
         status_update,
+        *row_updates,
         *field_updates,
     )
 
@@ -327,9 +360,11 @@ def build_form_tab(
             components["fields_status"] = fields_status
 
             form_field_boxes: list[gr.Textbox] = []
+            field_rows: list[gr.Row] = []
             with gr.Column() as fields_container:
                 for row_start in range(0, MAX_FORM_FIELDS, DEFAULT_FIELDS_PER_ROW):
-                    with gr.Row():
+                    with gr.Row(visible=False) as field_row:
+                        field_rows.append(field_row)
                         row_end = min(row_start + DEFAULT_FIELDS_PER_ROW, MAX_FORM_FIELDS)
                         for index in range(row_start, row_end):
                             field_box = gr.Textbox(
@@ -342,6 +377,7 @@ def build_form_tab(
                             form_field_boxes.append(field_box)
 
             components["form_field_boxes"] = form_field_boxes
+            components["field_rows"] = field_rows
             components["fields_container"] = fields_container
         
         components["form_container"] = form_container
@@ -417,6 +453,7 @@ def build_form_tab(
         form_data_state,
         row_selector,
         fields_status,
+        *field_rows,
         *form_field_boxes,
     ]
 

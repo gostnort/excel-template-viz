@@ -269,7 +269,9 @@ def test_refresh_data_entry_form_uses_configured_area():
     print("\n=== Test 6b: Refresh Data Entry Form ===")
 
     from app.components.gradio_template_form import (
+        DEFAULT_FIELDS_PER_ROW,
         MAX_FORM_FIELDS,
+        _field_row_count,
         refresh_data_entry_form,
     )
     from app.services.registry import TemplateConfig
@@ -298,10 +300,23 @@ def test_refresh_data_entry_form_uses_configured_area():
     )
 
     result = refresh_data_entry_form(template, "List", [])
-    assert len(result) == 5 + MAX_FORM_FIELDS
+    row_count = _field_row_count(DEFAULT_FIELDS_PER_ROW)
+    assert len(result) == 5 + row_count + MAX_FORM_FIELDS
 
     form_container_update = result[0]
     assert form_container_update.get("visible") is True
+
+    status_update = result[4]
+    assert status_update.get("visible") is True
+    assert "11" in str(status_update.get("value", ""))
+
+    row_updates = result[5:5 + row_count]
+    visible_rows = sum(1 for update in row_updates if update.get("visible") is True)
+    assert visible_rows == 2, "11 fields at 7/row should show 2 rows"
+
+    field_updates = result[5 + row_count:]
+    visible_fields = sum(1 for update in field_updates if update.get("visible") is True)
+    assert visible_fields == 11
 
     form_data = result[2]
     assert len(form_data) == 1
