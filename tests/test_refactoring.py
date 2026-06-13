@@ -221,7 +221,9 @@ def test_form_field_loading_helpers():
 
     headers = get_form_field_headers("Ginger_Lots")
     assert headers, "Ginger_Lots paste config should expose field headers"
+    assert headers[0] == "order", "order should be the first form field"
     assert "P.O. No." in headers, "Expected template field in headers"
+    assert len(headers) == 12, "Ginger_Lots should expose all 12 template columns"
     print("[PASS] get_form_field_headers() loads configured fields")
 
     template = TemplateConfig(
@@ -238,7 +240,7 @@ def test_form_field_loading_helpers():
     assert resolved == "List", "Paste config worksheet should be preferred"
     print("[PASS] resolve_default_sheet_name() prefers paste config worksheet")
 
-    temp_path = Path("tests/_tmp_form_area.xlsx")
+    temp_path = Path("tests/_tmp_form_read_area.xlsx")
     temp_path.parent.mkdir(parents=True, exist_ok=True)
     workbook = Workbook()
     sheet = workbook.active
@@ -248,6 +250,7 @@ def test_form_field_loading_helpers():
     sheet["C2"] = "13"
     sheet["D2"] = "PO-001"
     workbook.save(temp_path)
+    workbook.close()
 
     values = read_area_form_values(
         temp_path,
@@ -255,10 +258,13 @@ def test_form_field_loading_helpers():
         "A2:D2",
         ["YY", "MM", "DD", "P.O. No."],
     )
-    temp_path.unlink(missing_ok=True)
 
     assert values["YY"] == "24"
     assert values["P.O. No."] == "PO-001"
+    try:
+        temp_path.unlink(missing_ok=True)
+    except OSError:
+        pass
     print("[PASS] read_area_form_values() maps area cells to headers")
 
     return True
@@ -277,7 +283,7 @@ def test_refresh_data_entry_form_uses_configured_area():
     from app.services.registry import TemplateConfig
     from openpyxl import Workbook
 
-    temp_path = Path("tests/_tmp_form_area.xlsx")
+    temp_path = Path("tests/_tmp_form_refresh_area.xlsx")
     temp_path.parent.mkdir(parents=True, exist_ok=True)
     workbook = Workbook()
     sheet = workbook.active
@@ -287,6 +293,7 @@ def test_refresh_data_entry_form_uses_configured_area():
     sheet["C2"] = "13"
     sheet["D2"] = "PO-001"
     workbook.save(temp_path)
+    workbook.close()
 
     template = TemplateConfig(
         id="Ginger_Lots",
@@ -308,22 +315,27 @@ def test_refresh_data_entry_form_uses_configured_area():
 
     status_update = result[4]
     assert status_update.get("visible") is True
-    assert "11" in str(status_update.get("value", ""))
+    assert "12" in str(status_update.get("value", ""))
 
     row_updates = result[5:5 + row_count]
     visible_rows = sum(1 for update in row_updates if update.get("visible") is True)
-    assert visible_rows == 2, "11 fields at 7/row should show 2 rows"
+    assert visible_rows == 2, "12 fields at 7/row should show 2 rows"
 
     field_updates = result[5 + row_count:]
     visible_fields = sum(1 for update in field_updates if update.get("visible") is True)
-    assert visible_fields == 11
+    assert visible_fields == 12
 
     form_data = result[2]
     assert len(form_data) == 1
-    assert form_data[0].get("YY") == "24"
-    assert form_data[0].get("P.O. No.") == "PO-001"
+    assert form_data[0].get("order") == "24"
+    assert form_data[0].get("YY") == "06"
+    assert form_data[0].get("MM") == "13"
+    assert form_data[0].get("DD") == "PO-001"
 
-    temp_path.unlink(missing_ok=True)
+    try:
+        temp_path.unlink(missing_ok=True)
+    except OSError:
+        pass
     print("[PASS] refresh_data_entry_form() loads fields from configured area")
     return True
 

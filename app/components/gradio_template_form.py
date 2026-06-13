@@ -57,28 +57,51 @@ def resolve_default_sheet_name(
     return workbook_sheets[0] if workbook_sheets else None
 
 
+def _resolve_field_header_name(
+    filed: str,
+    field_rules: dict[str, list],
+) -> str | None:
+    """Map a paste-config filed value to the form header name."""
+    filed_stripped = filed.strip()
+    if not filed_stripped:
+        return None
+    if filed_stripped in field_rules:
+        return filed_stripped
+    filed_lower = filed_stripped.lower()
+    for field_name, rules in field_rules.items():
+        for rule in rules:
+            rule_filed = str(rule.filed).strip()
+            if rule_filed == filed_stripped or rule_filed.lower() == filed_lower:
+                return field_name
+    return filed_stripped
+
+
 def get_form_field_headers(template_id: str) -> list[str]:
     """Load editable field names from paste parse config."""
     paste_config = load_paste_parse_config(template_id)
     if not paste_config:
         return []
 
-    headers = [name for name in paste_config.field_rules if name.strip() != "order"]
+    field_rules = paste_config.field_rules
+    default_headers = list(field_rules.keys())
+
     if paste_config.order:
         ordered: list[str] = []
         seen: set[str] = set()
         for item in paste_config.order:
             if not isinstance(item, dict):
                 continue
-            field_name = str(item.get("filed", "")).strip()
-            if field_name and field_name in paste_config.field_rules and field_name not in seen:
-                ordered.append(field_name)
-                seen.add(field_name)
-        for header in headers:
+            filed = str(item.get("filed", "")).strip()
+            header = _resolve_field_header_name(filed, field_rules)
+            if header and header not in seen:
+                ordered.append(header)
+                seen.add(header)
+        for header in default_headers:
             if header not in seen:
                 ordered.append(header)
+                seen.add(header)
         return ordered
-    return headers
+    return default_headers
 
 
 def read_area_form_values(
