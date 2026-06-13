@@ -2,6 +2,7 @@
 Import History Management
 
 Tracks processed IDs, trash IDs, and import history for each template.
+History files are stored in: templates/{template_id}/{template_id}.history.json
 """
 import json
 import logging
@@ -12,7 +13,7 @@ from dataclasses import dataclass, asdict
 
 logger = logging.getLogger(__name__)
 
-HISTORY_DIR = Path("templates/import_history")
+TEMPLATES_DIR = Path("templates")
 
 
 @dataclass
@@ -43,6 +44,15 @@ class ImportHistoryConfig:
         )
 
 
+def get_history_path(template_id: str) -> Path:
+    """
+    Get path to history file
+    
+    Returns: templates/{template_id}/{template_id}.history.json
+    """
+    return TEMPLATES_DIR / template_id / f"{template_id}.history.json"
+
+
 def load_import_history(template_id: str) -> ImportHistoryConfig:
     """
     Load import history for a template
@@ -53,8 +63,7 @@ def load_import_history(template_id: str) -> ImportHistoryConfig:
     Returns:
         ImportHistoryConfig (creates new one if not found)
     """
-    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    history_file = HISTORY_DIR / f"{template_id}.json"
+    history_file = get_history_path(template_id)
     
     if not history_file.exists():
         logger.info(f"No import history found for {template_id}, creating new")
@@ -89,8 +98,10 @@ def save_import_history(history: ImportHistoryConfig) -> bool:
     Returns:
         True if successful
     """
-    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    history_file = HISTORY_DIR / f"{history.template_id}.json"
+    history_file = get_history_path(history.template_id)
+    
+    # Ensure template directory exists
+    history_file.parent.mkdir(parents=True, exist_ok=True)
     
     try:
         with open(history_file, 'w', encoding='utf-8') as f:
@@ -197,7 +208,7 @@ def clear_history(template_id: str) -> bool:
     Returns:
         True if successful
     """
-    history_file = HISTORY_DIR / f"{template_id}.json"
+    history_file = get_history_path(template_id)
     
     try:
         if history_file.exists():

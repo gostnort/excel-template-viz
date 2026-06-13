@@ -1,0 +1,66 @@
+determiner: "tab"
+worksheet: "List"
+order:
+  - ID: false
+    filed: "order"
+    index: 0
+    regex: "None"
+sections:
+  - input_area: "A2:L2"
+    move_to: "down"
+    offset: 1
+YY:
+  - ID: false
+    filed: "YY"
+    index: 0
+    regex: "None"
+MM:
+  - ID: false
+    filed: "MM"
+    index: 0
+    regex: "None"
+DD:
+  - ID: false
+    filed: "DD"
+    index: 0
+    regex: "None"
+P.O. No.:
+  - ID: false
+    filed: "P.O. No."
+    index: 0
+    regex: "None"
+Container No.:
+  - ID: false
+    filed: "Container No."
+    index: 0
+    regex: "None"
+Container Seal No.:
+  - ID: false
+    filed: "Container Seal No."
+    index: 0
+    regex: "None"
+Lot No.:
+  - ID: false
+    filed: "Lot No."
+    index: 0
+    regex: "None"
+Receiving Date:
+  - ID: false
+    filed: "Receiving Date"
+    index: 0
+    regex: "None"
+Product Description:
+  - ID: false
+    filed: "Product Description"
+    index: 0
+    regex: "None"
+Supplier:
+  - ID: false
+    filed: "Supplier"
+    index: 0
+    regex: "None"
+Truck Line:
+  - ID: false
+    filed: "Truck Line"
+    index: 0
+    regex: "None"

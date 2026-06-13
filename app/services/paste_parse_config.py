@@ -62,7 +62,12 @@ class PasteParseConfig:
 
 
 def paste_config_path(template_id: str) -> Path:
-    return TEMPLATES_DIR / f"{template_id}{PASTE_CONFIG_SUFFIX}"
+    """
+    Get path to paste config file
+    
+    Returns: templates/{template_id}/{template_id}.paste.yaml
+    """
+    return TEMPLATES_DIR / template_id / f"{template_id}{PASTE_CONFIG_SUFFIX}"
 
 
 def _normalize_determiner(raw: str) -> str:
