@@ -2,6 +2,8 @@
 Data Source Configuration Management
 
 Handles loading and saving data source configurations for templates.
+Each template's data source config is stored in its own directory:
+templates/{template_id}/{template_id}.datasource.json
 """
 import json
 import logging
@@ -10,7 +12,7 @@ from dataclasses import dataclass, asdict
 
 logger = logging.getLogger(__name__)
 
-DATA_SOURCE_DIR = Path("templates/data_sources")
+TEMPLATES_DIR = Path("templates")
 
 
 @dataclass
@@ -22,14 +24,13 @@ class DataSourceConfig:
     id_column: str
 
 
-def ensure_data_source_dir() -> None:
-    """Ensure data source directory exists"""
-    DATA_SOURCE_DIR.mkdir(parents=True, exist_ok=True)
-
-
 def get_data_source_path(template_id: str) -> Path:
-    """Get path to data source config file"""
-    return DATA_SOURCE_DIR / f"{template_id}.json"
+    """
+    Get path to data source config file
+    
+    New location: templates/{template_id}/{template_id}.datasource.json
+    """
+    return TEMPLATES_DIR / template_id / f"{template_id}.datasource.json"
 
 
 def load_template_data_source(template_id: str) -> DataSourceConfig | None:
@@ -74,9 +75,10 @@ def save_template_data_source(config: DataSourceConfig) -> None:
     Args:
         config: Data source configuration
     """
-    ensure_data_source_dir()
-    
     config_path = get_data_source_path(config.template_id)
+    
+    # Ensure template directory exists
+    config_path.parent.mkdir(parents=True, exist_ok=True)
     
     try:
         with open(config_path, 'w', encoding='utf-8') as f:
