@@ -77,6 +77,14 @@ def build_app() -> gr.Blocks:
                             current_template,
                             credentials_state
                         )
+                    
+                    # Tab 3: Configuration
+                    with gr.TabItem("参数配置", id="config"):
+                        from app.components.gradio_config import build_config_tab
+                        
+                        config_components = build_config_tab(
+                            current_template
+                        )
         
         # Event: Load templates on startup
         app.load(
