@@ -263,6 +263,55 @@ def test_form_field_loading_helpers():
     return True
 
 
+def test_refresh_data_entry_form_uses_configured_area():
+    """Test refresh_data_entry_form auto-selects first configured area."""
+    print("\n=== Test 6b: Refresh Data Entry Form ===")
+
+    from app.components.gradio_template_form import (
+        MAX_FORM_FIELDS,
+        refresh_data_entry_form,
+    )
+    from app.services.registry import TemplateConfig
+    from openpyxl import Workbook
+
+    temp_path = Path("tests/_tmp_form_area.xlsx")
+    temp_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "List"
+    sheet["A2"] = "24"
+    sheet["B2"] = "06"
+    sheet["C2"] = "13"
+    sheet["D2"] = "PO-001"
+    workbook.save(temp_path)
+
+    template = TemplateConfig(
+        id="Ginger_Lots",
+        display_name="Ginger Lots",
+        description="",
+        file_path=temp_path,
+        sheet_name="",
+        header_row=0,
+        data_start_row=1,
+        config_path=Path("templates/Ginger_Lots.config.json"),
+    )
+
+    result = refresh_data_entry_form(template, "List", [])
+    assert len(result) == 5 + MAX_FORM_FIELDS
+
+    form_container_update = result[0]
+    assert form_container_update.get("visible") is True
+
+    form_data = result[2]
+    assert len(form_data) == 1
+    assert form_data[0].get("YY") == "24"
+    assert form_data[0].get("P.O. No.") == "PO-001"
+
+    temp_path.unlink(missing_ok=True)
+    print("[PASS] refresh_data_entry_form() loads fields from configured area")
+    return True
+
+
 def test_yaml_auto_generation_from_sections():
     """Test ensure_config_exists + sections save produces loadable YAML."""
     print("\n=== Test 7: YAML Auto-Generation from Sections ===")
@@ -342,6 +391,7 @@ def run_all_tests():
         ("ID Field Finder", test_id_field_finder),
         ("Sections Save to YAML", test_config_save_to_yaml_with_sections),
         ("Form Field Loading Helpers", test_form_field_loading_helpers),
+        ("Refresh Data Entry Form", test_refresh_data_entry_form_uses_configured_area),
         ("YAML Auto-Generation from Sections", test_yaml_auto_generation_from_sections),
     ]
     

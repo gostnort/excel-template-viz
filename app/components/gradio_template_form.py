@@ -139,21 +139,9 @@ def _build_field_updates(
     return updates, status
 
 
-def _area_index_from_choice(area_choice: str | None) -> int:
-    if not area_choice:
-        return 0
-    if area_choice.startswith("区域 "):
-        try:
-            return max(int(area_choice.split()[1]) - 1, 0)
-        except (IndexError, ValueError):
-            return 0
-    return 0
-
-
 def _inactive_form_refresh(form_data: list[dict[str, str]]) -> tuple:
     field_updates = _empty_field_updates()
     return (
-        gr.update(visible=False),
         gr.update(visible=False),
         [],
         form_data,
@@ -166,14 +154,13 @@ def _inactive_form_refresh(form_data: list[dict[str, str]]) -> tuple:
 def refresh_data_entry_form(
     template: TemplateConfig | None,
     sheet_name: str | None,
-    area_choice: str | None,
     form_data: list[dict[str, str]],
 ) -> tuple:
     """
     Detect areas and populate dynamic form fields from paste/sections config.
 
     Returns updates for:
-    area_selector, form_container, detected_areas_state, form_data_state,
+    form_container, detected_areas_state, form_data_state,
     row_selector, fields_status, *form_field_boxes
     """
     if not template or not sheet_name:
@@ -184,18 +171,16 @@ def refresh_data_entry_form(
         gr.Warning("未找到字段配置，请先在「参数配置」中保存 YAML 或区域配置")
         inactive = _inactive_form_refresh(form_data)
         return (
-            inactive[0],
             gr.update(visible=True),
+            inactive[1],
             inactive[2],
             inactive[3],
-            inactive[4],
             gr.update(value="未找到字段配置，请先在「参数配置」中保存配置", visible=True),
-            *inactive[6:],
+            *inactive[5:],
         )
 
     paste_config = load_paste_parse_config(template.id)
     detected_areas = []
-    area_selector_update = gr.update(visible=False)
     active_area_range: str | None = None
 
     if paste_config and paste_config.sections:
@@ -212,20 +197,7 @@ def refresh_data_entry_form(
                 gr.Warning(f"区域检测失败：{exc}")
 
     if detected_areas:
-        if len(detected_areas) > 1:
-            area_choices = [f"区域 {area.index} ({area.area})" for area in detected_areas]
-            selected_choice = area_choice if area_choice in area_choices else area_choices[0]
-            area_selector_update = gr.update(
-                choices=area_choices,
-                value=selected_choice,
-                visible=True,
-            )
-            area_index = _area_index_from_choice(selected_choice)
-        else:
-            area_selector_update = gr.update(visible=False)
-            area_index = 0
-        if 0 <= area_index < len(detected_areas):
-            active_area_range = detected_areas[area_index].area
+        active_area_range = detected_areas[0].area
     elif paste_config and paste_config.sections:
         section = paste_config.sections[0]
         active_area_range = str(section.get("input_area", "")).strip() or None
@@ -246,7 +218,6 @@ def refresh_data_entry_form(
     form_data = [row_values]
     field_updates, status_update = _build_field_updates(headers, row_values)
     return (
-        area_selector_update,
         gr.update(visible=True),
         detected_areas,
         form_data,
@@ -332,16 +303,6 @@ def build_form_tab(
             interactive=True
         )
         components["sheet_selector"] = sheet_selector
-        
-        # Area selector (for multi-area templates)
-        area_selector = gr.Dropdown(
-            label="选择区域",
-            choices=[],
-            value=None,
-            interactive=True,
-            visible=False
-        )
-        components["area_selector"] = area_selector
         
         # Form container
         with gr.Column(visible=False) as form_container:
@@ -439,7 +400,6 @@ def build_form_tab(
     )
     
     form_refresh_outputs = [
-        area_selector,
         form_container,
         detected_areas_state,
         form_data_state,
@@ -450,13 +410,7 @@ def build_form_tab(
 
     sheet_selector.change(
         fn=refresh_data_entry_form,
-        inputs=[current_template, sheet_selector, area_selector, form_data_state],
-        outputs=form_refresh_outputs,
-    )
-
-    area_selector.change(
-        fn=refresh_data_entry_form,
-        inputs=[current_template, sheet_selector, area_selector, form_data_state],
+        inputs=[current_template, sheet_selector, form_data_state],
         outputs=form_refresh_outputs,
     )
     

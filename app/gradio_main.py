@@ -289,7 +289,6 @@ def build_app() -> gr.Blocks:
             inputs=[
                 current_template,
                 form_components["sheet_selector"],
-                form_components["area_selector"],
                 form_data_state,
             ],
             outputs=form_components["form_refresh_outputs"],
@@ -318,7 +317,6 @@ def build_app() -> gr.Blocks:
             inputs=[
                 current_template,
                 form_components["sheet_selector"],
-                form_components["area_selector"],
                 form_data_state,
             ],
             outputs=form_components["form_refresh_outputs"],
