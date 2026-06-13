@@ -347,6 +347,7 @@ def handle_yaml_save(
     
     try:
         import yaml
+        from pathlib import Path
         
         # Parse YAML to validate
         yaml_dict = yaml.safe_load(yaml_content)
@@ -359,6 +360,9 @@ def handle_yaml_save(
         
         # Save to file
         config_path = Path(f"templates/{template.id}/{template.id}.paste.yaml")
+        
+        # Ensure directory exists
+        config_path.parent.mkdir(parents=True, exist_ok=True)
         
         with open(config_path, 'w', encoding='utf-8') as f:
             f.write(yaml_content)
@@ -561,6 +565,10 @@ def handle_sections_save(
         
         # Save to file
         config_path = Path(f"templates/{template.id}/{template.id}.paste.yaml")
+        
+        # Ensure directory exists
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        
         yaml_str = config_to_yaml(paste_config.to_dict())
         
         with open(config_path, 'w', encoding='utf-8') as f:
