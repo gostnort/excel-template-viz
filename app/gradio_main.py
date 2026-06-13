@@ -191,10 +191,58 @@ def build_app() -> gr.Blocks:
             transition: opacity 0.2s ease, max-width 0.25s ease;
         }
         
+        .template-nav-header {
+            align-items: center !important;
+            flex-wrap: nowrap !important;
+            gap: 8px !important;
+            margin-bottom: 4px !important;
+        }
+        
+        .template-nav-header .template-nav-title {
+            flex: 1 1 auto !important;
+            min-width: 0 !important;
+        }
+        
+        .template-nav-header .template-nav-title p {
+            margin: 0 !important;
+        }
+        
         .sidebar-toggle-btn {
             min-width: 110px !important;
             width: fit-content !important;
+            flex: 0 0 auto !important;
+            margin: 0 !important;
+        }
+        
+        .sidebar-show-btn {
+            min-width: 110px !important;
+            width: fit-content !important;
             margin-bottom: 4px !important;
+        }
+        
+        /* App header: title left, shutdown right */
+        .app-header-row {
+            align-items: center !important;
+            justify-content: space-between !important;
+            flex-wrap: nowrap !important;
+            gap: 12px !important;
+            margin-bottom: 8px !important;
+        }
+        
+        .app-header-row .app-title {
+            flex: 1 1 auto !important;
+            min-width: 0 !important;
+            margin: 0 !important;
+        }
+        
+        .app-header-row .app-title p {
+            margin: 0 !important;
+        }
+        
+        .app-shutdown-btn {
+            flex: 0 0 auto !important;
+            min-width: fit-content !important;
+            margin: 0 !important;
         }
         """
     ) as app:
@@ -205,7 +253,17 @@ def build_app() -> gr.Blocks:
         detected_areas_state = gr.State(value=[])  # list[DetectedArea]
         sidebar_visible = gr.State(value=True)
         
-        gr.Markdown("# Excel 模板可视化")
+        with gr.Row(elem_classes=["app-header-row"]):
+            gr.Markdown(
+                "# Excel 模板可视化",
+                elem_classes=["app-title"],
+            )
+            shutdown_btn = gr.Button(
+                "关闭应用",
+                variant="secondary",
+                size="sm",
+                elem_classes=["app-shutdown-btn"],
+            )
         
         with gr.Row():
             # Left sidebar: Template selector
@@ -215,7 +273,17 @@ def build_app() -> gr.Blocks:
                 elem_id="template-sidebar",
                 elem_classes=["template-sidebar"],
             ) as sidebar_column:
-                gr.Markdown("## 选择模板")
+                with gr.Row(elem_classes=["template-nav-header"]):
+                    gr.Markdown(
+                        "## 选择模板",
+                        elem_classes=["template-nav-title"],
+                    )
+                    sidebar_toggle_btn = gr.Button(
+                        "◀ 隐藏模板",
+                        variant="secondary",
+                        size="sm",
+                        elem_classes=["sidebar-toggle-btn"],
+                    )
                 
                 template_selector = gr.Radio(
                     choices=[],
@@ -223,22 +291,15 @@ def build_app() -> gr.Blocks:
                     show_label=False,
                     elem_classes=["template-selector"]
                 )
-                
-                gr.Markdown("---")
-                
-                shutdown_btn = gr.Button(
-                    "关闭应用",
-                    variant="secondary",
-                    size="sm"
-                )
             
             # Right main area: Tabs
             with gr.Column(scale=4):
-                sidebar_toggle_btn = gr.Button(
-                    "◀ 隐藏模板",
+                sidebar_show_btn = gr.Button(
+                    "▶ 显示模板",
                     variant="secondary",
                     size="sm",
-                    elem_classes=["sidebar-toggle-btn"],
+                    visible=False,
+                    elem_classes=["sidebar-show-btn"],
                 )
                 
                 with gr.Tabs(elem_classes=["main-tabs"]) as tabs:
@@ -330,11 +391,21 @@ def build_app() -> gr.Blocks:
             outputs=[config_components["test_sheet_cols"]]
         )
         
-        # Event: Sidebar toggle
+        # Event: Sidebar toggle (hide in sidebar, show in main area when collapsed)
+        sidebar_toggle_outputs = [
+            sidebar_column,
+            sidebar_visible,
+            sidebar_show_btn,
+        ]
         sidebar_toggle_btn.click(
             fn=toggle_sidebar_visibility,
             inputs=[sidebar_visible],
-            outputs=[sidebar_column, sidebar_visible, sidebar_toggle_btn],
+            outputs=sidebar_toggle_outputs,
+        )
+        sidebar_show_btn.click(
+            fn=toggle_sidebar_visibility,
+            inputs=[sidebar_visible],
+            outputs=sidebar_toggle_outputs,
         )
         
         # Event: Shutdown button
@@ -346,17 +417,13 @@ def build_app() -> gr.Blocks:
     return app
 
 
-def _sidebar_toggle_label(is_visible: bool) -> str:
-    return "◀ 隐藏模板" if is_visible else "▶ 显示模板"
-
-
 def toggle_sidebar_visibility(is_visible: bool) -> tuple[Any, bool, Any]:
     """Toggle template selector sidebar visibility."""
     new_visible = not is_visible
     return (
         gr.update(visible=new_visible),
         new_visible,
-        gr.update(value=_sidebar_toggle_label(new_visible)),
+        gr.update(visible=not new_visible),
     )
 
 
