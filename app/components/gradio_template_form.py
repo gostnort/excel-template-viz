@@ -118,7 +118,7 @@ def build_form_tab(
     sheet_selector.change(
         fn=on_sheet_change,
         inputs=[sheet_selector, current_template],
-        outputs=[area_selector, form_container]
+        outputs=[area_selector, form_container, detected_areas_state]
     )
     
     # Refresh button for bulk import
@@ -156,9 +156,13 @@ def on_sheet_change(
     sheet_name: str | None,
     template: TemplateConfig | None
 ) -> tuple:
-    """Handle sheet selection change"""
+    """
+    Handle sheet selection change
+    
+    Returns: (area_selector, form_container, detected_areas_state)
+    """
     if not sheet_name or not template:
-        return gr.update(visible=False), gr.update(visible=False)
+        return gr.update(visible=False), gr.update(visible=False), []
     
     try:
         # Load paste config to check for sections
@@ -178,11 +182,19 @@ def on_sheet_change(
                     )
                     
                     if len(detected_areas) > 1:
-                        # Show area selector
-                        area_choices = [f"区域 {a.index}" for a in detected_areas]
+                        # Show area selector and return detected areas
+                        area_choices = [f"区域 {a.index} ({a.area_range})" for a in detected_areas]
                         return (
                             gr.update(choices=area_choices, value=area_choices[0], visible=True),
-                            gr.update(visible=True)
+                            gr.update(visible=True),
+                            detected_areas  # Update state with detected areas
+                        )
+                    else:
+                        # Single area detected
+                        return (
+                            gr.update(visible=False),
+                            gr.update(visible=True),
+                            detected_areas if detected_areas else []
                         )
                 except Exception as e:
                     logger.error(f"Area detection failed: {e}")
@@ -191,13 +203,14 @@ def on_sheet_change(
         # Single area or detection failed - show form directly
         return (
             gr.update(visible=False),
-            gr.update(visible=True)
+            gr.update(visible=True),
+            []  # No detected areas
         )
         
     except Exception as e:
         logger.error(f"Sheet change error: {e}")
         gr.Warning(f"切换工作表失败：{str(e)}")
-        return gr.update(visible=False), gr.update(visible=False)
+        return gr.update(visible=False), gr.update(visible=False), []
 
 
 def handle_refresh_unrecorded(
@@ -212,6 +225,8 @@ def handle_refresh_unrecorded(
     Returns:
         (import_preview, import_btn, refresh_btn)
     """
+    MAX_ROWS = 1000  # Limit to prevent memory issues
+    
     if not template or not credentials:
         gr.Warning("请先配置数据源并连接 Google 账号")
         return gr.update(), gr.update(visible=False), gr.update(interactive=True)
@@ -238,6 +253,10 @@ def handle_refresh_unrecorded(
             gr.Info("Sheet 中没有数据")
             return gr.update(), gr.update(visible=False), gr.update(interactive=True)
         
+        # Check for large data and warn user
+        if df.height > MAX_ROWS:
+            gr.Warning(f"数据量过大（{df.height} 行），仅显示前 {MAX_ROWS} 行未录入数据")
+        
         # Get list of already-recorded IDs
         recorded_ids = set()
         id_field_key = None
@@ -260,9 +279,12 @@ def handle_refresh_unrecorded(
                 if id_field_key in row_data:
                     recorded_ids.add(str(row_data[id_field_key]))
         
-        # Filter unrecorded rows
+        # Filter unrecorded rows (with limit)
         unrecorded_rows = []
-        for i in range(df.height):
+        for i in range(min(df.height, MAX_ROWS * 2)):  # Check up to 2x MAX_ROWS
+            if len(unrecorded_rows) >= MAX_ROWS:
+                break
+                
             row = df.row(i, named=True)
             id_val = str(row.get(data_source.id_column, ""))
             
@@ -277,7 +299,10 @@ def handle_refresh_unrecorded(
             gr.Info("所有数据均已录入")
             return gr.update(), gr.update(visible=False), gr.update(interactive=True)
         
-        gr.Info(f"找到 {len(unrecorded_rows)} 行未录入数据")
+        info_msg = f"找到 {len(unrecorded_rows)} 行未录入数据"
+        if len(unrecorded_rows) >= MAX_ROWS:
+            info_msg += f"（已达到显示上限 {MAX_ROWS} 行）"
+        gr.Info(info_msg)
         
         return (
             gr.update(value=unrecorded_rows, visible=True),

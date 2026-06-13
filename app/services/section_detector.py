@@ -362,6 +362,9 @@ def parse_sections_from_yaml(yaml_dict: dict[str, Any]) -> list[SectionConfig] |
     
     Returns:
         List of SectionConfig objects, or None if no sections defined
+        
+    Raises:
+        ValueError: If move_to direction is invalid or offset is not positive
     """
     sections_data = yaml_dict.get("sections")
     
@@ -370,6 +373,8 @@ def parse_sections_from_yaml(yaml_dict: dict[str, Any]) -> list[SectionConfig] |
     
     if not isinstance(sections_data, list):
         raise ValueError("sections must be a list")
+    
+    VALID_DIRECTIONS = {"down", "up", "left", "right"}
     
     sections = []
     for section_dict in sections_data:
@@ -384,10 +389,27 @@ def parse_sections_from_yaml(yaml_dict: dict[str, Any]) -> list[SectionConfig] |
             logger.warning(f"Incomplete section config: {section_dict}")
             continue
         
+        # Validate move_to direction
+        move_to_lower = str(move_to).lower()
+        if move_to_lower not in VALID_DIRECTIONS:
+            raise ValueError(
+                f"Invalid move_to direction: '{move_to}'. "
+                f"Must be one of {VALID_DIRECTIONS}"
+            )
+        
+        # Validate offset is positive integer
+        try:
+            offset_int = int(offset)
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"offset must be an integer, got: {offset}") from e
+        
+        if offset_int <= 0:
+            raise ValueError(f"offset must be a positive integer, got: {offset_int}")
+        
         sections.append(SectionConfig(
             input_area=str(input_area),
-            move_to=str(move_to).lower(),
-            offset=int(offset)
+            move_to=move_to_lower,
+            offset=offset_int
         ))
     
     return sections if sections else None

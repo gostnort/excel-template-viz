@@ -195,10 +195,24 @@ def handle_oauth_start(credentials: Any) -> tuple:
 def handle_oauth_revoke(credentials: Any) -> tuple:
     """Revoke OAuth credentials"""
     try:
-        if credentials:
-            # TODO: Implement credential revocation
-            gr.Info("已撤销授权")
+        from google.auth.transport.requests import Request
+        from app.services.google_sheets import _OAUTH_TOKEN_PATH
         
+        if credentials:
+            # Attempt to revoke credentials if supported
+            if hasattr(credentials, 'revoke'):
+                try:
+                    credentials.revoke(Request())
+                    logger.info("OAuth credentials revoked via API")
+                except Exception as e:
+                    logger.warning(f"Failed to revoke via API: {e}")
+            
+            # Delete local token file
+            if _OAUTH_TOKEN_PATH.exists():
+                _OAUTH_TOKEN_PATH.unlink()
+                logger.info("Deleted local OAuth token file")
+        
+        gr.Info("✅ 已撤销授权")
         return "未授权", None, "未连接", gr.update(visible=False)
         
     except Exception as e:
