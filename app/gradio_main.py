@@ -13,18 +13,8 @@ from app.services.registry import load_templates, TemplateConfig
 
 logger = logging.getLogger(__name__)
 
-
-def build_app() -> gr.Blocks:
-    """
-    Build the main Gradio application
-    
-    Returns:
-        gr.Blocks application instance
-    """
-    with gr.Blocks(
-        title="Excel 模板可视化 - Gradio",
-        theme=gr.themes.Soft(),
-        css="""
+APP_THEME = gr.themes.Soft()
+APP_CSS = """
         /* 模板选择器样式 */
         .template-selector { font-size: 1.1em !important; }
         .main-tabs { margin-top: 10px; }
@@ -265,7 +255,16 @@ def build_app() -> gr.Blocks:
             display: none !important;
         }
         """
-    ) as app:
+
+
+def build_app() -> gr.Blocks:
+    """
+    Build the main Gradio application
+    
+    Returns:
+        gr.Blocks application instance
+    """
+    with gr.Blocks(title="Excel 模板可视化 - Gradio") as app:
         # Global state management
         current_template = gr.State(value=None)  # TemplateConfig
         credentials_state = gr.State(value=None)  # Google OAuth credentials

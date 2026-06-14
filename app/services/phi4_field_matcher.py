@@ -9,15 +9,70 @@ import json
 import logging
 import re
 from collections.abc import Callable, Iterator
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 logger = logging.getLogger(__name__)
 
-ProgressCallback = Callable[[str, dict[str, str]], None]
+# Progress stages
+ProgressStage = Literal[
+    "download",        # 模型下载
+    "load_tokenizer",  # 加载 Tokenizer
+    "load_model",      # 加载模型权重
+    "warmup",          # 模型预热
+    "match"            # 字段匹配
+]
+
+# Progress callback signature: (stage, current, total, message)
+ProgressCallback = Callable[[ProgressStage, int, int, str], None]
+
+
+@dataclass
+class FieldMatchResult:
+    """Single field matching result"""
+    filed: str              # Sheet column name
+    index: int              # Column index (base 0)
+    regex: str | None       # Extraction regex
+    similarity: float       # Semantic similarity score
+    matched_value: str      # Matched cell value
+    regex_suggested: bool   # Whether regex was auto-suggested
+    ID: bool = False        # Whether this is an ID field
+
+
+class SourceColumnData(TypedDict):
+    """Source column info sent to batch LLM prompt."""
+
+    index: int
+    header: str
+    data: list[str]
+
+
+class FieldMappingResult(TypedDict):
+    """Field mapping output from batch LLM parsing."""
+
+    filed: str
+    index: int
+    confidence_reason: str
+
+
+class TransformationRule(TypedDict):
+    """Transformation rule inferred by LLM for format mismatches."""
+
+    source_column: str
+    target_field: str
+    extraction_method: str
+    pattern: str
+    extract_group: int | None
+    explanation: str
+
 
 # Last load failure message for UI feedback (set by create_field_matcher).
 _last_load_error: str | None = None
+
+# Cached matcher instance (singleton pattern)
+_cached_matcher: "Phi4FieldMatcher | None" = None
+_cached_matcher_lock = None  # Will be initialized when needed
 
 # Model configuration
 MODEL_REPO = "bartowski/microsoft_Phi-4-mini-instruct-GGUF"
@@ -35,6 +90,18 @@ QUANT_SPECS: list[tuple[str, float, str]] = [
     ("Q3_K_M", 3.0, "Lower quality, smaller"),
     ("Q2_K", 2.5, "Minimal quality, smallest"),
 ]
+
+# Built-in regex patterns for common field types
+REGEX_PATTERNS = {
+    "po_number": r"\d{4,8}",
+    "container": r"[A-Z]{4}\d{7}",
+    "date_mm": r"(\d{1,2})(?=\/\d{1,2})",
+    "date_dd": r"(?:\d{1,2}/)(\d{1,2})",
+    "date_full": r"(\d{1,2}\/\d{1,2})",
+    "email": r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
+    "phone": r"\d{3}-\d{3}-\d{4}",
+    "zipcode": r"\d{5}(?:-\d{4})?",
+}
 
 
 class ModelDownloadError(Exception):
@@ -194,9 +261,16 @@ def ensure_model_downloaded(
     auto_mode: bool = True,
     force_redownload: bool = False,
     quant_name: str | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> Path:
     """
     Ensure a local Phi-4 GGUF model exists, downloading from Hugging Face if needed.
+
+    Args:
+        auto_mode: Auto-select quantization based on available memory
+        force_redownload: Force re-download even if file exists
+        quant_name: Specific quantization to download (overrides auto_mode)
+        on_progress: Progress callback function
 
     Returns:
         Path to the GGUF file on disk.
@@ -233,12 +307,37 @@ def ensure_model_downloaded(
     )
 
     try:
+        from tqdm.auto import tqdm
+
+        class DownloadProgressTqdm(tqdm):
+            """Custom tqdm class that forwards progress to callback."""
+
+            def __init__(self, callback: ProgressCallback | None, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.callback = callback
+
+            def update(self, n: int = 1):
+                super().update(n)
+                if self.callback:
+                    current = self.n
+                    total = self.total or 1
+                    speed = self.format_dict.get("rate", 0) or 0
+                    msg = f"下载中... {current/1024/1024:.1f}MB / {total/1024/1024:.1f}MB ({speed/1024/1024:.1f}MB/s)"
+                    self.callback("download", current, total, msg)
+
+        tqdm_class = (
+            lambda *args, **kwargs: DownloadProgressTqdm(on_progress, *args, **kwargs)
+            if on_progress
+            else tqdm(*args, **kwargs)
+        )
+
         downloaded_path = hf_hub_download(
             repo_id=MODEL_REPO,
             filename=model_filename,
             local_dir=MODEL_DIR,
             local_dir_use_symlinks=False,
             resume_download=True,
+            tqdm_class=tqdm_class,
         )
     except Exception as exc:
         raise ModelDownloadError(
@@ -294,6 +393,23 @@ def _collect_yaml_fields(
     return fields
 
 
+def prepare_batch_input(
+    source_columns: list[str],
+    sample_rows: list[dict[str, str]],
+    min_rows: int = 5,
+) -> list[SourceColumnData]:
+    """Prepare batch input payload with at least min_rows sample values per column."""
+    if len(sample_rows) < min_rows:
+        raise ValueError(f"At least {min_rows} sample rows required, got {len(sample_rows)}")
+
+    result: list[SourceColumnData] = []
+    rows = sample_rows[:min_rows]
+    for idx, header in enumerate(source_columns):
+        data = [str(row.get(header, "") or "") for row in rows]
+        result.append({"index": idx, "header": header, "data": data})
+    return result
+
+
 class Phi4FieldMatcher:
     """
     Match Google Sheet fields to YAML template fields using Phi-4 via Transformers
@@ -301,18 +417,26 @@ class Phi4FieldMatcher:
     Uses pure Python Transformers library with GGUF support - no compilation required.
     """
 
-    def __init__(self, model_path: str | Path | None = None):
+    def __init__(
+        self,
+        model_path: str | Path | None = None,
+        on_progress: ProgressCallback | None = None,
+    ):
         """
-        Initialize Phi-4 field matcher
+        Initialize Phi-4 field matcher with progress reporting
 
         Args:
             model_path: Path to local GGUF file. If None, auto-detects under MODEL_DIR.
+            on_progress: Progress callback function
 
         Raises:
             FileNotFoundError: If model file doesn't exist
             ImportError: If transformers/gguf/torch are not installed
             ModelLoadError: If GGUF loading fails
         """
+        # Stage 1: Check GGUF version (10%)
+        if on_progress:
+            on_progress("load_model", 1, 10, "检查 GGUF 版本")
         _ensure_gguf_version()
 
         try:
@@ -325,9 +449,15 @@ class Phi4FieldMatcher:
                 "pip install torch transformers>=5.0 gguf>=0.10.0 accelerate"
             ) from exc
 
+        # Stage 2: Resolve model file (20%)
+        if on_progress:
+            on_progress("load_model", 2, 10, "定位模型文件")
         hub_filename, local_path = _resolve_gguf_source(model_path)
         logger.debug("Using local GGUF: %s (hub file: %s)", local_path, hub_filename)
 
+        # Stage 3: Ensure Hub cache (30%)
+        if on_progress:
+            on_progress("load_model", 3, 10, "确认 Hub 缓存")
         _ensure_gguf_hub_accessible(hub_filename)
 
         logger.info("Loading Phi-4 model...")
@@ -339,8 +469,16 @@ class Phi4FieldMatcher:
             "low_cpu_mem_usage": True,
         }
 
+        # Stage 4: Load Tokenizer (50%)
+        if on_progress:
+            on_progress("load_tokenizer", 5, 10, "加载 Tokenizer")
+
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(MODEL_REPO, **load_kwargs)
+
+            # Stage 5: Load model weights (90%)
+            if on_progress:
+                on_progress("load_model", 9, 10, "加载模型权重")
             self.model = AutoModelForCausalLM.from_pretrained(MODEL_REPO, **load_kwargs)
         except Exception as exc:
             raise ModelLoadError(
@@ -349,8 +487,644 @@ class Phi4FieldMatcher:
                 "并重新运行 install.bat。"
             ) from exc
 
+        # Stage 6: Model ready (100%)
         self.model.eval()
+        if on_progress:
+            on_progress("load_model", 10, 10, "模型就绪")
         logger.info("Phi-4 model ready")
+
+    def _get_embeddings(self, texts: list[str]) -> Any:
+        """
+        Get embedding vectors for texts using Phi-4 last hidden layer.
+
+        Args:
+            texts: List of text strings
+
+        Returns:
+            embeddings tensor (N, D) normalized by L2
+        """
+        import torch
+        import torch.nn.functional as F
+
+        # Tokenize
+        inputs = self.tokenizer(
+            texts,
+            padding=True,
+            truncation=True,
+            max_length=128,
+            return_tensors="pt"
+        )
+
+        # Forward pass
+        with torch.no_grad():
+            outputs = self.model(**inputs, output_hidden_states=True)
+
+        # Use last layer hidden states
+        last_hidden_state = outputs.hidden_states[-1]  # (B, L, D)
+
+        # Average pooling (ignore padding)
+        attention_mask = inputs["attention_mask"].unsqueeze(-1)  # (B, L, 1)
+        embeddings = (last_hidden_state * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)  # (B, D)
+
+        # L2 normalization
+        embeddings = F.normalize(embeddings, p=2, dim=1)
+
+        return embeddings
+
+    def compute_semantic_similarity(
+        self,
+        template_fields: list[tuple[str, str]],  # (field_name, hint)
+        sheet_columns: list[str],
+        sample_values: dict[str, str] | None = None
+    ) -> dict[str, tuple[str, float, int]]:
+        """
+        Compute semantic similarity between template fields and sheet columns.
+
+        Algorithm:
+        1. Build query text for each template field
+        2. Build text for each sheet column
+        3. Use Phi-4 last hidden layer as embeddings
+        4. Compute cosine similarity matrix
+        5. Greedy matching: highest similarity without reusing columns
+
+        Args:
+            template_fields: List of (field_name, hint) tuples
+            sheet_columns: List of sheet column names
+            sample_values: Optional sample values for columns
+
+        Returns:
+            {template_field: (sheet_column, similarity_score, column_index)}
+        """
+        import torch
+        import torch.nn.functional as F
+
+        # Build query texts
+        field_queries = []
+        for field_name, hint in template_fields:
+            query = field_name
+            if hint and hint != "?":
+                query += f" (提示: {hint})"
+            field_queries.append(query)
+
+        # Build column texts
+        column_texts = []
+        for col in sheet_columns:
+            text = col
+            if sample_values and col in sample_values:
+                text += f" (样本值: {sample_values[col]})"
+            column_texts.append(text)
+
+        # Generate embeddings
+        field_embeddings = self._get_embeddings(field_queries)  # (N, D)
+        column_embeddings = self._get_embeddings(column_texts)  # (M, D)
+
+        # Compute similarity matrix
+        similarity_matrix = F.cosine_similarity(
+            field_embeddings.unsqueeze(1),  # (N, 1, D)
+            column_embeddings.unsqueeze(0),  # (1, M, D)
+            dim=2
+        )  # (N, M)
+
+        # Greedy matching
+        used_columns: set[int] = set()
+        matches: dict[str, tuple[str, float, int]] = {}
+
+        for field_idx, (field_name, _) in enumerate(template_fields):
+            # Find highest similarity unused column
+            scores = similarity_matrix[field_idx].tolist()
+            sorted_indices = sorted(
+                range(len(scores)),
+                key=lambda i: scores[i],
+                reverse=True
+            )
+
+            for col_idx in sorted_indices:
+                if col_idx not in used_columns:
+                    matches[field_name] = (
+                        sheet_columns[col_idx],
+                        scores[col_idx],
+                        col_idx
+                    )
+                    used_columns.add(col_idx)
+                    break
+
+        return matches
+
+    def suggest_regex_for_field(
+        self,
+        field_name: str,
+        column_name: str,
+        sample_values: list[str]
+    ) -> tuple[str | None, bool]:
+        """
+        Suggest regex pattern for a field.
+
+        Priority:
+        1. Built-in pattern detection
+        2. LLM generation
+        3. None (no suggestion)
+
+        Args:
+            field_name: Template field name
+            column_name: Sheet column name
+            sample_values: Sample values (at least 3)
+
+        Returns:
+            (regex_string or None, is_from_builtin)
+        """
+        if not sample_values or len(sample_values) < 3:
+            return None, False
+
+        # Step 1: Built-in pattern detection
+        pattern_type = self._detect_pattern_type(sample_values)
+        if pattern_type and pattern_type in REGEX_PATTERNS:
+            regex = REGEX_PATTERNS[pattern_type]
+            logger.info(f"Field {field_name} matched built-in pattern: {pattern_type}")
+            return regex, True
+
+        # Step 2: LLM generation
+        prompt = f"""Generate a regex pattern to extract relevant information from the following values:
+
+Field: {field_name}
+Column: {column_name}
+Sample values:
+{chr(10).join(f"- {val}" for val in sample_values[:5])}
+
+Output only the regex pattern, no explanations. Example: \\d{{4,8}}
+Regex:"""
+
+        try:
+            response = self._generate(prompt, max_new_tokens=64, temperature=0.0)
+            regex = response.strip()
+
+            # Validate regex syntax
+            re.compile(regex)
+
+            # Test on sample values
+            match_count = sum(1 for val in sample_values if re.search(regex, val))
+            if match_count / len(sample_values) >= 0.5:
+                logger.info(f"LLM generated regex for {field_name}: {regex}")
+                return regex, False
+            else:
+                logger.warning(f"LLM regex match rate too low: {match_count}/{len(sample_values)}")
+                return None, False
+
+        except re.error as exc:
+            logger.error(f"Invalid regex generated: {exc}")
+            return None, False
+        except Exception as exc:
+            logger.error(f"Regex generation failed: {exc}")
+            return None, False
+
+    def _detect_pattern_type(self, sample_values: list[str]) -> str | None:
+        """
+        Detect pattern type from sample values.
+
+        Args:
+            sample_values: Sample value list
+
+        Returns:
+            Pattern type name or None
+        """
+        for pattern_name, regex in REGEX_PATTERNS.items():
+            match_count = sum(
+                1 for val in sample_values
+                if re.search(regex, val)
+            )
+
+            # At least 70% samples match
+            if match_count / len(sample_values) >= 0.7:
+                return pattern_name
+
+        return None
+
+    def _generate(self, prompt: str, max_new_tokens: int = 64, temperature: float = 0.0) -> str:
+        """
+        Generate text using Phi-4.
+
+        Args:
+            prompt: Input prompt
+            max_new_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+
+        Returns:
+            Generated text (prompt removed)
+        """
+        inputs = self.tokenizer(prompt, return_tensors="pt")
+        do_sample = temperature > 0
+        gen_kwargs: dict[str, Any] = {
+            "max_new_tokens": max_new_tokens,
+            "do_sample": do_sample,
+            "pad_token_id": self.tokenizer.eos_token_id,
+        }
+        if do_sample:
+            gen_kwargs["temperature"] = temperature
+        outputs = self.model.generate(**inputs, **gen_kwargs)
+        response_text = self.tokenizer.decode(
+            outputs[0], skip_special_tokens=True
+        )
+        # Remove prompt from response
+        return response_text[len(prompt):].strip()
+
+    def _build_batch_field_mapping_prompt(
+        self,
+        source_columns_data: list[SourceColumnData],
+        yaml_field_names: list[str],
+    ) -> str:
+        """Build one-shot prompt that maps all YAML fields to all source columns."""
+        source_json = json.dumps(source_columns_data, ensure_ascii=False, indent=2)
+        fields_json = json.dumps(yaml_field_names, ensure_ascii=False, indent=2)
+        return f"""You map Google Sheet source columns to template YAML fields for a paste/lookup config.
+
+## Source columns (user-selected; header + sample rows)
+Each column includes at least 5 sample values from the connected sheet.
+{source_json}
+
+## Template fields (YAML top-level keys)
+{fields_json}
+
+## Rules
+1. For each template field, pick the best matching source "header" using BOTH header text and the "data" values.
+2. "index" MUST be the source column's index from Source columns (0-based). Use -1 when filed is null.
+3. One source column may map to multiple template fields only if they share the same cell (e.g. MM/DD/Receiving Date from one date column).
+4. Do not invent column names. Do not map unrelated fields just to use every column.
+5. For each mapping, provide "confidence_reason" explaining why this match was made.
+
+Reply with JSON only (no markdown, no explanation):
+{{
+  "mappings": [
+    {{
+      "field": "P.O. No.",
+      "filed": "PO",
+      "index": 0,
+      "confidence_reason": "Header 'PO' strongly matches field name, sample values are numeric IDs"
+    }},
+    {{
+      "field": "Container No.",
+      "filed": "Container#",
+      "index": 1,
+      "confidence_reason": "Header matches pattern, samples show container format (MSCU1234567)"
+    }},
+    {{
+      "field": "Container Seal No.",
+      "filed": null,
+      "index": -1,
+      "confidence_reason": "No source column contains seal number data"
+    }}
+  ]
+}}
+JSON:"""
+
+    def _parse_batch_mapping_result(
+        self,
+        response_text: str,
+        source_columns: list[str],
+        expected_fields: list[str],
+    ) -> dict[str, FieldMappingResult]:
+        """Parse batch JSON response into validated field mapping dictionary."""
+        json_match = re.search(r"\{[\s\S]*\"mappings\"[\s\S]*\}", response_text)
+        if not json_match:
+            logger.warning("No valid batch JSON found in LLM response")
+            return {
+                field: {
+                    "filed": "?",
+                    "index": -1,
+                    "confidence_reason": "No valid JSON found in LLM response",
+                }
+                for field in expected_fields
+            }
+
+        try:
+            parsed = json.loads(json_match.group(0))
+        except json.JSONDecodeError as exc:
+            logger.warning("Batch mapping JSON parse failed: %s", exc)
+            return {
+                field: {
+                    "filed": "?",
+                    "index": -1,
+                    "confidence_reason": f"JSON parse failed: {exc}",
+                }
+                for field in expected_fields
+            }
+
+        mappings_list = parsed.get("mappings", [])
+        header_by_norm = {h.strip().lower(): h for h in source_columns}
+        result: dict[str, FieldMappingResult] = {}
+
+        for item in mappings_list:
+            if not isinstance(item, dict):
+                continue
+            field = str(item.get("field", "")).strip()
+            if field not in expected_fields:
+                continue
+
+            filed = item.get("filed")
+            reason = str(item.get("confidence_reason", "") or "No reason provided").strip()
+            if filed is None or str(filed).strip().lower() in {"null", "none", ""}:
+                result[field] = {"filed": "?", "index": -1, "confidence_reason": reason}
+                continue
+
+            filed_str = str(filed).strip()
+            canonical = header_by_norm.get(filed_str.lower())
+            if canonical is None:
+                result[field] = {
+                    "filed": "?",
+                    "index": -1,
+                    "confidence_reason": f"{reason} (invalid source column: {filed_str})",
+                }
+                continue
+
+            idx = source_columns.index(canonical)
+            index_raw = item.get("index", -1)
+            if isinstance(index_raw, int) and 0 <= index_raw < len(source_columns):
+                if source_columns[index_raw] == canonical:
+                    idx = index_raw
+
+            result[field] = {"filed": canonical, "index": idx, "confidence_reason": reason}
+
+        for field in expected_fields:
+            result.setdefault(
+                field,
+                {"filed": "?", "index": -1, "confidence_reason": "No mapping returned by model"},
+            )
+
+        return result
+
+    def batch_match_all_fields(
+        self,
+        source_columns_data: list[SourceColumnData],
+        yaml_field_names: list[str],
+    ) -> tuple[dict[str, FieldMappingResult], str, str]:
+        """Run one LLM call to map all template fields to source columns."""
+        prompt = self._build_batch_field_mapping_prompt(source_columns_data, yaml_field_names)
+        response = self._generate(prompt, max_new_tokens=1024, temperature=0.0)
+        source_columns = [col["header"] for col in source_columns_data]
+        mappings = self._parse_batch_mapping_result(response, source_columns, yaml_field_names)
+        return mappings, prompt, response
+
+    def _infer_expected_format(self, field_name: str) -> str:
+        """Infer expected format from field name for mismatch detection."""
+        field_lower = field_name.strip().lower()
+        if field_lower in {"mm", "month"}:
+            return "month as integer (e.g., 6)"
+        if field_lower in {"dd", "day"}:
+            return "day as integer (e.g., 2)"
+        if field_lower in {"yyyy", "year"}:
+            return "year as integer (e.g., 2026)"
+        if "date" in field_lower:
+            return "date string (e.g., '6/2/2026' or '2026-06-02')"
+        if "no" in field_lower or "number" in field_lower or "id" in field_lower:
+            return "alphanumeric ID"
+        return "text value"
+
+    def _matches_expected_format(self, value: str, expected_format: str) -> bool:
+        """Simple format matching heuristic for mismatch detection."""
+        v = value.strip()
+        if not v:
+            return False
+        if "integer" in expected_format:
+            return bool(re.match(r"^\d+$", v))
+        if "date" in expected_format:
+            return bool(re.search(r"\d+[/-]\d+", v))
+        if "alphanumeric id" in expected_format.lower():
+            return bool(re.match(r"^[A-Za-z0-9]+$", v))
+        return True
+
+    def detect_format_mismatches(
+        self,
+        mappings: dict[str, FieldMappingResult],
+        sample_rows: list[dict[str, str]],
+    ) -> dict[str, list[tuple[str, str]]]:
+        """Detect fields whose mapped sample values do not match expected format."""
+        mismatches: dict[str, list[tuple[str, str]]] = {}
+        fields_by_column: dict[str, list[str]] = {}
+        for field, mapping in mappings.items():
+            filed = mapping.get("filed", "?")
+            if filed and filed != "?":
+                fields_by_column.setdefault(filed, []).append(field)
+
+        for source_column, fields in fields_by_column.items():
+            sample_values = [str(row.get(source_column, "") or "") for row in sample_rows[:5]]
+            if not sample_values:
+                continue
+            for field in fields:
+                expected = self._infer_expected_format(field)
+                matches = sum(
+                    1 for val in sample_values if self._matches_expected_format(val, expected)
+                )
+                if matches < max(1, int(len(sample_values) * 0.5)):
+                    mismatches.setdefault(source_column, []).append((field, expected))
+        return mismatches
+
+    def _build_transformation_inference_prompt(
+        self,
+        source_column: str,
+        sample_values: list[str],
+        target_fields: list[tuple[str, str]],
+    ) -> str:
+        """Build second-stage prompt to infer transformations for mismatched formats."""
+        samples_json = json.dumps(sample_values, ensure_ascii=False, indent=2)
+        fields_info = "\n".join(
+            f'{idx + 1}. "{name}" - expects {fmt}'
+            for idx, (name, fmt) in enumerate(target_fields)
+        )
+        return f"""Given a source column with sample values, infer extraction patterns for target fields.
+
+## Source Column
+Name: "{source_column}"
+
+Sample Values ({len(sample_values)} rows):
+{samples_json}
+
+## Target Fields
+{fields_info}
+
+## Task
+Provide extraction instructions for each target field that can be derived from this source column.
+
+For each extraction:
+1. Identify the extraction method: "regex" (for pattern matching), "split" (for string splitting), "replace" (for simple replacements), or "constant" (for fixed values)
+2. For regex: Provide the pattern with capture groups, and specify which group to extract
+3. For split: Provide the delimiter and which part to take
+4. For replace: Provide search/replace pairs
+5. Explain your reasoning
+
+## Rules
+- Use standard Python regex syntax
+- Test your pattern mentally against the sample values
+- If a field cannot be extracted from this column, omit it from the result
+- Prefer simple patterns over complex ones
+- Escape special regex characters
+
+Reply with JSON only (no markdown, no explanation):
+{{
+  "transformations": [
+    {{
+      "source_column": "{source_column}",
+      "target_field": "field_name",
+      "extraction_method": "regex",
+      "pattern": "regex_pattern_here",
+      "extract_group": 1,
+      "explanation": "Your reasoning here"
+    }}
+  ]
+}}
+JSON:"""
+
+    def _parse_transformation_result(
+        self,
+        response_text: str,
+        source_column: str,
+    ) -> list[TransformationRule]:
+        """Parse and minimally validate transformation JSON from LLM response."""
+        json_match = re.search(r"\{[\s\S]*\"transformations\"[\s\S]*\}", response_text)
+        if not json_match:
+            return []
+        try:
+            parsed = json.loads(json_match.group(0))
+        except json.JSONDecodeError:
+            return []
+        rules: list[TransformationRule] = []
+        for item in parsed.get("transformations", []):
+            if not isinstance(item, dict):
+                continue
+            method = str(item.get("extraction_method", "")).strip().lower()
+            if method not in {"regex", "split", "replace", "constant"}:
+                continue
+            target_field = str(item.get("target_field", "")).strip()
+            pattern = str(item.get("pattern", "") or "")
+            if not target_field or (method == "regex" and not pattern):
+                continue
+            raw_group = item.get("extract_group")
+            group = raw_group if isinstance(raw_group, int) else None
+            rules.append(
+                {
+                    "source_column": str(item.get("source_column", source_column) or source_column),
+                    "target_field": target_field,
+                    "extraction_method": method,
+                    "pattern": pattern,
+                    "extract_group": group,
+                    "explanation": str(item.get("explanation", "") or ""),
+                }
+            )
+        return rules
+
+    def validate_transformation(
+        self,
+        transformation: TransformationRule,
+        sample_values: list[str],
+    ) -> tuple[bool, float, list[str]]:
+        """Validate transformation by applying it to sample values."""
+        method = transformation["extraction_method"]
+        extracted: list[str] = []
+        success_count = 0
+        if not sample_values:
+            return False, 0.0, extracted
+
+        if method == "regex":
+            try:
+                compiled = re.compile(transformation["pattern"])
+            except re.error:
+                return False, 0.0, []
+            group = transformation.get("extract_group") or 0
+            for value in sample_values:
+                match = compiled.match(value)
+                if not match:
+                    extracted.append("")
+                    continue
+                try:
+                    extracted_val = match.group(group)
+                except IndexError:
+                    extracted.append("")
+                    continue
+                extracted.append(extracted_val)
+                success_count += 1
+        else:
+            # Keep non-regex methods parseable but conservative for validation.
+            return False, 0.0, []
+
+        success_rate = success_count / len(sample_values)
+        return success_rate >= 0.5, success_rate, extracted
+
+    def infer_transformations_for_mismatches(
+        self,
+        mismatches: dict[str, list[tuple[str, str]]],
+        sample_rows: list[dict[str, str]],
+    ) -> dict[str, list[TransformationRule]]:
+        """Infer and validate transformations for mismatched source columns."""
+        result: dict[str, list[TransformationRule]] = {}
+        for source_column, target_fields in mismatches.items():
+            sample_values = [str(row.get(source_column, "") or "") for row in sample_rows[:5]]
+            prompt = self._build_transformation_inference_prompt(
+                source_column,
+                sample_values,
+                target_fields,
+            )
+            response = self._generate(prompt, max_new_tokens=1024, temperature=0.0)
+            parsed = self._parse_transformation_result(response, source_column)
+            valid_rules: list[TransformationRule] = []
+            for rule in parsed:
+                ok, _, _ = self.validate_transformation(rule, sample_values)
+                if ok:
+                    valid_rules.append(rule)
+            if valid_rules:
+                result[source_column] = valid_rules
+        return result
+
+    def match_columns_to_yaml_fields(
+        self,
+        sheet_columns: list[str],
+        yaml_fields: list[tuple[str, str]],  # (field_name, hint)
+        sample_values: dict[str, str]
+    ) -> dict[str, tuple[str, float]]:
+        """
+        Reverse matching: Sheet columns → YAML fields.
+
+        For "test selected columns" scenario where user wants to know
+        which template field each sheet column should map to.
+
+        Args:
+            sheet_columns: Sheet columns to test
+            yaml_fields: All YAML template fields
+            sample_values: Sample values
+
+        Returns:
+            {sheet_column: (best_matching_field, similarity)}
+        """
+        import torch
+        import torch.nn.functional as F
+
+        # Build texts
+        column_texts = [
+            f"{col} (样本值: {sample_values.get(col, '')})"
+            for col in sheet_columns
+        ]
+        field_texts = [
+            f"{name} (提示: {hint})" if hint != "?" else name
+            for name, hint in yaml_fields
+        ]
+
+        # Generate embeddings
+        column_embeddings = self._get_embeddings(column_texts)
+        field_embeddings = self._get_embeddings(field_texts)
+
+        # Compute similarity (columns × fields)
+        similarity_matrix = F.cosine_similarity(
+            column_embeddings.unsqueeze(1),
+            field_embeddings.unsqueeze(0),
+            dim=2
+        )
+
+        # For each column find best field
+        matches: dict[str, tuple[str, float]] = {}
+        for col_idx, col in enumerate(sheet_columns):
+            scores = similarity_matrix[col_idx].tolist()
+            best_field_idx = max(range(len(scores)), key=lambda i: scores[i])
+            best_field = yaml_fields[best_field_idx][0]
+            best_score = scores[best_field_idx]
+            matches[col] = (best_field, best_score)
+
+        return matches
 
     def match_sheet_fields_to_yaml(
         self,
@@ -372,9 +1146,18 @@ class Phi4FieldMatcher:
         self,
         sheet_row: dict[str, str],
         yaml_config: dict[str, Any],
+        on_progress: ProgressCallback | None = None,
     ) -> Iterator[tuple[str, dict[str, str]]]:
         """
         Yield (stage_message, cumulative_matches) after each template field.
+
+        Args:
+            sheet_row: Sample row from sheet with column values
+            yaml_config: YAML configuration dictionary
+            on_progress: Progress callback function
+
+        Yields:
+            (stage_message, cumulative_matches) tuples
 
         Stages are human-readable status strings suitable for UI display.
         """
@@ -398,6 +1181,9 @@ class Phi4FieldMatcher:
             stage = f"正在匹配 {template_field} ({index}/{total})…"
             yield (stage, dict(result))
 
+            if on_progress:
+                on_progress("match", index, total, stage)
+
             available = [c for c in sheet_columns if c not in used_columns]
             column = self._try_exact_column_match(
                 template_field, hint, available
@@ -416,7 +1202,10 @@ class Phi4FieldMatcher:
 
             yield (stage, dict(result))
 
-        yield (f"匹配完成：{len(result)}/{total} 个字段", dict(result))
+        final_stage = f"匹配完成：{len(result)}/{total} 个字段"
+        if on_progress:
+            on_progress("match", total, total, final_stage)
+        yield (final_stage, dict(result))
 
     def match_fields_to_columns(
         self,
@@ -498,7 +1287,6 @@ class Phi4FieldMatcher:
             outputs = self.model.generate(
                 **inputs,
                 max_new_tokens=64,
-                temperature=0.0,
                 do_sample=False,
                 pad_token_id=self.tokenizer.eos_token_id,
             )
@@ -595,13 +1383,70 @@ JSON:"""
         return value
 
 
-def create_field_matcher(model_path: str | Path | None = None) -> Phi4FieldMatcher | None:
-    """Create field matcher instance, returning None if model is not available."""
+def create_field_matcher(
+    model_path: str | Path | None = None,
+    on_progress: ProgressCallback | None = None,
+) -> Phi4FieldMatcher | None:
+    """
+    Create field matcher instance with progress reporting.
+    
+    Args:
+        model_path: Path to local GGUF file
+        on_progress: Progress callback function
+    
+    Returns:
+        Phi4FieldMatcher instance or None if model is not available
+    """
     global _last_load_error
     _last_load_error = None
     try:
-        return Phi4FieldMatcher(model_path)
+        return Phi4FieldMatcher(model_path, on_progress=on_progress)
     except (FileNotFoundError, ImportError, ModelLoadError) as exc:
         _last_load_error = str(exc)
         logger.warning("Phi-4 model not available: %s", exc)
         return None
+
+
+def get_or_create_field_matcher(
+    on_progress: ProgressCallback | None = None
+) -> Phi4FieldMatcher | None:
+    """
+    Get or create field matcher (singleton pattern, thread-safe).
+
+    Returns cached matcher after first load for performance.
+
+    Args:
+        on_progress: Progress callback function (only used for first load)
+
+    Returns:
+        Phi4FieldMatcher instance or None if model is not available
+    """
+    global _cached_matcher, _cached_matcher_lock
+
+    if _cached_matcher is not None:
+        logger.info("Reusing cached Phi-4 model")
+        # Notify caller that model is ready (even when cached)
+        if on_progress:
+            on_progress("load_model", 10, 10, "模型已就绪（使用缓存）")
+        return _cached_matcher
+
+    # Initialize lock on first use
+    if _cached_matcher_lock is None:
+        import threading
+        _cached_matcher_lock = threading.Lock()
+
+    with _cached_matcher_lock:
+        # Double-check pattern
+        if _cached_matcher is not None:
+            return _cached_matcher
+
+        logger.info("Loading Phi-4 model (first use)")
+        _cached_matcher = create_field_matcher(on_progress=on_progress)
+        return _cached_matcher
+
+
+def clear_matcher_cache():
+    """Clear cached matcher instance (for testing or manual reload)."""
+    global _cached_matcher
+    _cached_matcher = None
+    logger.info("Cleared Phi-4 model cache")

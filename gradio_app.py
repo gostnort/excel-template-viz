@@ -13,7 +13,7 @@ warnings.filterwarnings('ignore', module='starlette')
 warnings.filterwarnings('ignore', module='gradio')
 
 import gradio as gr
-from app.gradio_main import build_app
+from app.gradio_main import APP_CSS, APP_THEME, build_app
 
 # Configure logging
 logging.basicConfig(
@@ -38,5 +38,7 @@ if __name__ == "__main__":
         server_port=8501,
         share=False,
         inbrowser=True,
-        server_name="127.0.0.1"
+        server_name="127.0.0.1",
+        theme=APP_THEME,
+        css=APP_CSS,
     )
