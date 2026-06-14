@@ -1,6 +1,20 @@
 import pytest
 
-from app.services.phi4_field_matcher import Phi4FieldMatcher, prepare_batch_input
+from app.services.phi4_field_matcher import (
+    Phi4FieldMatcher,
+    QUANT_VERSIONS,
+    gguf_filename,
+    prepare_batch_input,
+)
+
+
+def test_gguf_filename_vocabook_naming():
+    assert gguf_filename("Q8_0") == "Phi-4-mini-instruct-Q8_0.gguf"
+    assert gguf_filename("Q4_K_M") == "Phi-4-mini-instruct-Q4_K_M.gguf"
+
+
+def test_quant_versions_match_vocabook_repo():
+    assert QUANT_VERSIONS == ["Q8_0", "Q6_K", "Q4_K_M", "Q3_K_L"]
 
 
 def _matcher_without_model() -> Phi4FieldMatcher:

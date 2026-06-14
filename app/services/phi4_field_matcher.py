@@ -9,7 +9,7 @@ import json
 import logging
 import re
 from collections.abc import Callable, Iterator
-from dataclasses import asdict, dataclass
+from dataclasses import  dataclass
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 
@@ -78,7 +78,6 @@ _cached_matcher_lock = None  # Will be initialized when needed
 MODEL_REPO = "Vocabook/Phi-4-mini-instruct-GGUF"
 TOKENIZER_REPO = "microsoft/Phi-4-mini-instruct"
 MODEL_DIR = Path("models/phi4")
-LEGACY_GGUF_PREFIX = "microsoft_Phi-4-mini-instruct-"
 
 # Quantization versions available on Vocabook/Phi-4-mini-instruct-GGUF (preference order)
 QUANT_VERSIONS = ["Q8_0", "Q6_K", "Q4_K_M", "Q3_K_L"]
@@ -95,6 +94,7 @@ QUANT_SPECS: list[tuple[str, float, str]] = [
 def gguf_filename(quant_name: str) -> str:
     """Hub/local filename for a Vocabook Phi-4 GGUF checkpoint."""
     return f"Phi-4-mini-instruct-{quant_name}.gguf"
+
 
 class ModelDownloadError(Exception):
     """Model download failed; message is user-facing and actionable."""
@@ -124,7 +124,7 @@ def _ensure_gguf_version() -> None:
         gguf.__version__ = "0.10.0"
 
 
-def _ensure_gguf_hub_accessible(hub_filename: str) -> None:
+def _ensure_gguf_hub_accessible(hub_filename: str, local_path: Path | None = None) -> None:
     """
     Ensure GGUF can be loaded via MODEL_REPO + gguf_file (HF hub cache).
 
@@ -143,14 +143,23 @@ def _ensure_gguf_hub_accessible(hub_filename: str) -> None:
     except Exception:
         pass
 
-    local_path = MODEL_DIR / hub_filename
-    if local_path.is_file():
-        hf_hub_download(repo_id=MODEL_REPO, filename=hub_filename)
-        return
+    resolved = local_path if local_path and local_path.is_file() else None
+    canonical = MODEL_DIR / hub_filename
+    if resolved is None and canonical.is_file():
+        resolved = canonical
 
-    raise FileNotFoundError(
-        f"GGUF file not found: {local_path}. "
-        f"Run install.bat or: python scripts/download_phi4_model.py"
+    if resolved is None or not resolved.is_file():
+        raise FileNotFoundError(
+            f"GGUF file not found: {canonical}. "
+            f"Run install.bat or: python scripts/download_phi4_model.py"
+        )
+
+    hf_hub_download(
+        repo_id=MODEL_REPO,
+        filename=hub_filename,
+        local_dir=MODEL_DIR,
+        local_dir_use_symlinks=False,
+        local_files_only=True,
     )
 
 
@@ -359,13 +368,6 @@ def find_model_file() -> tuple[str, Path] | None:
             logger.debug("Found model: %s", model_filename)
             return (model_filename, model_path)
 
-    for quant in QUANT_VERSIONS:
-        legacy_filename = f"{LEGACY_GGUF_PREFIX}{quant}.gguf"
-        legacy_path = MODEL_DIR / legacy_filename
-        if legacy_path.exists():
-            logger.debug("Found legacy model: %s", legacy_filename)
-            return (legacy_filename, legacy_path)
-
     return None
 
 
@@ -457,7 +459,7 @@ class Phi4FieldMatcher:
         # Stage 3: Ensure Hub cache (30%)
         if on_progress:
             on_progress("load_model", 3, 10, "确认 Hub 缓存")
-        _ensure_gguf_hub_accessible(hub_filename)
+        _ensure_gguf_hub_accessible(hub_filename, local_path)
 
         logger.info("Loading Phi-4 model...")
 
