@@ -666,9 +666,7 @@ def _apply_column_mapping_to_config(
             idx = col_index.get(matched_col, UNMAPPED_INDEX)
             new_order.append(_order_entry_to_dict({"filed": matched_col, "index": idx}))
         else:
-            new_order.append(
-                _order_entry_to_dict({"filed": field_name, "index": UNMAPPED_INDEX})
-            )
+            new_order.append(_default_order_entry())
 
     return PasteParseConfig(
         determiner=paste_config.determiner,
@@ -709,10 +707,13 @@ def handle_yaml_auto_config(
         if not template_fields:
             return "", "❌ 模板没有可映射的字段"
 
-        filed_hints = {
-            field_name: (rules[0].filed if rules else field_name)
-            for field_name, rules in paste_config.field_rules.items()
-        }
+        filed_hints: dict[str, str] = {}
+        for field_name, rules in paste_config.field_rules.items():
+            if not rules:
+                continue
+            rule = rules[0]
+            if rule.filed and rule.filed != "?" and rule.index >= 0:
+                filed_hints[field_name] = rule.filed
 
         gr.Info(f"正在匹配 {len(template_fields)} 个字段与 {len(columns)} 个 Sheet 列…")
 

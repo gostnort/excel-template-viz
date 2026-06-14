@@ -559,10 +559,12 @@ def test_unmapped_field_defaults():
         UNMAPPED_INDEX,
         PasteParseRule,
         _default_unmapped_rule,
+        _order_entry_to_dict,
         _parse_rules,
         _rule_to_dict,
         build_empty_mapping_yaml,
         config_from_dict,
+        config_to_yaml,
     )
 
     assert UNMAPPED_FILED == "?"
@@ -589,6 +591,23 @@ def test_unmapped_field_defaults():
     mapped = _rule_to_dict(PasteParseRule(filed="Name", index=0, regex=None, id_flag=False))
     assert mapped["filed"] == "Name"
     assert mapped["index"] == 0
+
+    legacy = _rule_to_dict(PasteParseRule(filed="YY", index=-1, regex=None, id_flag=False))
+    assert legacy["filed"] == "?"
+    assert legacy["index"] == -1
+
+    order_norm = _order_entry_to_dict({"filed": "YY", "index": -1, "regex": "None", "ID": False})
+    assert order_norm["filed"] == "?"
+    assert order_norm["index"] == -1
+
+    yaml_roundtrip = config_to_yaml({
+        "determiner": "tab",
+        "order": [{"filed": "YY", "index": -1, "regex": "None", "ID": False}],
+        "YY": [{"filed": "YY", "index": -1, "regex": "None", "ID": False}],
+    })
+    assert yaml_roundtrip.count('filed: "?"') >= 2
+    assert "index: -1" in yaml_roundtrip
+    assert 'filed: "YY"' not in yaml_roundtrip
 
     print("[PASS] Unmapped defaults and regex normalization work correctly")
     return True

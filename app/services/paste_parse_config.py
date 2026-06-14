@@ -94,16 +94,23 @@ def _normalize_regex_value(raw: Any) -> str | None:
     return text
 
 
+def _is_unmapped(filed: str, index: int) -> bool:
+    return (not filed or filed == UNMAPPED_FILED) or index == UNMAPPED_INDEX
+
+
 def _rule_to_dict(rule: PasteParseRule) -> dict[str, Any]:
     filed = (rule.filed or "").strip() or UNMAPPED_FILED
-    if filed == UNMAPPED_FILED:
-        index = UNMAPPED_INDEX
-    else:
-        index = rule.index
+    if _is_unmapped(filed, rule.index):
+        return {
+            "ID": False,
+            "filed": UNMAPPED_FILED,
+            "index": UNMAPPED_INDEX,
+            "regex": "None",
+        }
     return {
         "ID": rule.id_flag,
         "filed": filed,
-        "index": index,
+        "index": rule.index,
         "regex": "None" if rule.regex is None else rule.regex,
     }
 
@@ -111,6 +118,8 @@ def _rule_to_dict(rule: PasteParseRule) -> dict[str, Any]:
 def _order_entry_to_dict(entry: dict[str, Any]) -> dict[str, Any]:
     filed = (str(entry.get("filed", UNMAPPED_FILED)).strip()) or UNMAPPED_FILED
     index = int(entry.get("index", UNMAPPED_INDEX))
+    if _is_unmapped(filed, index):
+        return _default_order_entry()
     regex = _normalize_regex_value(entry.get("regex"))
     return {
         "ID": bool(entry.get("ID", False)),
@@ -247,7 +256,24 @@ def _yaml_scalar(value: Any) -> str:
     return f'"{value}"'
 
 
+def _normalize_rule_dict(rule: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(rule, dict):
+        return _default_order_entry()
+    filed = (str(rule.get("filed", UNMAPPED_FILED)).strip()) or UNMAPPED_FILED
+    index = int(rule.get("index", UNMAPPED_INDEX))
+    if _is_unmapped(filed, index):
+        return _default_order_entry()
+    regex = _normalize_regex_value(rule.get("regex"))
+    return {
+        "ID": bool(rule.get("ID", False)),
+        "filed": filed,
+        "index": index,
+        "regex": "None" if regex is None else regex,
+    }
+
+
 def _format_rule_lines(rule: dict[str, Any], indent: int) -> list[str]:
+    rule = _normalize_rule_dict(rule)
     if not isinstance(rule, dict):
         return []
     keys = [key for key in _RULE_KEY_ORDER if key in rule]
@@ -323,20 +349,12 @@ def config_to_yaml(config: dict[str, Any]) -> str:
 def build_empty_mapping_yaml(template_headers: list[str]) -> str:
     skip_fields = frozenset({"order"})
     config: dict[str, Any] = {"determiner": "tab"}
-    order_entries: list[dict[str, Any]] = [_default_order_entry()]
     for header in template_headers:
         header_stripped = header.strip()
         if header_stripped in skip_fields:
             continue
-        rule: dict[str, Any] = {
-            "ID": header_stripped == "P.O. No.",
-            "filed": UNMAPPED_FILED,
-            "index": UNMAPPED_INDEX,
-            "regex": "None",
-        }
-        config[header] = [rule]
-        order_entries.append(_order_entry_to_dict({"filed": header_stripped, "index": UNMAPPED_INDEX}))
-    config["order"] = order_entries
+        config[header] = [_rule_to_dict(_default_unmapped_rule())]
+    config["order"] = [_default_order_entry()]
     return config_to_yaml(config)
 
 
@@ -652,15 +670,12 @@ def create_default_config_from_template(template_path: Path, worksheet_name: str
         # Create field rules with unmapped defaults (filed="?", index=-1)
         field_rules: dict[str, list[PasteParseRule]] = {}
         order_entries: list[dict[str, Any]] = [_default_order_entry()]
-        
+
         for field_name in first_row:
             if not field_name:  # Skip empty columns
                 continue
-            
+
             field_rules[field_name] = [_default_unmapped_rule()]
-            order_entries.append(
-                _order_entry_to_dict({"filed": field_name, "index": UNMAPPED_INDEX})
-            )
         
         # Create sections configuration if there are multiple columns
         sections = None
