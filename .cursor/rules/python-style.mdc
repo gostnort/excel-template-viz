@@ -22,6 +22,17 @@ alwaysApply: true
 
 - Prefer `pathlib.Path` over the `os` module for filesystem paths and operations.
 
+### Imports
+
+- Place **non-conditional** imports at module top level (after the module docstring), not inside functions or methods.
+- Imports guarded by `try`/`except ImportError` for optional dependencies may stay inline; add a brief comment explaining why.
+- Defer an import inside a function only to break a **circular import**; document the reason with a short comment.
+
+### Project layout
+
+- Production and install-time logic belongs under `app/` (e.g. `app/services/cpu_features.py`).
+- `tests/` is gitignored and never shipped; keep only pytest regressions there, importing from `app/`.
+
 ### General
 
 - Match the naming, types, imports, and abstraction level of the surrounding module.

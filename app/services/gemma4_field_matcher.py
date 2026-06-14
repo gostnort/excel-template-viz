@@ -1,10 +1,9 @@
 """
-Gemma 4 Field Matcher (Transformers + GGUF)
+Gemma 4 Field Matcher (llama.cpp + GGUF)
 
 Uses google/gemma-4-E4B-it-qat-q4_0-gguf for sheet-to-YAML field mapping.
-Text-only inference via Transformers 5.x GGUF support (pure Python, no compilation).
+Text-only inference via llama-cpp-python (CPU wheel).
 """
-import importlib.metadata
 import json
 import logging
 import re
@@ -13,6 +12,16 @@ import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Literal, TypedDict
+
+from app.services.cpu_features import (
+    LLAMA_CPP_CPU_WHEEL_INDEX,
+    LLAMA_CPP_VERSION_AVX2,
+    LLAMA_CPP_VERSION_AVX512,
+    detect_simd_features,
+    llama_cpp_install_command,
+    recommended_llama_cpp_version,
+)
+from app.services.paste_parse_config import RESERVED_TOP_KEYS
 
 logger = logging.getLogger(__name__)
 
@@ -68,10 +77,28 @@ MODEL_FILES = [
     MODEL_WEIGHT_FILE,
 ]
 
+LLAMA_CPP_PYTHON_VERSION = LLAMA_CPP_VERSION_AVX2
+LLAMA_CPP_PYTHON_VERSION_AVX512_MIN = LLAMA_CPP_VERSION_AVX512
+LLAMA_CPP_COMPAT_DOC = "QUICKSTART.md (LLM Dependencies / CPU compatibility)"
+
 MIN_MEMORY_GB = 5.0
 
 DEFAULT_GENERATE_MAX_TIME_S = 600
 SLOW_GENERATE_WARN_S = 120
+BATCH_MAPPING_MIN_MAX_TOKENS = 1024
+BATCH_MAPPING_MAX_TOKENS_CAP = 10000
+BATCH_MAPPING_TOKENS_PER_FIELD = 80
+MISMATCH_REASON_KEYWORDS = (
+    "not isolated",
+    "complex formatting",
+    "embedded",
+    "combined",
+    "prefix",
+    "suffix",
+)
+DATE_COMPONENT_FIELD_NAMES = frozenset(
+    {"mm", "dd", "yy", "yyyy", "month", "day", "year", "MM", "DD", "YY"}
+)
 
 
 
@@ -114,27 +141,97 @@ def _pip_install_hint(*packages: str) -> str:
     return f"{quoted_exe} -m pip install {package_list}"
 
 
+def _llama_cpp_install_cmd(quoted_exe: str, version: str | None = None) -> str:
+    """Return pip install command for the CPU-matched llama-cpp-python wheel."""
+    return llama_cpp_install_command(version, python_executable=quoted_exe.strip('"'))
+
+
+def _illegal_instruction_hint(quoted_exe: str) -> str:
+    """Return user-facing guidance when llama-cpp-python hits illegal instruction."""
+    features = detect_simd_features()
+    if features.get("avx512f") or features.get("avx512"):
+        target_version = LLAMA_CPP_VERSION_AVX512
+        cpu_note = (
+            f"CPU 支持 AVX512，请安装 llama-cpp-python=={target_version} "
+            f"（Windows CPU wheel）。"
+        )
+    else:
+        target_version = LLAMA_CPP_VERSION_AVX2
+        cpu_note = (
+            f"CPU 无 AVX512，请降级至 llama-cpp-python=={target_version} "
+            f"（{LLAMA_CPP_VERSION_AVX512}+ wheel 会触发 0xc000001d）。"
+        )
+    return (
+        f"llama-cpp-python 与当前 CPU 不兼容 (非法指令 0xc000001d)。"
+        f"{cpu_note}"
+        f"详见 {LLAMA_CPP_COMPAT_DOC}。"
+        f"请执行: {_llama_cpp_install_cmd(quoted_exe, target_version)}"
+    )
+
+
+def _warn_llama_cpp_version_mismatch() -> None:
+    """Log when installed llama-cpp-python differs from CPU recommendation."""
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+        installed = version("llama-cpp-python")
+    except (ImportError, PackageNotFoundError):
+        return
+    recommended = recommended_llama_cpp_version()
+    if installed == recommended:
+        return
+    features = detect_simd_features()
+    logger.warning(
+        "llama-cpp-python %s installed but %s recommended for this CPU "
+        "(avx=%s avx2=%s avx512f=%s source=%s). Run: %s",
+        installed,
+        recommended,
+        features.get("avx"),
+        features.get("avx2"),
+        features.get("avx512f"),
+        features.get("source"),
+        llama_cpp_install_command(recommended),
+    )
+
+
+def _probe_llama_cpp() -> None:
+    """Import llama_cpp and surface illegal-instruction failures early."""
+    try:
+        import llama_cpp  # noqa: F401
+    except OSError as exc:
+        msg = str(exc)
+        if "0xc000001d" in msg or "-1073741795" in msg:
+            quoted_exe = f'"{sys.executable}"'
+            raise ImportError(_illegal_instruction_hint(quoted_exe)) from exc
+        raise
+
+
 def _check_llm_dependencies() -> None:
-    """Verify packages required to load Gemma 4 via transformers."""
+    """Verify packages required to load Gemma 4 via llama-cpp-python."""
     exe = sys.executable
+    quoted_exe = f'"{exe}"'
     missing: list[str] = []
     try:
-        import transformers  # noqa: F401
+        _probe_llama_cpp()
+        _warn_llama_cpp_version_mismatch()
     except ImportError:
-        missing.append("transformers>=5.0")
-    try:
-        import torch  # noqa: F401
-    except ImportError:
-        missing.append("torch")
+        recommended = recommended_llama_cpp_version()
+        missing.append(f"llama-cpp-python=={recommended}")
     try:
         import psutil  # noqa: F401
     except ImportError:
         missing.append("psutil")
     if missing:
+        install_cmds: list[str] = []
+        if any(pkg.startswith("llama-cpp-python") for pkg in missing):
+            install_cmds.append(_llama_cpp_install_cmd(quoted_exe))
+        other = [pkg for pkg in missing if not pkg.startswith("llama-cpp-python")]
+        if other:
+            install_cmds.append(_pip_install_hint(*other))
+        install_hint = " ; ".join(install_cmds)
         raise ImportError(
             f"缺少 LLM 依赖包: {', '.join(missing)}。"
             f"当前 Python: {exe}。"
-            f"请执行: {_pip_install_hint(*missing)}"
+            f"请执行: {install_hint}"
         )
 
 
@@ -151,6 +248,26 @@ def _format_model_load_error(exc: Exception) -> str:
     root = _root_exception(exc)
     root_msg = str(root)
     exe = sys.executable
+    quoted_exe = f'"{exe}"'
+    if "0xc000001d" in root_msg or "-1073741795" in root_msg:
+        features = detect_simd_features()
+        if features.get("avx512f") or features.get("avx512"):
+            target_version = LLAMA_CPP_VERSION_AVX512
+            action = (
+                f"CPU has AVX512; install llama-cpp-python=={target_version} "
+                f"(Windows CPU wheel)."
+            )
+        else:
+            target_version = LLAMA_CPP_VERSION_AVX2
+            action = (
+                f"CPU lacks AVX512; downgrade to llama-cpp-python=={target_version} "
+                f"({LLAMA_CPP_VERSION_AVX512}+ wheel requires AVX512)."
+            )
+        return (
+            f"Gemma 4 illegal instruction (0xc000001d): {action} "
+            f"See {LLAMA_CPP_COMPAT_DOC}. Python: {exe}. "
+            f"Run: {_llama_cpp_install_cmd(quoted_exe, target_version)}"
+        )
     if isinstance(root, ModuleNotFoundError) and root.name:
         return (
             f"Gemma 4 加载失败: 缺少模块 {root.name}。"
@@ -160,8 +277,8 @@ def _format_model_load_error(exc: Exception) -> str:
     return (
         f"Gemma 4 加载失败: {exc}。"
         f"当前 Python: {exe}。"
-        "请确认已下载模型 (python app/download_gemma4_model.py)，并执行: "
-        f"{_pip_install_hint('transformers>=5.0', 'torch', 'psutil>=5.9.0')}"
+        f"请确认已下载模型 (python app/download_gemma4_model.py)，并执行: "
+        f"{_llama_cpp_install_cmd(quoted_exe)} ; {_pip_install_hint('psutil>=5.9.0')}"
     )
 
 
@@ -187,63 +304,6 @@ def find_model_file() -> Path | None:
         logger.debug("Found Gemma 4 GGUF model at %s", MODEL_DIR)
         return MODEL_DIR.resolve()
     return None
-
-
-def _ensure_gguf_version() -> None:
-    """Work around gguf package missing __version__ (breaks transformers GGUF check)."""
-    import gguf
-    if getattr(gguf, "__version__", None):
-        return
-    try:
-        gguf.__version__ = importlib.metadata.version("gguf")
-    except importlib.metadata.PackageNotFoundError:
-        gguf.__version__ = "0.10.0"
-
-
-def _ensure_gguf_hub_accessible(hub_filename: str, local_path: Path | None = None) -> None:
-    """Ensure GGUF loads via MODEL_REPO + gguf_file (HF hub cache), not a raw file path."""
-    from huggingface_hub import hf_hub_download
-    try:
-        hf_hub_download(
-            repo_id=MODEL_REPO,
-            filename=hub_filename,
-            local_files_only=True,
-        )
-        return
-    except Exception:
-        pass
-    resolved = local_path if local_path and local_path.is_file() else None
-    canonical = MODEL_DIR / hub_filename
-    if resolved is None and canonical.is_file():
-        resolved = canonical
-    if resolved is None or not resolved.is_file():
-        raise FileNotFoundError(
-            f"GGUF file not found: {canonical}. "
-            f"Run: python app/download_gemma4_model.py"
-        )
-    hf_hub_download(
-        repo_id=MODEL_REPO,
-        filename=hub_filename,
-        local_dir=MODEL_DIR,
-        local_files_only=True,
-    )
-
-
-def _resolve_gguf_source(model_path: str | Path | None) -> tuple[str, Path]:
-    """Resolve (hub_filename, local_path) for GGUF weights."""
-    if model_path is not None:
-        local_path = Path(model_path).resolve()
-        if local_path.is_dir():
-            local_path = local_path / MODEL_WEIGHT_FILE
-        if not local_path.is_file():
-            raise FileNotFoundError(
-                f"Model file not found: {local_path}. "
-                f"Run: python app/download_gemma4_model.py"
-            )
-        return local_path.name, local_path
-    model_dir = _resolve_model_dir(None)
-    local_path = model_dir / MODEL_WEIGHT_FILE
-    return MODEL_WEIGHT_FILE, local_path
 
 
 def _resolve_model_dir(model_path: str | Path | None) -> Path:
@@ -365,12 +425,97 @@ def ensure_model_downloaded(
     return model_dir
 
 
+def batch_mapping_max_tokens(field_count: int) -> int:
+    """Scale completion budget with field count; capped at 10k tokens."""
+    if field_count <= 0:
+        return BATCH_MAPPING_MIN_MAX_TOKENS
+    estimated = field_count * BATCH_MAPPING_TOKENS_PER_FIELD + 256
+    return max(BATCH_MAPPING_MIN_MAX_TOKENS, min(BATCH_MAPPING_MAX_TOKENS_CAP, estimated))
+
+
+def _confidence_reason_suggests_mismatch(reason: str) -> bool:
+    """True when LLM notes values are embedded or not standalone."""
+    reason_lower = reason.strip().lower()
+    if not reason_lower:
+        return False
+    return any(keyword in reason_lower for keyword in MISMATCH_REASON_KEYWORDS)
+
+
+def _is_date_component_field(field_name: str) -> bool:
+    """True for template date parts (mm/dd/yy) that share one source column."""
+    stripped = field_name.strip()
+    if stripped in DATE_COMPONENT_FIELD_NAMES:
+        return True
+    return stripped.lower() in {"mm", "dd", "yy", "yyyy", "month", "day", "year"}
+
+
+def _is_date_parent_field(field_name: str) -> bool:
+    """True for full-date template fields such as Receiving Date."""
+    return "date" in field_name.strip().lower()
+
+
+def _mapping_is_resolved(mapping: dict[str, Any]) -> bool:
+    filed = mapping.get("filed")
+    if filed is None:
+        return False
+    filed_str = str(filed).strip()
+    return filed_str not in {"", "?", "null", "none"}
+
+
+def propagate_date_component_mappings(
+    mappings: dict[str, FieldMappingResult],
+    expected_fields: list[str],
+) -> dict[str, FieldMappingResult]:
+    """Copy a mapped date column onto unmapped mm/dd/yy-style fields."""
+    result: dict[str, FieldMappingResult] = {
+        field: dict(mapping) for field, mapping in mappings.items()
+    }
+    parent_sources: list[tuple[str, str, int]] = []
+    for field in expected_fields:
+        mapping = result.get(field)
+        if not isinstance(mapping, dict) or not _mapping_is_resolved(mapping):
+            continue
+        if not _is_date_parent_field(field):
+            continue
+        parent_sources.append(
+            (field, str(mapping["filed"]), int(mapping.get("index", -1)))
+        )
+    if not parent_sources:
+        return result
+    parent_field, parent_col, parent_idx = parent_sources[0]
+    for candidate_field, candidate_col, candidate_idx in parent_sources:
+        if "receiving" in candidate_field.lower():
+            parent_field, parent_col, parent_idx = candidate_field, candidate_col, candidate_idx
+            break
+    for field in expected_fields:
+        if not _is_date_component_field(field):
+            continue
+        mapping = result.setdefault(
+            field,
+            {
+                "filed": "?",
+                "index": -1,
+                "confidence_reason": "No mapping returned by model",
+            },
+        )
+        if _mapping_is_resolved(mapping):
+            continue
+        mapping["filed"] = parent_col
+        mapping["index"] = parent_idx
+        mapping["confidence_reason"] = (
+            f"Derived from date field {parent_field!r} (same source column)"
+        )
+    return result
+
+
 def _collect_yaml_fields(
     yaml_config: dict[str, Any],
 ) -> list[tuple[str, str, str | None]]:
     """Return (template_field, column_hint, regex) for each mappable field."""
     fields: list[tuple[str, str, str | None]] = []
     for template_field, rules in yaml_config.items():
+        if template_field in RESERVED_TOP_KEYS:
+            continue
         if isinstance(template_field, str) and template_field.startswith("_"):
             continue
         if not isinstance(rules, list) or not rules:
@@ -462,12 +607,11 @@ class Gemma4FieldMatcher:
         model_path: str | Path | None = None,
         on_progress: ProgressCallback | None = None,
     ):
-        # Load tokenizer and GGUF weights via hub filename
+        # Load GGUF weights via llama.cpp from local path
         if on_progress:
             on_progress("load_model", 1, 10, "检查依赖")
-        _ensure_gguf_version()
         _check_llm_dependencies()
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from llama_cpp import Llama
         if on_progress:
             on_progress("load_model", 2, 10, "检查内存")
         available_memory = get_available_memory_gb()
@@ -478,42 +622,30 @@ class Gemma4FieldMatcher:
                 "请关闭其他应用程序后重试。"
             )
         if on_progress:
-            on_progress("load_model", 3, 10, "加载 tokenizer")
-        logger.debug("Loading tokenizer from google/gemma-4-E4B-it")
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                "google/gemma-4-E4B-it",
-                trust_remote_code=True
-            )
-        except Exception:
-            logger.warning("Failed to load tokenizer from base model, trying GGUF repo")
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                MODEL_REPO,
-                trust_remote_code=True
-            )
-        if on_progress:
             on_progress("load_model", 5, 10, "定位模型文件")
-        hub_filename, local_path = _resolve_gguf_source(model_path)
-        logger.debug("Using local GGUF: %s (hub file: %s)", local_path, hub_filename)
-        if on_progress:
-            on_progress("load_model", 6, 10, "确认 Hub 缓存")
-        _ensure_gguf_hub_accessible(hub_filename, local_path)
-        load_kwargs = {
-            "gguf_file": hub_filename,
-            "device_map": "cpu",
-            "trust_remote_code": True,
-            "low_cpu_mem_usage": True,
-        }
+        model_dir = _resolve_model_dir(model_path)
+        gguf_path = model_dir / MODEL_WEIGHT_FILE
+        logger.debug("Loading Gemma 4 GGUF via llama.cpp: %s", gguf_path)
         if on_progress:
             on_progress("load_model", 7, 10, "加载 GGUF 模型")
+        import os
+        thread_count = os.cpu_count() or 4
         try:
-            self.model = AutoModelForCausalLM.from_pretrained(MODEL_REPO, **load_kwargs)
-            self.model.eval()
+            self.model = Llama(
+                model_path=str(gguf_path),
+                n_ctx=8192,
+                n_threads=thread_count,
+                n_threads_batch=thread_count,
+                verbose=False,
+            )
         except Exception as exc:
             raise ModelLoadError(_format_model_load_error(exc)) from exc
         if on_progress:
             on_progress("load_model", 10, 10, "模型就绪")
-        logger.info("Gemma 4 GGUF model ready (Transformers)")
+        logger.info(
+            "Gemma 4 GGUF model ready (llama.cpp, chat_format=%s)",
+            getattr(self.model, "chat_format", None),
+        )
 
 
     def _generate(
@@ -523,50 +655,60 @@ class Gemma4FieldMatcher:
         temperature: float = 0.0,
         max_time: float | None = DEFAULT_GENERATE_MAX_TIME_S,
     ) -> str:
-        """Generate assistant text using the Gemma 4 chat template."""
-        messages = [
-            {"role": "system", "content": self._SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ]
-        prompt_text = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-        inputs = self.tokenizer(prompt_text, return_tensors="pt")
-        prompt_tokens = inputs.input_ids.shape[1]
+        """Generate assistant text using llama.cpp chat completion."""
+        # Gemma chat templates ignore system role; fold instructions into user turn
+        user_content = f"{self._SYSTEM_PROMPT}\n\n{user_prompt}"
+        messages = [{"role": "user", "content": user_content}]
         logger.info(
-            "Gemma4 generate start: prompt_tokens=%d max_new_tokens=%d",
-            prompt_tokens,
+            "Gemma4 generate start: max_tokens=%d temperature=%s",
             max_new_tokens,
+            temperature,
         )
         started = time.monotonic()
+        completion_kwargs: dict[str, Any] = {
+            "messages": messages,
+            "max_tokens": max_new_tokens,
+            "temperature": temperature if temperature > 0 else 0.0,
+        }
+        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import TimeoutError as FuturesTimeoutError
         try:
-            import torch
-            generate_kwargs: dict[str, Any] = {
-                **inputs,
-                "max_new_tokens": max_new_tokens,
-                "do_sample": temperature > 0,
-                "pad_token_id": self.tokenizer.eos_token_id,
-            }
-            if temperature > 0:
-                generate_kwargs["temperature"] = temperature
             if max_time is not None:
-                generate_kwargs["max_time"] = max_time
-            with torch.no_grad():
-                outputs = self.model.generate(**generate_kwargs)
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(
+                        self.model.create_chat_completion,
+                        **completion_kwargs,
+                    )
+                    response = future.result(timeout=max_time)
+            else:
+                response = self.model.create_chat_completion(**completion_kwargs)
+        except FuturesTimeoutError:
+            elapsed = time.monotonic() - started
+            logger.error("Gemma4 generation timed out after %.1fs", elapsed)
+            raise TimeoutError(
+                f"Gemma4 generation exceeded {max_time:.0f}s time limit"
+            ) from None
         except Exception as exc:
             logger.error("Gemma4 generation failed: %s", exc)
             raise
         elapsed = time.monotonic() - started
-        response_text = self.tokenizer.decode(
-            outputs[0][prompt_tokens:], skip_special_tokens=True
-        ).strip()
-        new_tokens = outputs.shape[1] - prompt_tokens
+        choice = response["choices"][0]
+        message = choice.get("message") or {}
+        response_text = str(message.get("content") or "").strip()
+        finish_reason = str(choice.get("finish_reason") or "")
+        usage = response.get("usage") or {}
+        completion_tokens = usage.get("completion_tokens")
         logger.info(
-            "Gemma4 generate done in %.1fs (new_tokens=%d, prompt_tokens=%d)",
+            "Gemma4 generate done in %.1fs (completion_tokens=%s finish_reason=%s)",
             elapsed,
-            new_tokens,
-            prompt_tokens,
+            completion_tokens,
+            finish_reason,
         )
+        if finish_reason == "length":
+            logger.warning(
+                "Gemma4 response truncated at max_tokens=%d; increase max_new_tokens",
+                max_new_tokens,
+            )
         if elapsed >= SLOW_GENERATE_WARN_S:
             logger.warning(
                 "Gemma4 generation took %.1fs on CPU; consider fewer columns/fields",
@@ -575,38 +717,48 @@ class Gemma4FieldMatcher:
         return response_text
 
 
-    def _parse_batch_mapping_result(
+    def _salvage_mapping_objects(self, response_text: str) -> list[dict[str, Any]]:
+        """Extract complete mapping dicts from a truncated mappings array."""
+        salvaged: list[dict[str, Any]] = []
+        search_from = 0
+        while search_from < len(response_text):
+            start = response_text.find('{"field"', search_from)
+            if start < 0:
+                start = response_text.find('{ "field"', search_from)
+            if start < 0:
+                break
+            depth = 0
+            parsed_obj: dict[str, Any] | None = None
+            for index in range(start, len(response_text)):
+                char = response_text[index]
+                if char == "{":
+                    depth += 1
+                elif char == "}":
+                    depth -= 1
+                    if depth == 0:
+                        chunk = response_text[start : index + 1]
+                        try:
+                            candidate = json.loads(chunk)
+                        except json.JSONDecodeError:
+                            candidate = None
+                        if isinstance(candidate, dict) and candidate.get("field"):
+                            parsed_obj = candidate
+                        search_from = index + 1
+                        break
+            else:
+                break
+            if parsed_obj is not None:
+                salvaged.append(parsed_obj)
+        return salvaged
+
+
+    def _parse_mappings_list(
         self,
-        response_text: str,
+        mappings_list: list[Any],
         source_columns: list[str],
         expected_fields: list[str],
     ) -> dict[str, FieldMappingResult]:
-        """Parse batch JSON response into validated field mapping dictionary."""
-        # Extract mappings JSON and validate each field entry
-        json_match = re.search(r"\{[\s\S]*\"mappings\"[\s\S]*\}", response_text)
-        if not json_match:
-            logger.warning("No valid batch JSON found in LLM response")
-            return {
-                field: {
-                    "filed": "?",
-                    "index": -1,
-                    "confidence_reason": "No valid JSON found in LLM response",
-                }
-                for field in expected_fields
-            }
-        try:
-            parsed = json.loads(json_match.group(0))
-        except json.JSONDecodeError as exc:
-            logger.warning("Batch mapping JSON parse failed: %s", exc)
-            return {
-                field: {
-                    "filed": "?",
-                    "index": -1,
-                    "confidence_reason": f"JSON parse failed: {exc}",
-                }
-                for field in expected_fields
-            }
-        mappings_list = parsed.get("mappings", [])
+        """Validate mapping objects and fill defaults for missing fields."""
         header_by_norm = {h.strip().lower(): h for h in source_columns}
         result: dict[str, FieldMappingResult] = {}
         for item in mappings_list:
@@ -643,6 +795,47 @@ class Gemma4FieldMatcher:
         return result
 
 
+    def _parse_batch_mapping_result(
+        self,
+        response_text: str,
+        source_columns: list[str],
+        expected_fields: list[str],
+    ) -> dict[str, FieldMappingResult]:
+        """Parse batch JSON response into validated field mapping dictionary."""
+        # Extract mappings JSON and validate each field entry
+        json_match = re.search(r"\{[\s\S]*\"mappings\"[\s\S]*", response_text)
+        if not json_match:
+            logger.warning("No valid batch JSON found in LLM response")
+            return {
+                field: {
+                    "filed": "?",
+                    "index": -1,
+                    "confidence_reason": "No valid JSON found in LLM response",
+                }
+                for field in expected_fields
+            }
+        json_text = json_match.group(0)
+        parsed: dict[str, Any] | None = None
+        try:
+            parsed = json.loads(json_text)
+        except json.JSONDecodeError as exc:
+            logger.warning("Batch mapping JSON parse failed: %s; salvaging complete objects", exc)
+            salvaged = self._salvage_mapping_objects(json_text)
+            if salvaged:
+                logger.info("Salvaged %d mapping objects from truncated JSON", len(salvaged))
+                return self._parse_mappings_list(salvaged, source_columns, expected_fields)
+            return {
+                field: {
+                    "filed": "?",
+                    "index": -1,
+                    "confidence_reason": f"JSON parse failed: {exc}",
+                }
+                for field in expected_fields
+            }
+        mappings_list = parsed.get("mappings", []) if isinstance(parsed, dict) else []
+        return self._parse_mappings_list(mappings_list, source_columns, expected_fields)
+
+
     def batch_match_all_fields(
         self,
         source_columns_data: list[SourceColumnData],
@@ -655,9 +848,11 @@ class Gemma4FieldMatcher:
             source_columns_data,
             yaml_field_names,
         )
-        response = self._generate(prompt_text, max_new_tokens=512, temperature=0.0)
+        max_tokens = batch_mapping_max_tokens(len(yaml_field_names))
+        response = self._generate(prompt_text, max_new_tokens=max_tokens, temperature=0.0)
         source_columns = [col["header"] for col in source_columns_data]
         mappings = self._parse_batch_mapping_result(response, source_columns, yaml_field_names)
+        mappings = propagate_date_component_mappings(mappings, yaml_field_names)
         return mappings, prompt_text, response
 
 
@@ -668,7 +863,7 @@ class Gemma4FieldMatcher:
             return "month as integer (e.g., 6)"
         if field_lower in {"dd", "day"}:
             return "day as integer (e.g., 2)"
-        if field_lower in {"yyyy", "year"}:
+        if field_lower in {"yy", "yyyy", "year"}:
             return "year as integer (e.g., 2026)"
         if "date" in field_lower:
             return "date string (e.g., '6/2/2026' or '2026-06-02')"
@@ -709,11 +904,21 @@ class Gemma4FieldMatcher:
                 continue
             for field in fields:
                 expected = self._infer_expected_format(field)
+                mapping = mappings.get(field, {})
+                reason = str(mapping.get("confidence_reason", "") or "")
+                already_listed = any(
+                    listed_field == field for listed_field, _ in mismatches.get(source_column, [])
+                )
+                if _confidence_reason_suggests_mismatch(reason):
+                    if not already_listed:
+                        mismatches.setdefault(source_column, []).append((field, expected))
+                    continue
                 matches = sum(
                     1 for val in sample_values if self._matches_expected_format(val, expected)
                 )
                 if matches < max(1, int(len(sample_values) * 0.5)):
-                    mismatches.setdefault(source_column, []).append((field, expected))
+                    if not already_listed:
+                        mismatches.setdefault(source_column, []).append((field, expected))
         return mismatches
 
 
@@ -863,6 +1068,30 @@ Reply with JSON only (no markdown, no explanation):
             if valid_rules:
                 result[source_column] = valid_rules
         return result
+
+
+    def enrich_mappings_with_transformations(
+        self,
+        mappings: dict[str, FieldMappingResult],
+        sample_rows: list[dict[str, str]],
+    ) -> tuple[dict[str, list[TransformationRule]], dict[str, dict[str, Any]]]:
+        """Run second-pass transformation inference and attach regex to mappings."""
+        mismatches = self.detect_format_mismatches(mappings, sample_rows)
+        if not mismatches:
+            return {}, {field: dict(mapping) for field, mapping in mappings.items()}
+        transformations = self.infer_transformations_for_mismatches(mismatches, sample_rows)
+        enriched: dict[str, dict[str, Any]] = {
+            field: dict(mapping) for field, mapping in mappings.items()
+        }
+        for rules in transformations.values():
+            for rule in rules:
+                if rule["extraction_method"] != "regex":
+                    continue
+                target_field = rule["target_field"]
+                if target_field not in enriched:
+                    continue
+                enriched[target_field]["regex"] = rule["pattern"]
+        return transformations, enriched
 
 
     def match_sheet_fields_to_yaml(

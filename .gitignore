@@ -32,6 +32,10 @@ Thumbs.db
 
 models/*
 
+# llama-cpp wheel probe artifacts (manual install debugging)
+_cpu_index.html
+**/_wheel_probe*/
+tests/_artifacts/
 
 # 测试文件夹和测试脚本（排除所有测试代码和临时文件）
 tests/

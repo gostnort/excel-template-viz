@@ -308,7 +308,21 @@ def _normalize_field_rule_lists(raw: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def config_to_yaml(config: dict[str, Any]) -> str:
+def _meaningful_order_entries(order: list[Any]) -> list[dict[str, Any]]:
+    """Keep order entries that reference a mapped sheet column."""
+    meaningful: list[dict[str, Any]] = []
+    for item in order:
+        if not isinstance(item, dict):
+            continue
+        filed = (str(item.get("filed", UNMAPPED_FILED)).strip()) or UNMAPPED_FILED
+        index = int(item.get("index", UNMAPPED_INDEX))
+        if _is_unmapped(filed, index):
+            continue
+        meaningful.append(item)
+    return meaningful
+
+
+def config_to_yaml(config: dict[str, Any], *, omit_unmapped_fields: bool = False) -> str:
     config = _normalize_field_rule_lists(config)
     lines: list[str] = [f'determiner: {_yaml_scalar(str(config.get("determiner", "tab")))}']
     fields_per_row = config.get("fields_per_row", DEFAULT_FIELDS_PER_ROW)
@@ -320,9 +334,11 @@ def config_to_yaml(config: dict[str, Any]) -> str:
         lines.append(f'worksheet: {_yaml_scalar(str(worksheet))}')
     order = config.get("order")
     if isinstance(order, list) and order:
-        lines.append("order:")
-        for item in order:
-            lines.extend(_format_rule_lines(item, indent=2))
+        meaningful_order = _meaningful_order_entries(order)
+        if meaningful_order:
+            lines.append("order:")
+            for item in meaningful_order:
+                lines.extend(_format_rule_lines(item, indent=2))
     
     # Handle sections configuration
     sections = config.get("sections")
@@ -339,10 +355,19 @@ def config_to_yaml(config: dict[str, Any]) -> str:
             continue
         if not isinstance(value, list):
             continue
-        lines.append(str(key) + ":")
+        field_lines: list[str] = []
         for rule in value:
             if isinstance(rule, dict):
-                lines.extend(_format_rule_lines(rule, indent=2))
+                if omit_unmapped_fields:
+                    filed = (str(rule.get("filed", UNMAPPED_FILED)).strip()) or UNMAPPED_FILED
+                    index = int(rule.get("index", UNMAPPED_INDEX))
+                    if _is_unmapped(filed, index):
+                        continue
+                field_lines.extend(_format_rule_lines(rule, indent=2))
+        if not field_lines:
+            continue
+        lines.append(str(key) + ":")
+        lines.extend(field_lines)
     return "\n".join(lines) + "\n"
 
 

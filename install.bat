@@ -75,7 +75,26 @@ echo Upgrading pip...
 %PYTHON_CMD% -m pip install --upgrade pip
 
 echo.
-echo Installing dependencies (pure Python, no compilation)...
+echo Detecting CPU SIMD features for llama-cpp-python wheel...
+set PYTHONPATH=%CD%
+for /f "delims=" %%V in ('python -c "from app.services.cpu_features import recommended_llama_cpp_version; print(recommended_llama_cpp_version())"') do set LLAMA_CPP_VERSION=%%V
+echo Recommended llama-cpp-python version: %LLAMA_CPP_VERSION%
+echo Installing llama-cpp-python %LLAMA_CPP_VERSION% (CPU wheel)...
+set LLAMA_CPP_CPU_INDEX=https://abetlen.github.io/llama-cpp-python/whl/cpu
+pip install llama-cpp-python==%LLAMA_CPP_VERSION% --extra-index-url %LLAMA_CPP_CPU_INDEX%
+if errorlevel 1 (
+    echo WARNING: CPU wheel index install failed; retrying from PyPI...
+    pip install llama-cpp-python==%LLAMA_CPP_VERSION%
+    if errorlevel 1 (
+        echo ERROR: Failed to install llama-cpp-python
+        echo See QUICKSTART.md for CPU / wheel compatibility.
+        pause
+        exit /b 1
+    )
+)
+
+echo.
+echo Installing remaining dependencies...
 echo.
 pip install -r requirements.txt
 if errorlevel 1 (

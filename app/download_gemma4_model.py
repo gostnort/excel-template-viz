@@ -2,6 +2,8 @@
 Download Gemma 4 E4B Q4_0 GGUF model from Hugging Face Hub.
 
 Downloads gemma-4-E4B_q4_0-it.gguf into models/gemma4/.
+Inference requires llama-cpp-python; on Windows CPUs without AVX512 use
+0.3.28 from the CPU wheel index (see QUICKSTART.md compatibility table).
 
 Usage:
     python app/download_gemma4_model.py         # Interactive mode

@@ -5,10 +5,27 @@ Builds the main Gradio application layout with template selector and tabs.
 """
 import gradio as gr
 import logging
-import os
-import signal
+import sys
+import threading
+import time
+from pathlib import Path
 from typing import Any
 
+from app.components.gradio_config import (
+    build_config_tab,
+    fetch_llm_test_columns,
+    handle_sections_save,
+    handle_yaml_load,
+    load_llm_test_worksheets,
+    refresh_llm_test_from_datasource_worksheet,
+)
+from app.components.gradio_data_source_settings import build_datasource_tab
+from app.components.gradio_template_form import (
+    build_form_tab,
+    refresh_data_entry_form,
+    resolve_default_sheet_name,
+)
+from app.services.excel_parser import list_sheet_names
 from app.services.registry import load_templates, TemplateConfig
 
 logger = logging.getLogger(__name__)
@@ -134,6 +151,11 @@ APP_CSS = """
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.15), 
                         0 2px 4px -1px rgba(0, 0, 0, 0.1) !important;
             outline: none !important;
+        }
+        
+        /* Read-only LLM response JSON: Gradio sets overflow-y:hidden on disabled textareas */
+        .llm-response-box textarea {
+            overflow-y: auto !important;
         }
         
         /* 按钮激活状态 */
@@ -324,8 +346,6 @@ def build_app() -> gr.Blocks:
                 with gr.Tabs(elem_classes=["main-tabs"]) as tabs:
                     # Tab 1: Data Entry
                     with gr.TabItem("数据录入", id="data_entry"):
-                        from app.components.gradio_template_form import build_form_tab
-                        
                         form_components = build_form_tab(
                             current_template,
                             credentials_state,
@@ -335,8 +355,6 @@ def build_app() -> gr.Blocks:
                     
                     # Tab 2: Data Source
                     with gr.TabItem("数据源", id="data_source"):
-                        from app.components.gradio_data_source_settings import build_datasource_tab
-                        
                         datasource_components = build_datasource_tab(
                             current_template,
                             credentials_state
@@ -344,8 +362,6 @@ def build_app() -> gr.Blocks:
                     
                     # Tab 3: Configuration
                     with gr.TabItem("参数配置", id="config"):
-                        from app.components.gradio_config import build_config_tab
-                        
                         config_components = build_config_tab(
                             current_template,
                             credentials_state
@@ -358,8 +374,6 @@ def build_app() -> gr.Blocks:
         )
         
         # Event: Template selection changed
-        from app.components.gradio_template_form import refresh_data_entry_form
-
         template_selector.change(
             fn=on_template_change,
             inputs=[template_selector, current_template],
@@ -374,8 +388,6 @@ def build_app() -> gr.Blocks:
             outputs=form_components["form_refresh_outputs"],
             show_progress="hidden",
         )
-
-        from app.components.gradio_config import handle_sections_save, handle_yaml_load
 
         config_components["sections_save_btn"].click(
             fn=handle_sections_save,
@@ -404,12 +416,32 @@ def build_app() -> gr.Blocks:
             show_progress="hidden",
         )
         
-        # Cross-tab event: Update LLM test columns when worksheet changes
-        from app.components.gradio_config import update_llm_test_columns
-        datasource_components["worksheet_dropdown"].change(
-            fn=update_llm_test_columns,
+        datasource_components["connect_btn"].click(
+            fn=load_llm_test_worksheets,
             inputs=[current_template, credentials_state],
-            outputs=[config_components["test_sheet_cols"]]
+            outputs=[config_components["llm_test_worksheet"]],
+        ).then(
+            fn=fetch_llm_test_columns,
+            inputs=[
+                current_template,
+                credentials_state,
+                config_components["llm_test_worksheet"],
+            ],
+            outputs=[config_components["test_sheet_cols"]],
+        )
+
+        # Cross-tab event: sync LLM test sheet/columns when data-source worksheet changes
+        datasource_components["worksheet_dropdown"].change(
+            fn=refresh_llm_test_from_datasource_worksheet,
+            inputs=[
+                current_template,
+                credentials_state,
+                datasource_components["worksheet_dropdown"],
+            ],
+            outputs=[
+                config_components["llm_test_worksheet"],
+                config_components["test_sheet_cols"],
+            ],
         )
         
         # Event: Sidebar toggle (hide in sidebar, show in main area when collapsed)
@@ -476,21 +508,15 @@ def handle_shutdown():
     gr.Info("正在关闭应用...")
     
     # Schedule shutdown after a short delay to allow response to be sent
-    import threading
-    import time
-    
     def delayed_shutdown():
         time.sleep(1)  # Wait 1 second for response to be sent
         logger.info("Shutting down Gradio server...")
         
-        # Close all Gradio servers
         try:
             gr.close_all()
         except Exception as e:
-            logger.error(f"Error closing Gradio: {e}")
-        
-        # Force exit the process
-        os.kill(os.getpid(), signal.SIGTERM)
+            logger.error("Error closing Gradio: %s", e)
+        sys.exit(0)
     
     shutdown_thread = threading.Thread(target=delayed_shutdown, daemon=True)
     shutdown_thread.start()
@@ -511,10 +537,6 @@ def on_template_change(
         return None, gr.update(choices=[], value=None)
 
     try:
-        from app.components.gradio_template_form import resolve_default_sheet_name
-        from app.services.excel_parser import list_sheet_names
-        from pathlib import Path
-
         templates = load_templates()
         template_dict = {t.display_name: t for t in templates}
 
