@@ -6,6 +6,7 @@ Handles YAML configuration editing, LLM settings, and template parameters.
 import gradio as gr
 import json
 import logging
+import sys
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -27,9 +28,10 @@ from app.services.paste_parse_config import (
     paste_config_path,
     resolve_sheet_header,
 )
-from app.services.phi4_field_matcher import (
+from app.services.gemma4_field_matcher import (
     FieldMatchResult,
     ModelDownloadError,
+    build_batch_field_mapping_prompt,
     ensure_model_downloaded,
     find_model_file,
     get_last_load_error,
@@ -263,7 +265,7 @@ def build_config_tab(
             
             # Sub-tab 3: LLM Settings
             with gr.TabItem("LLM 字段匹配"):
-                gr.Markdown("使用 Phi-4 模型智能匹配字段（首次使用会自动下载）")
+                gr.Markdown("使用 Gemma 4 模型智能匹配字段（首次使用会自动下载）")
                 
                 # Test LLM matching
                 with gr.Row():
@@ -278,6 +280,7 @@ def build_config_tab(
                 
                 llm_test_cancel = gr.State({"cancelled": False})
                 llm_test_start_time = gr.State(0.0)
+                llm_test_prepared_state = gr.State(None)
 
                 with gr.Row():
                     test_llm_btn = gr.Button("🧪 测试 LLM 匹配", variant="primary")
@@ -323,6 +326,7 @@ def build_config_tab(
                 components["test_sheet_cols"] = test_sheet_cols
                 components["llm_test_cancel"] = llm_test_cancel
                 components["llm_test_start_time"] = llm_test_start_time
+                components["llm_test_prepared_state"] = llm_test_prepared_state
                 components["test_llm_btn"] = test_llm_btn
                 components["stop_llm_btn"] = stop_llm_btn
                 components["llm_test_elapsed"] = llm_test_elapsed
@@ -392,13 +396,28 @@ def build_config_tab(
         outputs=[yaml_status]
     )
     
-    # LLM tab events
+    # LLM tab events — step 1: build prompt (fast); step 2: load model + generate
     llm_test_event = test_llm_btn.click(
         fn=_begin_llm_test,
         outputs=[test_llm_btn, stop_llm_btn, llm_test_cancel, llm_test_start_time, llm_test_elapsed],
     ).then(
-        fn=handle_llm_test,
-        inputs=[current_template, test_sheet_cols, credentials_state, llm_test_cancel, llm_test_start_time],
+        fn=prepare_llm_test_prompt,
+        inputs=[current_template, test_sheet_cols, credentials_state, llm_test_start_time],
+        outputs=[
+            llm_test_prepared_state,
+            prompt_display,
+            llm_response,
+            test_result,
+            llm_test_elapsed,
+        ],
+    ).then(
+        fn=run_llm_test_generation,
+        inputs=[
+            current_template,
+            llm_test_prepared_state,
+            llm_test_cancel,
+            llm_test_start_time,
+        ],
         outputs=[prompt_display, llm_response, test_result, test_result_yaml, llm_test_elapsed],
     ).then(
         fn=_end_llm_test,
@@ -759,7 +778,7 @@ def handle_yaml_auto_config(
     progress: gr.Progress = gr.Progress(),
 ):
     """
-    Auto-fill YAML field mappings using sheet columns and Phi-4 matching.
+    Auto-fill YAML field mappings using sheet columns and Gemma 4 matching.
 
     Args:
         template: Current template
@@ -804,9 +823,9 @@ def handle_yaml_auto_config(
         fallback_column_map = _exact_match_columns(template_fields, columns, filed_hints)
 
         if not find_model_file():
-            gr.Info("正在下载 Phi-4 模型…")
-            progress(0.2, desc="⏳ 正在下载 Phi-4 模型…")
-            yield gr.skip(), "⏳ 正在下载 Phi-4 模型…"
+            gr.Info("正在下载 Gemma 4 模型…")
+            progress(0.2, desc="⏳ 正在下载 Gemma 4 模型…")
+            yield gr.skip(), "⏳ 正在下载 Gemma 4 模型…"
 
             def download_progress(stage, current, total, msg):
                 progress(0.2 + 0.2 * (current / total), desc=msg)
@@ -821,8 +840,8 @@ def handle_yaml_auto_config(
                 logger.error("Download failed: %s", exc)
                 gr.Warning(f"LLM 不可用（{exc}），已回退到精确名称匹配")
 
-        progress(0.4, desc="⏳ 正在加载 Phi-4…")
-        yield gr.skip(), "⏳ 正在加载 Phi-4…"
+        progress(0.4, desc="⏳ 正在加载 Gemma 4…")
+        yield gr.skip(), "⏳ 正在加载 Gemma 4…"
 
         def load_progress(stage, current, total, msg):
             progress(0.4 + 0.2 * (current / total), desc=f"⏳ {msg}")
@@ -832,8 +851,6 @@ def handle_yaml_auto_config(
         llm_used = False
 
         if matcher and sample_rows and columns:
-            progress(0.65, desc="⏳ 一次性批量匹配所有字段…")
-            yield gr.skip(), "⏳ 一次性批量匹配所有字段…"
             usable_rows = sample_rows[: max(5, min(len(sample_rows), 10))]
             if len(usable_rows) >= 5:
                 source_data = prepare_batch_input(columns, usable_rows, min_rows=5)
@@ -847,10 +864,26 @@ def handle_yaml_auto_config(
                     }
                     for idx, col in enumerate(columns)
                 ]
-            batch_mappings, _, _ = matcher.batch_match_all_fields(source_data, template_fields)
+            batch_prompt = build_batch_field_mapping_prompt(source_data, template_fields)
+            preview = batch_prompt if len(batch_prompt) <= 800 else batch_prompt[:800] + "\n…（已截断）"
+            gr.Info(f"Prompt 已构建（{len(batch_prompt)} 字符），开始 LLM 推理…")
+            progress(0.62, desc="⏳ Prompt 已就绪，LLM 推理中…")
+            yield gr.skip(), (
+                f"⏳ Prompt 已构建（{len(batch_prompt)} 字符），LLM 推理中…\n\n"
+                f"```\n{preview}\n```"
+            )
+            batch_mappings, _, _ = matcher.batch_match_all_fields(
+                source_data,
+                template_fields,
+                prompt=batch_prompt,
+            )
             llm_used = True
         else:
-            gr.Warning("Phi-4 模型不可用，已回退到精确名称匹配")
+            detail = get_last_load_error()
+            if detail:
+                gr.Warning(f"Gemma 4 模型不可用（{detail}），已回退到精确名称匹配")
+            else:
+                gr.Warning("Gemma 4 模型不可用，已回退到精确名称匹配")
 
         if llm_used and batch_mappings:
             column_map: dict[str, dict[str, Any]] = {}
@@ -891,7 +924,7 @@ def handle_yaml_auto_config(
             if isinstance(mapping, dict) and mapping.get("filed") not in {None, "?"}
         )
         unmapped_count = len(template_fields) - matched_count
-        method = "批量 Phi-4 + 精确回退" if llm_used else "精确名称匹配"
+        method = "批量 Gemma 4 + 精确回退" if llm_used else "精确名称匹配"
         
         # Write to YAML file
         try:
@@ -994,26 +1027,141 @@ def _is_llm_test_cancelled(cancel_state: dict[str, bool] | None) -> bool:
     return bool(cancel_state and cancel_state.get("cancelled"))
 
 
-def handle_llm_test(
+def _gather_llm_test_sheet_data(
+    template: TemplateConfig,
+    test_cols: list | None,
+    credentials: Any,
+) -> tuple[list[str], list[dict[str, str]], bool, str | None]:
+    """Return (columns, sample_rows, using_manual_cols, fetch_error)."""
+    columns, fetched_rows, fetch_error = _fetch_sheet_columns_and_samples(template, credentials)
+    if fetch_error:
+        if not test_cols:
+            return [], [], False, fetch_error
+        sheet_columns = list(test_cols)
+        sample_rows = [
+            {col: f"测试值_{row_idx + 1}_{col}" for col in sheet_columns}
+            for row_idx in range(5)
+        ]
+        return sheet_columns, sample_rows, True, None
+    return columns, fetched_rows, False, None
+
+
+def _build_llm_test_source_data(
+    filtered_columns: list[str],
+    filtered_rows: list[dict[str, str]],
+) -> list[dict[str, Any]]:
+    """Build batch input payload for field matching."""
+    if len(filtered_rows) >= 5:
+        return prepare_batch_input(filtered_columns, filtered_rows[:10], min_rows=5)
+    return [
+        {
+            "index": idx,
+            "header": col,
+            "data": [str(row.get(col, "") or "") for row in filtered_rows],
+        }
+        for idx, col in enumerate(filtered_columns)
+    ]
+
+
+def prepare_llm_test_prompt(
     template: TemplateConfig | None,
     test_cols: list | None,
     credentials: Any,
+    start_time: float,
+) -> tuple[dict[str, Any] | None, str, str, str, str]:
+    """
+    Step 1: gather sheet data and build the LLM prompt without loading the model.
+
+    Returns (prepared_state, prompt_display, llm_response, test_result_json, elapsed_label).
+    """
+    elapsed = _running_elapsed_label(start_time)
+
+    if not template:
+        return None, "", "", "// 请先选择模板", elapsed
+
+    try:
+        sheet_columns, sample_rows, using_manual_cols, fetch_error = _gather_llm_test_sheet_data(
+            template, test_cols, credentials
+        )
+        if fetch_error:
+            gr.Warning(fetch_error)
+            return None, "", "", f"// {fetch_error}", elapsed
+
+        if using_manual_cols:
+            gr.Info("使用手动选择的列进行测试")
+        else:
+            gr.Info(f"已读取 Sheet：{len(sheet_columns)} 列，{len(sample_rows)} 行样本")
+
+        if len(sample_rows) < 5:
+            gr.Warning(f"仅有 {len(sample_rows)} 行样本，建议至少 5 行以提高匹配准确率")
+
+        paste_config = load_paste_parse_config(template.id)
+        if not paste_config:
+            return None, "", "", "// 模板配置未找到", elapsed
+
+        if test_cols and len(test_cols) > 0:
+            filtered_columns = [c for c in sheet_columns if c in test_cols]
+            filtered_rows = [
+                {k: v for k, v in row.items() if k in filtered_columns} for row in sample_rows
+            ]
+            gr.Info(f"仅测试选中的 {len(filtered_columns)} 列：{', '.join(filtered_columns)}")
+        else:
+            filtered_columns = sheet_columns
+            filtered_rows = sample_rows
+
+        if not filtered_columns:
+            return None, "", "", "// 无可用列可用于匹配", elapsed
+
+        yaml_fields = _collect_yaml_fields(paste_config.to_dict())
+        if not yaml_fields:
+            return None, "", "", "// 模板无字段", elapsed
+
+        yaml_field_names = [name for name, _, _ in yaml_fields]
+        source_data = _build_llm_test_source_data(filtered_columns, filtered_rows)
+        prompt_text = build_batch_field_mapping_prompt(source_data, yaml_field_names)
+
+        prepared: dict[str, Any] = {
+            "template_id": template.id,
+            "source_data": source_data,
+            "yaml_field_names": yaml_field_names,
+            "yaml_fields": yaml_fields,
+            "filtered_columns": filtered_columns,
+            "filtered_rows": filtered_rows,
+            "using_manual_cols": using_manual_cols,
+            "prompt_text": prompt_text,
+        }
+
+        gr.Info(f"Prompt 已构建（{len(prompt_text)} 字符），即将加载模型并推理…")
+        status_json = _format_llm_test_json(
+            "Prompt 已构建，等待模型加载…",
+            {},
+            sheet_columns=filtered_columns,
+            sample_row=filtered_rows[0] if filtered_rows and not using_manual_cols else None,
+        )
+        return (
+            prepared,
+            prompt_text,
+            "等待 LLM 响应…（正在加载模型）",
+            status_json,
+            elapsed,
+        )
+
+    except Exception as exc:
+        logger.error("LLM test prompt preparation failed: %s", exc)
+        return None, "", "", f"// 构建 Prompt 失败：{exc}", elapsed
+
+
+def run_llm_test_generation(
+    template: TemplateConfig | None,
+    prepared_state: dict[str, Any] | None,
     cancel_state: dict[str, bool],
     start_time: float,
     progress: gr.Progress = gr.Progress(),
 ):
     """
-    Test LLM field matching with prompt and response display.
+    Step 2: load model (if needed), run LLM inference, and format results.
 
-    Args:
-        template: Current template
-        test_cols: Selected test columns (optional)
-        credentials: Google OAuth credentials
-        cancel_state: Mutable cancel flag from gr.State
-        start_time: Monotonic timestamp when the test started
-        progress: Gradio Progress component
-
-    Yields (prompt_display, llm_response, test_result_json, test_result_yaml, elapsed_label) tuples.
+    Yields (prompt_display, llm_response, test_result_json, test_result_yaml, elapsed_label).
     """
     def _tick(
         prompt: str = "",
@@ -1032,168 +1180,126 @@ def handle_llm_test(
         gr.Info("已停止测试")
         return prompt, response, result, yaml_result, _final_elapsed_label(start_time, stopped=True)
 
-    if not template:
-        yield "", "", "// 请先选择模板", "", "用时: —"
+    if not template or not prepared_state:
+        yield "", "", "// 无有效测试上下文（请先构建 Prompt）", "", "用时: —"
         return
 
+    prompt_text = str(prepared_state.get("prompt_text") or "")
+    source_data = prepared_state.get("source_data") or []
+    yaml_field_names: list[str] = prepared_state.get("yaml_field_names") or []
+    yaml_fields = prepared_state.get("yaml_fields") or []
+    filtered_columns: list[str] = prepared_state.get("filtered_columns") or []
+    filtered_rows: list[dict[str, str]] = prepared_state.get("filtered_rows") or []
+    using_manual_cols = bool(prepared_state.get("using_manual_cols"))
+
     try:
-        sheet_columns: list[str] = []
-        sample_rows: list[dict[str, str]] = []
-        using_manual_cols = False
-
-        progress(0, desc="正在读取 Sheet 样本数据…")
-        yield _tick(result=_format_llm_test_json("正在读取 Sheet 样本数据…", {}))
-        if _is_llm_test_cancelled(cancel_state):
-            yield _tick_stopped()
-            return
-
-        columns, fetched_rows, fetch_error = _fetch_sheet_columns_and_samples(
-            template, credentials
-        )
-        if fetch_error:
-            if not test_cols:
-                gr.Warning(fetch_error)
-                yield _tick(result=f"// {fetch_error}")
-                return
-            sheet_columns = list(test_cols)
-            sample_rows = [
-                {col: f"测试值_{row_idx + 1}_{col}" for col in sheet_columns}
-                for row_idx in range(5)
-            ]
-            using_manual_cols = True
-            gr.Info("使用手动选择的列进行测试")
-        else:
-            sheet_columns = columns
-            sample_rows = fetched_rows
-            gr.Info(f"已读取 Sheet：{len(columns)} 列，{len(sample_rows)} 行样本")
-
-        if len(sample_rows) < 5:
-            gr.Warning(f"仅有 {len(sample_rows)} 行样本，建议至少 5 行以提高匹配准确率")
-
-        progress(0.1, desc=f"已读取 {len(sheet_columns)} 列")
-        yield _tick(
-            result=_format_llm_test_json(
-                f"已读取 {len(sheet_columns)} 列",
-                {},
-                sheet_columns=sheet_columns,
-                sample_row=sample_rows[0] if sample_rows and not using_manual_cols else None,
-            )
-        )
-        if _is_llm_test_cancelled(cancel_state):
-            yield _tick_stopped()
-            return
-
         paste_config = load_paste_parse_config(template.id)
         if not paste_config:
-            yield _tick(result="// 模板配置未找到")
+            yield _tick(prompt_text, result="// 模板配置未找到")
             return
 
         if not find_model_file():
-            gr.Info("正在下载 Phi-4 模型…")
-            progress(0.2, desc="正在下载 Phi-4 模型…")
-            yield _tick(result=_format_llm_test_json("正在下载 Phi-4 模型…", {}))
+            gr.Info("正在下载 Gemma 4 模型…")
+            progress(0.15, desc="正在下载 Gemma 4 模型…")
+            yield _tick(
+                prompt_text,
+                "正在下载模型…",
+                _format_llm_test_json("正在下载 Gemma 4 模型…", {}),
+            )
             if _is_llm_test_cancelled(cancel_state):
-                yield _tick_stopped()
+                yield _tick_stopped(prompt_text)
                 return
-            
+
             def download_progress(stage, current, total, msg):
-                progress(0.2 + 0.2 * (current / total), desc=msg)
-            
+                progress(0.15 + 0.15 * (current / total), desc=msg)
+
             try:
                 ensure_model_downloaded(auto_mode=True, on_progress=download_progress)
                 gr.Info("模型下载完成")
             except ModelDownloadError as exc:
                 logger.error("Model download failed: %s", exc)
-                yield _tick(result=f"// 模型下载失败：{exc}")
+                yield _tick(prompt_text, result=f"// 模型下载失败：{exc}")
                 return
             except Exception as exc:
                 logger.error("Download failed: %s", exc)
                 yield _tick(
+                    prompt_text,
                     result=(
                         f"// 下载失败：{exc}\n"
                         "// 请运行 install.bat 安装依赖，或手动执行: pip install huggingface-hub psutil"
-                    )
+                    ),
                 )
                 return
 
-        gr.Info("正在加载 Phi-4…")
-        progress(0.4, desc="⏳ 正在加载 Phi-4…")
-        yield _tick(result=_format_llm_test_json("正在加载 Phi-4…", {}))
+        gr.Info("正在加载 Gemma 4 到内存（CPU，首次约 1–3 分钟）…")
+        progress(0.35, desc="⏳ 正在加载 Gemma 4…")
+        yield _tick(
+            prompt_text,
+            "正在加载模型到内存…",
+            _format_llm_test_json("正在加载 Gemma 4…", {}),
+        )
         if _is_llm_test_cancelled(cancel_state):
-            yield _tick_stopped()
+            yield _tick_stopped(prompt_text)
             return
 
         def load_progress(stage, current, total, msg):
-            # Update progress bar during model loading
-            progress(0.4 + 0.2 * (current / total), desc=f"⏳ {msg}")
+            progress(0.35 + 0.25 * (current / total), desc=f"⏳ {msg}")
 
         matcher = get_or_create_field_matcher(on_progress=load_progress)
-        
-        # Update progress after matcher is ready (important for cached matcher)
-        progress(0.6, desc="✓ Phi-4 已加载")
-        yield _tick(result=_format_llm_test_json("Phi-4 已加载", {}))
+
+        progress(0.65, desc="✓ Gemma 4 已加载")
+        yield _tick(
+            prompt_text,
+            "模型已加载，正在推理…",
+            _format_llm_test_json("Gemma 4 已加载", {}),
+        )
         if _is_llm_test_cancelled(cancel_state):
-            yield _tick_stopped()
+            yield _tick_stopped(prompt_text)
             return
         if not matcher:
             detail = get_last_load_error()
             if detail:
-                yield _tick(result=f"// Phi-4 模型加载失败\n// {detail}")
+                yield _tick(prompt_text, result=f"// Gemma 4 模型加载失败\n// {detail}")
             else:
                 yield _tick(
+                    prompt_text,
                     result=(
-                        "// Phi-4 模型加载失败\n"
-                        "// 请确认 models/phi4/ 下已有 GGUF 文件，并运行 install.bat 安装 "
-                        "torch、transformers>=5.0、gguf>=0.10.0"
-                    )
+                        "// Gemma 4 模型加载失败\n"
+                        f"// 当前 Python: {sys.executable}\n"
+                        "// 请确认 models/gemma4/ 下已有 gemma-4-E4B_q4_0-it.gguf，并执行:\n"
+                        f"// \"{sys.executable}\" -m pip install llama-cpp-python psutil"
+                    ),
                 )
             return
 
-        gr.Info("Phi-4 就绪，开始批量匹配…")
-        yaml_dict = paste_config.to_dict()
-
-        # Filter columns based on test_cols
-        if test_cols and len(test_cols) > 0:
-            filtered_columns = [c for c in sheet_columns if c in test_cols]
-            filtered_rows = [{k: v for k, v in row.items() if k in filtered_columns} for row in sample_rows]
-            gr.Info(f"仅测试选中的 {len(filtered_columns)} 列：{', '.join(filtered_columns)}")
-        else:
-            filtered_columns = sheet_columns
-            filtered_rows = sample_rows
-
-        if not filtered_columns:
-            yield _tick(result="// 无可用列可用于匹配")
-            return
-
-        # Collect YAML fields
-        yaml_fields = _collect_yaml_fields(yaml_dict)
-        if not yaml_fields:
-            yield _tick(result="// 模板无字段")
-            return
-
-        yaml_field_names = [name for name, _, _ in yaml_fields]
-
-        progress(0.7, desc="⏳ 构建批量输入并调用 LLM…")
-        if len(filtered_rows) >= 5:
-            source_data = prepare_batch_input(filtered_columns, filtered_rows[:10], min_rows=5)
-        else:
-            source_data = [
-                {
-                    "index": idx,
-                    "header": col,
-                    "data": [str(row.get(col, "") or "") for row in filtered_rows],
-                }
-                for idx, col in enumerate(filtered_columns)
-            ]
-
+        gr.Info("开始 LLM 推理（CPU 上可能需数分钟，最长 10 分钟）…")
+        progress(0.7, desc="⏳ LLM 推理中…")
+        yield _tick(
+            prompt_text,
+            "LLM 推理中…",
+            _format_llm_test_json("LLM 推理中…", {}),
+        )
         if _is_llm_test_cancelled(cancel_state):
-            yield _tick_stopped()
+            yield _tick_stopped(prompt_text)
             return
 
-        mappings, prompt_text, response_text = matcher.batch_match_all_fields(source_data, yaml_field_names)
+        gen_started = time.monotonic()
+        mappings, _, response_text = matcher.batch_match_all_fields(
+            source_data,
+            yaml_field_names,
+            prompt=prompt_text,
+        )
+        gen_elapsed = time.monotonic() - gen_started
+        logger.info("LLM test batch inference completed in %.1fs", gen_elapsed)
+        if gen_elapsed >= 120:
+            gr.Warning(f"LLM 推理耗时 {_format_elapsed_seconds(gen_elapsed)}（CPU 较慢属正常）")
+
         if _is_llm_test_cancelled(cancel_state):
             yield _tick_stopped(prompt_text, response_text)
             return
+
+        progress(0.85, desc="⏳ 分析格式不匹配…")
+        yield _tick(prompt_text, response_text, _format_llm_test_json("分析格式不匹配…", {}))
 
         mismatches = matcher.detect_format_mismatches(mappings, filtered_rows)
         transformations = (
@@ -1246,10 +1352,34 @@ def handle_llm_test(
         yield _tick(prompt_text, response_text, result_json, result_yaml)
 
         progress(1.0, desc="✓ 匹配完成")
+        gr.Info("LLM 测试完成")
 
     except Exception as exc:
         logger.error("LLM test failed: %s", exc)
-        yield _tick(result=f"// 测试失败：{exc}")
+        yield _tick(prompt_text, result=f"// 测试失败：{exc}")
+
+
+def handle_llm_test(
+    template: TemplateConfig | None,
+    test_cols: list | None,
+    credentials: Any,
+    cancel_state: dict[str, bool],
+    start_time: float,
+    progress: gr.Progress = gr.Progress(),
+):
+    """
+    Legacy combined handler (prepare + generate). Prefer prepare_llm_test_prompt + run_llm_test_generation.
+    """
+    prepared, prompt, response, result, elapsed = prepare_llm_test_prompt(
+        template, test_cols, credentials, start_time
+    )
+    yield prompt, response, result, "", elapsed
+    if not prepared:
+        return
+    for prompt, response, result, yaml_result, elapsed in run_llm_test_generation(
+        template, prepared, cancel_state, start_time, progress
+    ):
+        yield prompt, response, result, yaml_result, elapsed
 
 
 def handle_sections_save(

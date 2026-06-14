@@ -22,7 +22,7 @@ from app.services.google_sheets import (
     invalidate_sheet_cache,
     lookup_row_by_id,
 )
-from app.services.phi4_field_matcher import create_field_matcher
+from app.services.gemma4_field_matcher import create_field_matcher
 from app.services.import_history import (
     load_import_history, mark_as_processed, mark_as_trash,
     unmark_ids, get_import_stats, clear_history,
@@ -835,7 +835,7 @@ def handle_import_selected(
     detected_areas: list
 ) -> tuple:
     """
-    Import selected rows from preview using Phi-4 field matching
+    Import selected rows from preview using Gemma 4 field matching
     
     Returns:
         (form_data_state, row_selector, import_preview, import_btn, mark_trash_btn, import_stats)

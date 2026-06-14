@@ -1,43 +1,43 @@
 """
-Phi-4 Field Matcher (Transformers + GGUF)
+Gemma 4 Field Matcher (llama-cpp-python)
 
-Uses Phi-4-mini-instruct via Transformers with GGUF support (pure Python, no compilation).
-Automatically selects quantization based on available memory.
+Uses google/gemma-4-E4B-it-qat-q4_0-gguf for sheet-to-YAML field mapping.
+Text-only inference via GGUF quantized model.
 """
-import importlib.metadata
 import json
 import logging
 import re
+import sys
+import time
 from collections.abc import Callable, Iterator
-from dataclasses import  dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 
 logger = logging.getLogger(__name__)
 
-# Progress stages
 ProgressStage = Literal[
-    "download",        # 模型下载
-    "load_tokenizer",  # 加载 Tokenizer
-    "load_model",      # 加载模型权重
-    "warmup",          # 模型预热
-    "match"            # 字段匹配
+    "download",
+    "load_tokenizer",
+    "load_model",
+    "warmup",
+    "match",
 ]
 
-# Progress callback signature: (stage, current, total, message)
 ProgressCallback = Callable[[ProgressStage, int, int, str], None]
 
 
 @dataclass
 class FieldMatchResult:
     """Single field matching result"""
-    filed: str              # Sheet column name
-    index: int              # Column index (base 0)
-    regex: str | None       # Extraction regex
-    similarity: float       # Semantic similarity score
-    matched_value: str      # Matched cell value
-    regex_suggested: bool   # Whether regex was auto-suggested
-    ID: bool = False        # Whether this is an ID field
+
+    filed: str
+    index: int
+    regex: str | None
+    similarity: float
+    matched_value: str
+    regex_suggested: bool
+    ID: bool = False
 
 
 class SourceColumnData(TypedDict):
@@ -67,33 +67,23 @@ class TransformationRule(TypedDict):
     explanation: str
 
 
-# Last load failure message for UI feedback (set by create_field_matcher).
 _last_load_error: str | None = None
+_cached_matcher: "Gemma4FieldMatcher | None" = None
+_cached_matcher_lock = None
 
-# Cached matcher instance (singleton pattern)
-_cached_matcher: "Phi4FieldMatcher | None" = None
-_cached_matcher_lock = None  # Will be initialized when needed
+MODEL_REPO = "google/gemma-4-E4B-it-qat-q4_0-gguf"
+MODEL_DIR = Path("models/gemma4")
+MODEL_WEIGHT_FILE = "gemma-4-E4B_q4_0-it.gguf"
 
-# Model configuration (GGUF weights + base model tokenizer)
-MODEL_REPO = "Vocabook/Phi-4-mini-instruct-GGUF"
-TOKENIZER_REPO = "microsoft/Phi-4-mini-instruct"
-MODEL_DIR = Path("models/phi4")
-
-# Quantization versions available on Vocabook/Phi-4-mini-instruct-GGUF (preference order)
-QUANT_VERSIONS = ["Q8_0", "Q6_K", "Q4_K_M", "Q3_K_L"]
-
-# (name, memory_gb, description)
-QUANT_SPECS: list[tuple[str, float, str]] = [
-    ("Q8_0", 5.5, "Best quality, highest memory"),
-    ("Q6_K", 4.5, "Very good quality"),
-    ("Q4_K_M", 3.5, "Balanced (recommended)"),
-    ("Q3_K_L", 3.0, "Lower quality, smaller"),
+MODEL_FILES = [
+    MODEL_WEIGHT_FILE,
 ]
 
+MIN_MEMORY_GB = 5.0
 
-def gguf_filename(quant_name: str) -> str:
-    """Hub/local filename for a Vocabook Phi-4 GGUF checkpoint."""
-    return f"Phi-4-mini-instruct-{quant_name}.gguf"
+# CPU inference guard: abort generation after this many seconds.
+DEFAULT_GENERATE_MAX_TIME_S = 600
+SLOW_GENERATE_WARN_S = 120
 
 
 class ModelDownloadError(Exception):
@@ -101,7 +91,11 @@ class ModelDownloadError(Exception):
 
 
 class ModelLoadError(Exception):
-    """Phi-4 GGUF model could not be loaded; message is user-facing and actionable."""
+    """Gemma 4 model could not be loaded; message is user-facing and actionable."""
+
+
+class InsufficientMemoryError(Exception):
+    """Insufficient memory to load model; message is user-facing and actionable."""
 
 
 def get_last_load_error() -> str | None:
@@ -109,84 +103,75 @@ def get_last_load_error() -> str | None:
     return _last_load_error
 
 
-def _ensure_gguf_version() -> None:
-    """
-    Work around gguf package missing __version__ (breaks transformers>=5 is_gguf_available).
-    Must run before any transformers GGUF code path.
-    """
-    import gguf
-
-    if getattr(gguf, "__version__", None):
-        return
+def get_available_memory_gb() -> float:
+    """Return available system memory in GB."""
     try:
-        gguf.__version__ = importlib.metadata.version("gguf")
-    except importlib.metadata.PackageNotFoundError:
-        gguf.__version__ = "0.10.0"
-
-
-def _ensure_gguf_hub_accessible(hub_filename: str, local_path: Path | None = None) -> None:
-    """
-    Ensure GGUF can be loaded via MODEL_REPO + gguf_file (HF hub cache).
-
-    Transformers resolves GGUF by repo id + filename, not by passing a local path
-    as pretrained_model_name_or_path. local_dir must not be passed to model loading.
-    """
-    from huggingface_hub import hf_hub_download
-
-    try:
-        hf_hub_download(
-            repo_id=MODEL_REPO,
-            filename=hub_filename,
-            local_files_only=True,
-        )
-        return
-    except Exception:
-        pass
-
-    resolved = local_path if local_path and local_path.is_file() else None
-    canonical = MODEL_DIR / hub_filename
-    if resolved is None and canonical.is_file():
-        resolved = canonical
-
-    if resolved is None or not resolved.is_file():
-        raise FileNotFoundError(
-            f"GGUF file not found: {canonical}. "
-            f"Run install.bat or: python scripts/download_phi4_model.py"
+        import psutil
+        return psutil.virtual_memory().available / (1024**3)
+    except ImportError:
+        raise ImportError(
+            f"缺少 psutil 依赖包。"
+            f"当前 Python: {sys.executable}。"
+            f"请执行: {_pip_install_hint('psutil>=5.9.0')}"
         )
 
-    hf_hub_download(
-        repo_id=MODEL_REPO,
-        filename=hub_filename,
-        local_dir=MODEL_DIR,
-        local_dir_use_symlinks=False,
-        local_files_only=True,
-    )
+
+def _pip_install_hint(*packages: str) -> str:
+    """Return a pip command using the current interpreter."""
+    quoted_exe = f'"{sys.executable}"'
+    package_list = " ".join(packages)
+    return f"{quoted_exe} -m pip install {package_list}"
 
 
-def _resolve_gguf_source(
-    model_path: str | Path | None,
-) -> tuple[str, Path]:
-    """
-    Resolve (hub_filename, local_path) for the GGUF weights.
+def _check_llm_dependencies() -> None:
+    """Verify packages required to load Gemma 4 via llama-cpp-python."""
+    exe = sys.executable
+    missing: list[str] = []
 
-    Returns:
-        hub_filename: filename on the Hugging Face repo (not a directory path)
-        local_path: resolved local file path under MODEL_DIR
-    """
-    if model_path is not None:
-        local_path = Path(model_path).resolve()
-        if not local_path.is_file():
-            raise FileNotFoundError(f"Model file not found: {local_path}")
-        return local_path.name, local_path
+    try:
+        from llama_cpp import Llama  # noqa: F401
+    except ImportError:
+        missing.append("llama-cpp-python")
 
-    found = find_model_file()
-    if found:
-        hub_filename, local_path = found
-        return hub_filename, local_path.resolve()
+    try:
+        import psutil  # noqa: F401
+    except ImportError:
+        missing.append("psutil")
 
-    raise FileNotFoundError(
-        f"No Phi-4 GGUF model in {MODEL_DIR.resolve()}. "
-        f"Download with: python scripts/download_phi4_model.py"
+    if missing:
+        raise ImportError(
+            f"缺少 LLM 依赖包: {', '.join(missing)}。"
+            f"当前 Python: {exe}。"
+            f"请执行: {_pip_install_hint(*missing)}"
+        )
+
+
+def _root_exception(exc: BaseException) -> BaseException:
+    """Return the deepest exception cause."""
+    current = exc
+    while current.__cause__ is not None:
+        current = current.__cause__
+    return current
+
+
+def _format_model_load_error(exc: Exception) -> str:
+    """Build an actionable message from a model load failure."""
+    root = _root_exception(exc)
+    root_msg = str(root)
+    exe = sys.executable
+
+    if isinstance(root, ModuleNotFoundError) and root.name:
+        return (
+            f"Gemma 4 加载失败: 缺少模块 {root.name}。"
+            f"当前 Python: {exe}。"
+            f"请执行: {_pip_install_hint(root.name)}"
+        )
+
+    return (
+        f"Gemma 4 加载失败: {exc}。"
+        f"当前 Python: {exe}。"
+        "请确认已下载模型 (python scripts/download_gemma4_model.py)，并执行: "
+        f"{_pip_install_hint('llama-cpp-python', 'psutil>=5.9.0')}"
     )
 
 
@@ -197,10 +182,6 @@ def _check_download_dependencies() -> None:
         import huggingface_hub  # noqa: F401
     except ImportError:
         missing.append("huggingface-hub")
-    try:
-        import psutil  # noqa: F401
-    except ImportError:
-        missing.append("psutil")
     if missing:
         packages = " ".join(missing)
         raise ModelDownloadError(
@@ -209,166 +190,147 @@ def _check_download_dependencies() -> None:
         )
 
 
-def get_available_memory_gb() -> tuple[float, float]:
-    """Return (available_gb, total_gb) of system memory."""
-    import psutil
+def find_model_file() -> Path | None:
+    """Return local model directory when GGUF file is present, else None."""
+    weight_path = MODEL_DIR / MODEL_WEIGHT_FILE
+    if weight_path.is_file():
+        logger.debug("Found Gemma 4 GGUF model at %s", MODEL_DIR)
+        return MODEL_DIR.resolve()
+    return None
 
-    mem = psutil.virtual_memory()
-    return mem.available / (1024 ** 3), mem.total / (1024 ** 3)
 
+def _resolve_model_dir(model_path: str | Path | None) -> Path:
+    """Resolve directory containing a complete local Gemma 4 checkpoint."""
+    if model_path is not None:
+        local_dir = Path(model_path).resolve()
+        if local_dir.is_file():
+            local_dir = local_dir.parent
+        weight = local_dir / MODEL_WEIGHT_FILE
+        if not weight.is_file():
+            raise FileNotFoundError(
+                f"Model weights not found: {weight}. "
+                f"Run: python scripts/download_gemma4_model.py"
+            )
+        return local_dir
 
-def select_quantization(auto_mode: bool = True) -> tuple[str, float]:
-    """
-    Pick a GGUF quantization that fits available memory.
+    found = find_model_file()
+    if found:
+        return found
 
-    Returns:
-        (quant_name, memory_required_gb)
-    """
-    _check_download_dependencies()
-    available_gb, total_gb = get_available_memory_gb()
-    logger.debug(
-        "System memory: %.1f GB total, %.1f GB available",
-        total_gb,
-        available_gb,
+    raise FileNotFoundError(
+        f"No Gemma 4 model in {MODEL_DIR.resolve()}. "
+        f"Download with: python scripts/download_gemma4_model.py"
     )
-
-    usable_gb = available_gb - 2.0
-    selected: tuple[str, float, str] | None = None
-    for spec in QUANT_SPECS:
-        if spec[1] <= usable_gb:
-            selected = spec
-            break
-    if selected is None:
-        selected = QUANT_SPECS[-1]
-        logger.debug(
-            "Limited memory (%.1f GB usable); using smallest quantization %s",
-            usable_gb,
-            selected[0],
-        )
-
-    quant_name, mem_req, desc = selected
-    logger.debug(
-        "Selected quantization %s (~%.1f GB, %s)%s",
-        quant_name,
-        mem_req,
-        desc,
-        " [auto]" if auto_mode else "",
-    )
-    return quant_name, mem_req
 
 
 def ensure_model_downloaded(
     *,
     auto_mode: bool = True,
     force_redownload: bool = False,
-    quant_name: str | None = None,
     on_progress: ProgressCallback | None = None,
+    **_ignored: Any,
 ) -> Path:
     """
-    Ensure a local Phi-4 GGUF model exists, downloading from Hugging Face if needed.
-
-    Args:
-        auto_mode: Auto-select quantization based on available memory
-        force_redownload: Force re-download even if file exists
-        quant_name: Specific quantization to download (overrides auto_mode)
-        on_progress: Progress callback function
+    Ensure local Gemma 4 GGUF weights exist, downloading from Hugging Face if needed.
 
     Returns:
-        Path to the GGUF file on disk.
+        Path to the local model directory.
 
     Raises:
         ModelDownloadError: Missing dependencies or download failure.
     """
+    _ = auto_mode
     existing = find_model_file()
     if existing and not force_redownload:
-        logger.debug("Model already present: %s", existing[1])
-        return existing[1]
+        logger.debug("Model already present: %s", existing)
+        return existing
 
     _check_download_dependencies()
     from huggingface_hub import hf_hub_download
 
-    if quant_name is None:
-        quant_name, mem_req = select_quantization(auto_mode=auto_mode)
-    else:
-        mem_req = next((m for q, m, _ in QUANT_SPECS if q == quant_name), 3.5)
-
-    model_filename = gguf_filename(quant_name)
-    model_path = MODEL_DIR / model_filename
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    total_files = len(MODEL_FILES)
 
-    if model_path.exists() and not force_redownload:
-        logger.debug("Model already present: %s", model_path)
-        return model_path
-
-    logger.info(
-        "Downloading %s from %s (~%.1f GB)...",
-        model_filename,
-        MODEL_REPO,
-        mem_req,
-    )
+    logger.info("Downloading Gemma 4 GGUF model from %s...", MODEL_REPO)
 
     try:
         from tqdm.auto import tqdm
 
         class DownloadProgressTqdm(tqdm):
-            """Custom tqdm class that forwards progress to callback."""
+            """Forward hub download progress to callback."""
 
-            def __init__(self, callback: ProgressCallback | None, *args, **kwargs):
+            def __init__(
+                self,
+                callback: ProgressCallback | None,
+                file_index: int,
+                file_total: int,
+                filename: str,
+                *args,
+                **kwargs,
+            ):
                 super().__init__(*args, **kwargs)
                 self.callback = callback
+                self.file_index = file_index
+                self.file_total = file_total
+                self.filename = filename
 
             def update(self, n: int = 1):
                 super().update(n)
-                if self.callback:
-                    current = self.n
-                    total = self.total or 1
-                    speed = self.format_dict.get("rate", 0) or 0
-                    msg = f"下载中... {current/1024/1024:.1f}MB / {total/1024/1024:.1f}MB ({speed/1024/1024:.1f}MB/s)"
-                    self.callback("download", current, total, msg)
+                if not self.callback:
+                    return
+                current = self.n
+                total = self.total or 1
+                speed = self.format_dict.get("rate", 0) or 0
+                msg = (
+                    f"下载 {self.filename}… "
+                    f"{current / 1024 / 1024:.1f}MB / {total / 1024 / 1024:.1f}MB "
+                    f"({speed / 1024 / 1024:.1f}MB/s)"
+                )
+                overall = self.file_index * total + current
+                overall_total = self.file_total * total
+                self.callback("download", overall, overall_total, msg)
 
-        tqdm_class = (
-            lambda *args, **kwargs: DownloadProgressTqdm(on_progress, *args, **kwargs)
-            if on_progress
-            else tqdm(*args, **kwargs)
-        )
+        for index, filename in enumerate(MODEL_FILES):
+            dest = MODEL_DIR / filename
+            if dest.exists() and not force_redownload:
+                continue
 
-        downloaded_path = hf_hub_download(
-            repo_id=MODEL_REPO,
-            filename=model_filename,
-            local_dir=MODEL_DIR,
-            local_dir_use_symlinks=False,
-            resume_download=True,
-            tqdm_class=tqdm_class,
-        )
+            if on_progress:
+                on_progress(
+                    "download",
+                    index,
+                    total_files,
+                    f"下载 {filename} ({index + 1}/{total_files})…",
+                )
+
+            tqdm_class = (
+                lambda *args, fn=filename, idx=index, **kwargs: DownloadProgressTqdm(
+                    on_progress, idx, total_files, fn, *args, **kwargs
+                )
+                if on_progress
+                else tqdm
+            )
+
+            hf_hub_download(
+                repo_id=MODEL_REPO,
+                filename=filename,
+                local_dir=MODEL_DIR,
+                tqdm_class=tqdm_class,
+            )
+
     except Exception as exc:
         raise ModelDownloadError(
             f"模型下载失败: {exc}。"
-            f"请检查网络连接，或访问 https://huggingface.co/{MODEL_REPO} 手动下载到 {MODEL_DIR}"
+            f"请检查网络连接，或访问 https://huggingface.co/{MODEL_REPO} "
+            f"手动下载到 {MODEL_DIR}"
         ) from exc
 
-    path = Path(downloaded_path)
-    logger.info("Download complete: %s", path)
-    return path
+    model_dir = find_model_file()
+    if model_dir is None:
+        raise ModelDownloadError(f"下载完成但未找到 {MODEL_WEIGHT_FILE}")
 
-
-def find_model_file() -> tuple[str, Path] | None:
-    """
-    Find the downloaded GGUF model file
-
-    Returns:
-        (filename_on_hub, local_path) tuple, or None if not found
-    """
-    if not MODEL_DIR.exists():
-        return None
-
-    for quant in QUANT_VERSIONS:
-        model_filename = gguf_filename(quant)
-        model_path = MODEL_DIR / model_filename
-        if model_path.exists():
-            logger.debug("Found model: %s", model_filename)
-            return (model_filename, model_path)
-
-    return None
+    logger.info("Download complete: %s", model_dir)
+    return model_dir
 
 
 def _collect_yaml_fields(
@@ -394,146 +356,14 @@ def _collect_yaml_fields(
     return fields
 
 
-def prepare_batch_input(
-    source_columns: list[str],
-    sample_rows: list[dict[str, str]],
-    min_rows: int = 5,
-) -> list[SourceColumnData]:
-    """Prepare batch input payload with at least min_rows sample values per column."""
-    if len(sample_rows) < min_rows:
-        raise ValueError(f"At least {min_rows} sample rows required, got {len(sample_rows)}")
-
-    result: list[SourceColumnData] = []
-    rows = sample_rows[:min_rows]
-    for idx, header in enumerate(source_columns):
-        data = [str(row.get(header, "") or "") for row in rows]
-        result.append({"index": idx, "header": header, "data": data})
-    return result
-
-
-class Phi4FieldMatcher:
-    """
-    Match Google Sheet fields to YAML template fields using Phi-4 via Transformers
-
-    Uses pure Python Transformers library with GGUF support - no compilation required.
-    """
-
-    def __init__(
-        self,
-        model_path: str | Path | None = None,
-        on_progress: ProgressCallback | None = None,
-    ):
-        """
-        Initialize Phi-4 field matcher with progress reporting
-
-        Args:
-            model_path: Path to local GGUF file. If None, auto-detects under MODEL_DIR.
-            on_progress: Progress callback function
-
-        Raises:
-            FileNotFoundError: If model file doesn't exist
-            ImportError: If transformers/gguf/torch are not installed
-            ModelLoadError: If GGUF loading fails
-        """
-        # Stage 1: Check GGUF version (10%)
-        if on_progress:
-            on_progress("load_model", 1, 10, "检查 GGUF 版本")
-        _ensure_gguf_version()
-
-        try:
-            import torch  # noqa: F401
-            import gguf  # noqa: F401
-            from transformers import AutoModelForCausalLM, AutoTokenizer
-        except ImportError as exc:
-            raise ImportError(
-                "缺少 LLM 依赖。请运行 install.bat 重新安装，或手动执行: "
-                "pip install torch transformers>=5.0 gguf>=0.10.0 accelerate"
-            ) from exc
-
-        # Stage 2: Resolve model file (20%)
-        if on_progress:
-            on_progress("load_model", 2, 10, "定位模型文件")
-        hub_filename, local_path = _resolve_gguf_source(model_path)
-        logger.debug("Using local GGUF: %s (hub file: %s)", local_path, hub_filename)
-
-        # Stage 3: Ensure Hub cache (30%)
-        if on_progress:
-            on_progress("load_model", 3, 10, "确认 Hub 缓存")
-        _ensure_gguf_hub_accessible(hub_filename, local_path)
-
-        logger.info("Loading Phi-4 model...")
-
-        load_kwargs = {
-            "gguf_file": hub_filename,
-            "device_map": "cpu",
-            "trust_remote_code": True,
-            "low_cpu_mem_usage": True,
-        }
-
-        # Stage 4: Load Tokenizer (50%)
-        if on_progress:
-            on_progress("load_tokenizer", 5, 10, "加载 Tokenizer")
-
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                TOKENIZER_REPO,
-                trust_remote_code=True,
-            )
-
-            # Stage 5: Load model weights (90%)
-            if on_progress:
-                on_progress("load_model", 9, 10, "加载模型权重")
-            self.model = AutoModelForCausalLM.from_pretrained(MODEL_REPO, **load_kwargs)
-        except Exception as exc:
-            raise ModelLoadError(
-                f"GGUF 加载失败 ({hub_filename}): {exc}. "
-                "请确认已安装 torch、transformers>=5.0、gguf>=0.10.0，"
-                "并重新运行 install.bat。"
-            ) from exc
-
-        # Stage 6: Model ready (100%)
-        self.model.eval()
-        if on_progress:
-            on_progress("load_model", 10, 10, "模型就绪")
-        logger.info("Phi-4 model ready")
-
-    def _generate(self, prompt: str, max_new_tokens: int = 64, temperature: float = 0.0) -> str:
-        """
-        Generate text using Phi-4.
-
-        Args:
-            prompt: Input prompt
-            max_new_tokens: Maximum tokens to generate
-            temperature: Sampling temperature
-
-        Returns:
-            Generated text (prompt removed)
-        """
-        inputs = self.tokenizer(prompt, return_tensors="pt")
-        do_sample = temperature > 0
-        gen_kwargs: dict[str, Any] = {
-            "max_new_tokens": max_new_tokens,
-            "do_sample": do_sample,
-            "pad_token_id": self.tokenizer.eos_token_id,
-        }
-        if do_sample:
-            gen_kwargs["temperature"] = temperature
-        outputs = self.model.generate(**inputs, **gen_kwargs)
-        response_text = self.tokenizer.decode(
-            outputs[0], skip_special_tokens=True
-        )
-        # Remove prompt from response
-        return response_text[len(prompt):].strip()
-
-    def _build_batch_field_mapping_prompt(
-        self,
-        source_columns_data: list[SourceColumnData],
-        yaml_field_names: list[str],
-    ) -> str:
-        """Build one-shot prompt that maps all YAML fields to all source columns."""
-        source_json = json.dumps(source_columns_data, ensure_ascii=False, indent=2)
-        fields_json = json.dumps(yaml_field_names, ensure_ascii=False, indent=2)
-        return f"""You map Google Sheet source columns to template YAML fields for a paste/lookup config.
+def build_batch_field_mapping_prompt(
+    source_columns_data: list[SourceColumnData],
+    yaml_field_names: list[str],
+) -> str:
+    """Build one-shot batch mapping prompt without loading the model."""
+    source_json = json.dumps(source_columns_data, ensure_ascii=False, indent=2)
+    fields_json = json.dumps(yaml_field_names, ensure_ascii=False, indent=2)
+    return f"""You map Google Sheet source columns to template YAML fields for a paste/lookup config.
 
 ## Source columns (user-selected; header + sample rows)
 Each column includes at least 5 sample values from the connected sheet.
@@ -571,8 +401,160 @@ Reply with JSON only (no markdown, no explanation):
       "confidence_reason": "No source column contains seal number data"
     }}
   ]
-}}
-JSON:"""
+}}"""
+
+
+def prepare_batch_input(
+    source_columns: list[str],
+    sample_rows: list[dict[str, str]],
+    min_rows: int = 5,
+) -> list[SourceColumnData]:
+    """Prepare batch input payload with at least min_rows sample values per column."""
+    if len(sample_rows) < min_rows:
+        raise ValueError(f"At least {min_rows} sample rows required, got {len(sample_rows)}")
+
+    result: list[SourceColumnData] = []
+    rows = sample_rows[:min_rows]
+    for idx, header in enumerate(source_columns):
+        data = [str(row.get(header, "") or "") for row in rows]
+        result.append({"index": idx, "header": header, "data": data})
+    return result
+
+
+class Gemma4FieldMatcher:
+    """Match Google Sheet fields to YAML template fields using Gemma 4 GGUF."""
+
+    _SYSTEM_PROMPT = (
+        "You are a precise data-mapping assistant for spreadsheet column matching. "
+        "Follow instructions exactly. When asked for JSON, output valid JSON only "
+        "with no markdown fences or extra commentary."
+    )
+
+    def __init__(
+        self,
+        model_path: str | Path | None = None,
+        on_progress: ProgressCallback | None = None,
+    ):
+        if on_progress:
+            on_progress("load_model", 1, 10, "检查依赖")
+        _check_llm_dependencies()
+        from llama_cpp import Llama
+
+        if on_progress:
+            on_progress("load_model", 2, 10, "检查内存")
+        
+        available_memory = get_available_memory_gb()
+        if available_memory < MIN_MEMORY_GB:
+            raise InsufficientMemoryError(
+                f"内存不足: 可用 {available_memory:.2f} GB，"
+                f"需要至少 {MIN_MEMORY_GB:.1f} GB。"
+                "请关闭其他应用程序后重试。"
+            )
+
+        if on_progress:
+            on_progress("load_model", 3, 10, "定位模型文件")
+        model_dir = _resolve_model_dir(model_path)
+        gguf_path = model_dir / MODEL_WEIGHT_FILE
+        load_source = str(gguf_path)
+        logger.debug("Loading Gemma 4 GGUF from %s", load_source)
+
+        if on_progress:
+            on_progress("load_model", 5, 10, "加载 GGUF 模型")
+
+        try:
+            self.model = Llama(
+                model_path=load_source,
+                n_ctx=2048,
+                n_threads=None,
+                verbose=False,
+            )
+        except Exception as exc:
+            raise ModelLoadError(_format_model_load_error(exc)) from exc
+
+        if on_progress:
+            on_progress("load_model", 10, 10, "模型就绪")
+        logger.info("Gemma 4 GGUF model ready")
+
+    def _extract_response_text(self, response: str) -> str:
+        """Strip thinking channels and normalize response output."""
+        text = response
+        text = re.sub(r"<\|think\|>[\s\S]*?<\|/think\|>", "", text, flags=re.IGNORECASE)
+        text = re.sub(
+            r"<\|channel>thought\n[\s\S]*?\n<channel\|>\n?",
+            "",
+            text,
+        )
+        final_match = re.search(
+            r"<\|channel>final\n([\s\S]*?)(?:\n<channel\|>|$)",
+            text,
+        )
+        if final_match:
+            return final_match.group(1).strip()
+        if "<|channel>" in text:
+            prefix = text.split("<|channel>", 1)[0]
+            if prefix.strip():
+                return prefix.strip()
+        return text.strip()
+
+    def _generate(
+        self,
+        user_prompt: str,
+        max_new_tokens: int = 512,
+        temperature: float = 0.0,
+        max_time: float | None = DEFAULT_GENERATE_MAX_TIME_S,
+    ) -> str:
+        """Generate assistant text using the Gemma 4 chat template."""
+        messages = [
+            {"role": "system", "content": self._SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ]
+        
+        prompt_tokens = len(self.model.tokenize(
+            f"{self._SYSTEM_PROMPT}\n\n{user_prompt}".encode("utf-8")
+        ))
+        logger.info(
+            "Gemma4 generate start: prompt_tokens≈%d max_new_tokens=%d",
+            prompt_tokens,
+            max_new_tokens,
+        )
+
+        started = time.monotonic()
+        try:
+            output = self.model.create_chat_completion(
+                messages=messages,
+                max_tokens=max_new_tokens,
+                temperature=temperature,
+                stream=False,
+            )
+        except Exception as exc:
+            logger.error("Gemma4 generation failed: %s", exc)
+            raise
+
+        elapsed = time.monotonic() - started
+        response_text = output["choices"][0]["message"]["content"]
+        new_tokens = output["usage"]["completion_tokens"]
+        
+        logger.info(
+            "Gemma4 generate done in %.1fs (new_tokens=%d, prompt_tokens=%d)",
+            elapsed,
+            new_tokens,
+            prompt_tokens,
+        )
+        if elapsed >= SLOW_GENERATE_WARN_S:
+            logger.warning(
+                "Gemma4 generation took %.1fs on CPU; consider fewer columns/fields",
+                elapsed,
+            )
+
+        return self._extract_response_text(response_text)
+
+    def _build_batch_field_mapping_prompt(
+        self,
+        source_columns_data: list[SourceColumnData],
+        yaml_field_names: list[str],
+    ) -> str:
+        """Build one-shot prompt that maps all YAML fields to all source columns."""
+        return build_batch_field_mapping_prompt(source_columns_data, yaml_field_names)
 
     def _parse_batch_mapping_result(
         self,
@@ -653,13 +635,18 @@ JSON:"""
         self,
         source_columns_data: list[SourceColumnData],
         yaml_field_names: list[str],
+        *,
+        prompt: str | None = None,
     ) -> tuple[dict[str, FieldMappingResult], str, str]:
         """Run one LLM call to map all template fields to source columns."""
-        prompt = self._build_batch_field_mapping_prompt(source_columns_data, yaml_field_names)
-        response = self._generate(prompt, max_new_tokens=1024, temperature=0.0)
+        prompt_text = prompt or self._build_batch_field_mapping_prompt(
+            source_columns_data,
+            yaml_field_names,
+        )
+        response = self._generate(prompt_text, max_new_tokens=512, temperature=0.0)
         source_columns = [col["header"] for col in source_columns_data]
         mappings = self._parse_batch_mapping_result(response, source_columns, yaml_field_names)
-        return mappings, prompt, response
+        return mappings, prompt_text, response
 
     def _infer_expected_format(self, field_name: str) -> str:
         """Infer expected format from field name for mismatch detection."""
@@ -767,8 +754,7 @@ Reply with JSON only (no markdown, no explanation):
       "explanation": "Your reasoning here"
     }}
   ]
-}}
-JSON:"""
+}}"""
 
     def _parse_transformation_result(
         self,
@@ -839,7 +825,6 @@ JSON:"""
                 extracted.append(extracted_val)
                 success_count += 1
         else:
-            # Keep non-regex methods parseable but conservative for validation.
             return False, 0.0, []
 
         success_rate = success_count / len(sample_values)
@@ -859,7 +844,7 @@ JSON:"""
                 sample_values,
                 target_fields,
             )
-            response = self._generate(prompt, max_new_tokens=1024, temperature=0.0)
+            response = self._generate(prompt, max_new_tokens=512, temperature=0.0)
             parsed = self._parse_transformation_result(response, source_column)
             valid_rules: list[TransformationRule] = []
             for rule in parsed:
@@ -878,9 +863,7 @@ JSON:"""
     ) -> dict[str, str]:
         """Match Sheet field values to YAML template fields, one field at a time."""
         result: dict[str, str] = {}
-        for stage, partial in self.iter_match_sheet_fields_to_yaml(
-            sheet_row, yaml_config
-        ):
+        for stage, partial in self.iter_match_sheet_fields_to_yaml(sheet_row, yaml_config):
             if on_progress:
                 on_progress(stage, partial)
             result = partial
@@ -892,19 +875,7 @@ JSON:"""
         yaml_config: dict[str, Any],
         on_progress: ProgressCallback | None = None,
     ) -> Iterator[tuple[str, dict[str, str]]]:
-        """
-        Yield (stage_message, cumulative_matches) after each template field.
-
-        Args:
-            sheet_row: Sample row from sheet with column values
-            yaml_config: YAML configuration dictionary
-            on_progress: Progress callback function
-
-        Yields:
-            (stage_message, cumulative_matches) tuples
-
-        Stages are human-readable status strings suitable for UI display.
-        """
+        """Yield (stage_message, cumulative_matches) after each template field."""
         if not sheet_row or not yaml_config:
             yield ("无可用数据", {})
             return
@@ -929,14 +900,10 @@ JSON:"""
                 on_progress("match", index, total, stage)
 
             available = [c for c in sheet_columns if c not in used_columns]
-            column = self._try_exact_column_match(
-                template_field, hint, available
-            )
+            column = self._try_exact_column_match(template_field, hint, available)
 
             if column is None:
-                column = self._llm_match_column(
-                    template_field, hint, sheet_row, available
-                )
+                column = self._llm_match_column(template_field, hint, sheet_row, available)
 
             if column:
                 used_columns.add(column)
@@ -977,7 +944,7 @@ JSON:"""
         sheet_row: dict[str, str],
         available_columns: list[str],
     ) -> str | None:
-        """Ask Phi-4 which sheet column best matches a single template field."""
+        """Ask Gemma 4 which sheet column best matches a single template field."""
         if not available_columns:
             return None
 
@@ -985,23 +952,11 @@ JSON:"""
             prompt = self._build_single_field_prompt(
                 template_field, hint, sheet_row, available_columns
             )
-            inputs = self.tokenizer(prompt, return_tensors="pt")
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=64,
-                do_sample=False,
-                pad_token_id=self.tokenizer.eos_token_id,
-            )
-            response_text = self.tokenizer.decode(
-                outputs[0], skip_special_tokens=True
-            )
-            response_text = response_text[len(prompt):].strip()
-            logger.debug("Phi-4 field %s response: %s", template_field, response_text)
+            response_text = self._generate(prompt, max_new_tokens=128, temperature=0.0)
+            logger.debug("Gemma 4 field %s response: %s", template_field, response_text)
             return self._parse_column_result(response_text, available_columns)
         except Exception as exc:
-            logger.warning(
-                "Phi-4 match failed for %s: %s", template_field, exc
-            )
+            logger.warning("Gemma 4 match failed for %s: %s", template_field, exc)
             return None
 
     def _build_single_field_prompt(
@@ -1031,8 +986,7 @@ Sheet columns (with sample values):
 
 Template field to match: "{template_field}"{hint_line}
 
-Reply with JSON only: {{"column": "<exact column name>"}} or {{"column": null}} if no match.
-JSON:"""
+Reply with JSON only: {{"column": "<exact column name>"}} or {{"column": null}} if no match."""
 
     def _parse_column_result(
         self,
@@ -1042,13 +996,11 @@ JSON:"""
         """Parse LLM response into a validated sheet column name."""
         text = response_text.strip()
 
-        json_match = re.search(
-            r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL
-        )
+        json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
         if json_match:
             text = json_match.group(1)
 
-        json_match = re.search(r'\{.*\}', text, re.DOTALL)
+        json_match = re.search(r"\{.*\}", text, re.DOTALL)
         if json_match:
             try:
                 parsed = json.loads(json_match.group(0))
@@ -1088,67 +1040,46 @@ JSON:"""
 def create_field_matcher(
     model_path: str | Path | None = None,
     on_progress: ProgressCallback | None = None,
-) -> Phi4FieldMatcher | None:
-    """
-    Create field matcher instance with progress reporting.
-    
-    Args:
-        model_path: Path to local GGUF file
-        on_progress: Progress callback function
-    
-    Returns:
-        Phi4FieldMatcher instance or None if model is not available
-    """
+) -> Gemma4FieldMatcher | None:
+    """Create field matcher instance with progress reporting."""
     global _last_load_error
     _last_load_error = None
     try:
-        return Phi4FieldMatcher(model_path, on_progress=on_progress)
+        return Gemma4FieldMatcher(model_path, on_progress=on_progress)
     except (FileNotFoundError, ImportError, ModelLoadError) as exc:
         _last_load_error = str(exc)
-        logger.warning("Phi-4 model not available: %s", exc)
+        logger.warning("Gemma 4 model not available: %s", exc)
         return None
 
 
 def get_or_create_field_matcher(
-    on_progress: ProgressCallback | None = None
-) -> Phi4FieldMatcher | None:
-    """
-    Get or create field matcher (singleton pattern, thread-safe).
-
-    Returns cached matcher after first load for performance.
-
-    Args:
-        on_progress: Progress callback function (only used for first load)
-
-    Returns:
-        Phi4FieldMatcher instance or None if model is not available
-    """
+    on_progress: ProgressCallback | None = None,
+) -> Gemma4FieldMatcher | None:
+    """Get or create field matcher (singleton pattern, thread-safe)."""
     global _cached_matcher, _cached_matcher_lock
 
     if _cached_matcher is not None:
-        logger.info("Reusing cached Phi-4 model")
-        # Notify caller that model is ready (even when cached)
+        logger.info("Reusing cached Gemma 4 model")
         if on_progress:
             on_progress("load_model", 10, 10, "模型已就绪（使用缓存）")
         return _cached_matcher
 
-    # Initialize lock on first use
     if _cached_matcher_lock is None:
         import threading
+
         _cached_matcher_lock = threading.Lock()
 
     with _cached_matcher_lock:
-        # Double-check pattern
         if _cached_matcher is not None:
             return _cached_matcher
 
-        logger.info("Loading Phi-4 model (first use)")
+        logger.info("Loading Gemma 4 model (first use)")
         _cached_matcher = create_field_matcher(on_progress=on_progress)
         return _cached_matcher
 
 
-def clear_matcher_cache():
+def clear_matcher_cache() -> None:
     """Clear cached matcher instance (for testing or manual reload)."""
     global _cached_matcher
     _cached_matcher = None
-    logger.info("Cleared Phi-4 model cache")
+    logger.info("Cleared Gemma 4 model cache")
