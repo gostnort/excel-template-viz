@@ -16,9 +16,9 @@ oauth_token.json
 client_secret*.json
 app/oauth/
 
-# 本地模板副本（可选，若含敏感数据）
-templates/*.xlsx
-templates/*.json
+# 本地模板副本（排除用户模板文件，只保留 readme.txt）
+templates/*
+!templates/readme.txt
 !templates/README.txt
 
 # IDE
@@ -32,6 +32,14 @@ Thumbs.db
 
 # 本地视觉模型权重（app/vllm/ 下可整目录删除重装）
 app/vllm/
+
+# Phi-4 模型权重文件（GGUF 格式，2-8GB）
+models/phi4/
+
+# 测试文件夹和测试脚本（排除所有测试代码和临时文件）
+tests/
+test_*.py
+*_test.py
 
 # 导出 xlsx（打开/打印用）
 exports/

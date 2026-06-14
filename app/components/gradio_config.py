@@ -9,7 +9,7 @@ import logging
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from app.services.registry import TemplateConfig
 from app.services.paste_parse_config import (
@@ -30,7 +30,6 @@ from app.services.paste_parse_config import (
 from app.services.phi4_field_matcher import (
     FieldMatchResult,
     ModelDownloadError,
-    create_field_matcher,
     ensure_model_downloaded,
     find_model_file,
     get_last_load_error,
@@ -625,122 +624,6 @@ def _exact_match_columns(
         mapping[field_name] = matched
 
     return mapping
-
-
-def _iter_llm_match_columns(
-    matcher: Any,
-    template_fields: list[str],
-    sheet_columns: list[str],
-    paste_config: PasteParseConfig,
-    existing_mapping: dict[str, str | None],
-    sample_row: dict[str, str],  # Now use sample values
-) -> Iterator[tuple[str, dict[str, str | None]]]:
-    """
-    Yield (stage, column_map) while using semantic similarity for batch matching.
-
-    Args:
-        matcher: Phi4FieldMatcher instance
-        template_fields: List of template field names
-        sheet_columns: List of sheet column names
-        paste_config: Paste parse configuration
-        existing_mapping: Existing exact matches
-        sample_row: Sample row values for semantic matching
-
-    Yields:
-        (stage_message, column_map) tuples
-    """
-    used_columns = {col for col in existing_mapping.values() if col}
-    remaining_fields = [f for f in template_fields if not existing_mapping.get(f)]
-    result = dict(existing_mapping)
-
-    if not remaining_fields:
-        yield ("", result)
-        return
-
-    # Build (field_name, hint) list for semantic matching
-    yaml_fields: list[tuple[str, str]] = []
-    for field_name in remaining_fields:
-        rules = paste_config.field_rules.get(field_name, [])
-        hint = field_name
-        if rules:
-            rule = rules[0]
-            if rule.filed and rule.filed != "?":
-                hint = rule.filed
-        yaml_fields.append((field_name, hint))
-
-    # Get available columns
-    available = [c for c in sheet_columns if c not in used_columns]
-    
-    if not available:
-        yield ("无可用列", result)
-        return
-
-    # Batch semantic similarity computation
-    yield ("正在计算语义相似度...", result)
-    
-    try:
-        matches = matcher.compute_semantic_similarity(
-            yaml_fields,
-            available,
-            sample_row
-        )
-    except Exception as exc:
-        logger.error("Semantic similarity failed: %s", exc)
-        # Fallback to LLM single-field matching
-        matches = {}
-
-    # Yield results one by one for progress display
-    total = len(yaml_fields)
-    for index, (field_name, hint) in enumerate(yaml_fields, start=1):
-        stage = f"正在匹配 {field_name} ({index}/{total})…"
-        
-        if field_name in matches:
-            column, similarity, col_idx = matches[field_name]
-            
-            # Similarity threshold check (≥0.7)
-            if similarity >= 0.7:
-                result[field_name] = column
-                used_columns.add(column)
-                logger.debug(f"Matched {field_name} → {column} (similarity: {similarity:.2f})")
-            else:
-                # Similarity too low, fallback to LLM single-field match
-                logger.debug(f"Similarity too low ({similarity:.2f}), using LLM for {field_name}")
-                available_now = [c for c in sheet_columns if c not in used_columns]
-                column_llm = matcher._try_exact_column_match(field_name, hint, available_now)
-                if column_llm is None:
-                    column_llm = matcher._llm_match_column(
-                        field_name, hint, sample_row, available_now
-                    )
-                
-                if column_llm and column_llm not in used_columns:
-                    result[field_name] = column_llm
-                    used_columns.add(column_llm)
-                else:
-                    result[field_name] = None
-        else:
-            result[field_name] = None
-        
-        yield (stage, dict(result))
-
-
-def _llm_match_columns(
-    matcher: Any,
-    template_fields: list[str],
-    sheet_columns: list[str],
-    sample_row: dict[str, str],
-    paste_config: PasteParseConfig,
-    existing_mapping: dict[str, str | None],
-    on_progress: Any | None = None,
-) -> dict[str, str | None]:
-    """Use Phi4FieldMatcher to map remaining template fields to sheet columns."""
-    result = dict(existing_mapping)
-    for stage, partial in _iter_llm_match_columns(
-        matcher, template_fields, sheet_columns, paste_config, existing_mapping, sample_row
-    ):
-        result = partial
-        if on_progress and stage:
-            on_progress(stage, {k: v or "" for k, v in partial.items() if k in partial})
-    return result
 
 
 def _format_llm_test_json(

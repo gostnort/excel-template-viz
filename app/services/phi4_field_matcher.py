@@ -74,35 +74,27 @@ _last_load_error: str | None = None
 _cached_matcher: "Phi4FieldMatcher | None" = None
 _cached_matcher_lock = None  # Will be initialized when needed
 
-# Model configuration
-MODEL_REPO = "bartowski/microsoft_Phi-4-mini-instruct-GGUF"
+# Model configuration (GGUF weights + base model tokenizer)
+MODEL_REPO = "Vocabook/Phi-4-mini-instruct-GGUF"
+TOKENIZER_REPO = "microsoft/Phi-4-mini-instruct"
 MODEL_DIR = Path("models/phi4")
+LEGACY_GGUF_PREFIX = "microsoft_Phi-4-mini-instruct-"
 
-# Quantization versions (in preference order)
-QUANT_VERSIONS = ["Q8_0", "Q6_K", "Q5_K_M", "Q4_K_M", "Q3_K_M", "Q2_K"]
+# Quantization versions available on Vocabook/Phi-4-mini-instruct-GGUF (preference order)
+QUANT_VERSIONS = ["Q8_0", "Q6_K", "Q4_K_M", "Q3_K_L"]
 
 # (name, memory_gb, description)
 QUANT_SPECS: list[tuple[str, float, str]] = [
-    ("Q8_0", 6.5, "Best quality, highest memory"),
-    ("Q6_K", 5.0, "Very good quality"),
-    ("Q5_K_M", 4.0, "Good quality, balanced"),
+    ("Q8_0", 5.5, "Best quality, highest memory"),
+    ("Q6_K", 4.5, "Very good quality"),
     ("Q4_K_M", 3.5, "Balanced (recommended)"),
-    ("Q3_K_M", 3.0, "Lower quality, smaller"),
-    ("Q2_K", 2.5, "Minimal quality, smallest"),
+    ("Q3_K_L", 3.0, "Lower quality, smaller"),
 ]
 
-# Built-in regex patterns for common field types
-REGEX_PATTERNS = {
-    "po_number": r"\d{4,8}",
-    "container": r"[A-Z]{4}\d{7}",
-    "date_mm": r"(\d{1,2})(?=\/\d{1,2})",
-    "date_dd": r"(?:\d{1,2}/)(\d{1,2})",
-    "date_full": r"(\d{1,2}\/\d{1,2})",
-    "email": r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
-    "phone": r"\d{3}-\d{3}-\d{4}",
-    "zipcode": r"\d{5}(?:-\d{4})?",
-}
 
+def gguf_filename(quant_name: str) -> str:
+    """Hub/local filename for a Vocabook Phi-4 GGUF checkpoint."""
+    return f"Phi-4-mini-instruct-{quant_name}.gguf"
 
 class ModelDownloadError(Exception):
     """Model download failed; message is user-facing and actionable."""
@@ -291,7 +283,7 @@ def ensure_model_downloaded(
     else:
         mem_req = next((m for q, m, _ in QUANT_SPECS if q == quant_name), 3.5)
 
-    model_filename = f"microsoft_Phi-4-mini-instruct-{quant_name}.gguf"
+    model_filename = gguf_filename(quant_name)
     model_path = MODEL_DIR / model_filename
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -361,11 +353,18 @@ def find_model_file() -> tuple[str, Path] | None:
         return None
 
     for quant in QUANT_VERSIONS:
-        model_filename = f"microsoft_Phi-4-mini-instruct-{quant}.gguf"
+        model_filename = gguf_filename(quant)
         model_path = MODEL_DIR / model_filename
         if model_path.exists():
             logger.debug("Found model: %s", model_filename)
             return (model_filename, model_path)
+
+    for quant in QUANT_VERSIONS:
+        legacy_filename = f"{LEGACY_GGUF_PREFIX}{quant}.gguf"
+        legacy_path = MODEL_DIR / legacy_filename
+        if legacy_path.exists():
+            logger.debug("Found legacy model: %s", legacy_filename)
+            return (legacy_filename, legacy_path)
 
     return None
 
@@ -474,7 +473,10 @@ class Phi4FieldMatcher:
             on_progress("load_tokenizer", 5, 10, "加载 Tokenizer")
 
         try:
-            self.tokenizer = AutoTokenizer.from_pretrained(MODEL_REPO, **load_kwargs)
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                TOKENIZER_REPO,
+                trust_remote_code=True,
+            )
 
             # Stage 5: Load model weights (90%)
             if on_progress:
@@ -492,211 +494,6 @@ class Phi4FieldMatcher:
         if on_progress:
             on_progress("load_model", 10, 10, "模型就绪")
         logger.info("Phi-4 model ready")
-
-    def _get_embeddings(self, texts: list[str]) -> Any:
-        """
-        Get embedding vectors for texts using Phi-4 last hidden layer.
-
-        Args:
-            texts: List of text strings
-
-        Returns:
-            embeddings tensor (N, D) normalized by L2
-        """
-        import torch
-        import torch.nn.functional as F
-
-        # Tokenize
-        inputs = self.tokenizer(
-            texts,
-            padding=True,
-            truncation=True,
-            max_length=128,
-            return_tensors="pt"
-        )
-
-        # Forward pass
-        with torch.no_grad():
-            outputs = self.model(**inputs, output_hidden_states=True)
-
-        # Use last layer hidden states
-        last_hidden_state = outputs.hidden_states[-1]  # (B, L, D)
-
-        # Average pooling (ignore padding)
-        attention_mask = inputs["attention_mask"].unsqueeze(-1)  # (B, L, 1)
-        embeddings = (last_hidden_state * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)  # (B, D)
-
-        # L2 normalization
-        embeddings = F.normalize(embeddings, p=2, dim=1)
-
-        return embeddings
-
-    def compute_semantic_similarity(
-        self,
-        template_fields: list[tuple[str, str]],  # (field_name, hint)
-        sheet_columns: list[str],
-        sample_values: dict[str, str] | None = None
-    ) -> dict[str, tuple[str, float, int]]:
-        """
-        Compute semantic similarity between template fields and sheet columns.
-
-        Algorithm:
-        1. Build query text for each template field
-        2. Build text for each sheet column
-        3. Use Phi-4 last hidden layer as embeddings
-        4. Compute cosine similarity matrix
-        5. Greedy matching: highest similarity without reusing columns
-
-        Args:
-            template_fields: List of (field_name, hint) tuples
-            sheet_columns: List of sheet column names
-            sample_values: Optional sample values for columns
-
-        Returns:
-            {template_field: (sheet_column, similarity_score, column_index)}
-        """
-        import torch
-        import torch.nn.functional as F
-
-        # Build query texts
-        field_queries = []
-        for field_name, hint in template_fields:
-            query = field_name
-            if hint and hint != "?":
-                query += f" (提示: {hint})"
-            field_queries.append(query)
-
-        # Build column texts
-        column_texts = []
-        for col in sheet_columns:
-            text = col
-            if sample_values and col in sample_values:
-                text += f" (样本值: {sample_values[col]})"
-            column_texts.append(text)
-
-        # Generate embeddings
-        field_embeddings = self._get_embeddings(field_queries)  # (N, D)
-        column_embeddings = self._get_embeddings(column_texts)  # (M, D)
-
-        # Compute similarity matrix
-        similarity_matrix = F.cosine_similarity(
-            field_embeddings.unsqueeze(1),  # (N, 1, D)
-            column_embeddings.unsqueeze(0),  # (1, M, D)
-            dim=2
-        )  # (N, M)
-
-        # Greedy matching
-        used_columns: set[int] = set()
-        matches: dict[str, tuple[str, float, int]] = {}
-
-        for field_idx, (field_name, _) in enumerate(template_fields):
-            # Find highest similarity unused column
-            scores = similarity_matrix[field_idx].tolist()
-            sorted_indices = sorted(
-                range(len(scores)),
-                key=lambda i: scores[i],
-                reverse=True
-            )
-
-            for col_idx in sorted_indices:
-                if col_idx not in used_columns:
-                    matches[field_name] = (
-                        sheet_columns[col_idx],
-                        scores[col_idx],
-                        col_idx
-                    )
-                    used_columns.add(col_idx)
-                    break
-
-        return matches
-
-    def suggest_regex_for_field(
-        self,
-        field_name: str,
-        column_name: str,
-        sample_values: list[str]
-    ) -> tuple[str | None, bool]:
-        """
-        Suggest regex pattern for a field.
-
-        Priority:
-        1. Built-in pattern detection
-        2. LLM generation
-        3. None (no suggestion)
-
-        Args:
-            field_name: Template field name
-            column_name: Sheet column name
-            sample_values: Sample values (at least 3)
-
-        Returns:
-            (regex_string or None, is_from_builtin)
-        """
-        if not sample_values or len(sample_values) < 3:
-            return None, False
-
-        # Step 1: Built-in pattern detection
-        pattern_type = self._detect_pattern_type(sample_values)
-        if pattern_type and pattern_type in REGEX_PATTERNS:
-            regex = REGEX_PATTERNS[pattern_type]
-            logger.info(f"Field {field_name} matched built-in pattern: {pattern_type}")
-            return regex, True
-
-        # Step 2: LLM generation
-        prompt = f"""Generate a regex pattern to extract relevant information from the following values:
-
-Field: {field_name}
-Column: {column_name}
-Sample values:
-{chr(10).join(f"- {val}" for val in sample_values[:5])}
-
-Output only the regex pattern, no explanations. Example: \\d{{4,8}}
-Regex:"""
-
-        try:
-            response = self._generate(prompt, max_new_tokens=64, temperature=0.0)
-            regex = response.strip()
-
-            # Validate regex syntax
-            re.compile(regex)
-
-            # Test on sample values
-            match_count = sum(1 for val in sample_values if re.search(regex, val))
-            if match_count / len(sample_values) >= 0.5:
-                logger.info(f"LLM generated regex for {field_name}: {regex}")
-                return regex, False
-            else:
-                logger.warning(f"LLM regex match rate too low: {match_count}/{len(sample_values)}")
-                return None, False
-
-        except re.error as exc:
-            logger.error(f"Invalid regex generated: {exc}")
-            return None, False
-        except Exception as exc:
-            logger.error(f"Regex generation failed: {exc}")
-            return None, False
-
-    def _detect_pattern_type(self, sample_values: list[str]) -> str | None:
-        """
-        Detect pattern type from sample values.
-
-        Args:
-            sample_values: Sample value list
-
-        Returns:
-            Pattern type name or None
-        """
-        for pattern_name, regex in REGEX_PATTERNS.items():
-            match_count = sum(
-                1 for val in sample_values
-                if re.search(regex, val)
-            )
-
-            # At least 70% samples match
-            if match_count / len(sample_values) >= 0.7:
-                return pattern_name
-
-        return None
 
     def _generate(self, prompt: str, max_new_tokens: int = 64, temperature: float = 0.0) -> str:
         """
@@ -1071,61 +868,6 @@ JSON:"""
                 result[source_column] = valid_rules
         return result
 
-    def match_columns_to_yaml_fields(
-        self,
-        sheet_columns: list[str],
-        yaml_fields: list[tuple[str, str]],  # (field_name, hint)
-        sample_values: dict[str, str]
-    ) -> dict[str, tuple[str, float]]:
-        """
-        Reverse matching: Sheet columns → YAML fields.
-
-        For "test selected columns" scenario where user wants to know
-        which template field each sheet column should map to.
-
-        Args:
-            sheet_columns: Sheet columns to test
-            yaml_fields: All YAML template fields
-            sample_values: Sample values
-
-        Returns:
-            {sheet_column: (best_matching_field, similarity)}
-        """
-        import torch
-        import torch.nn.functional as F
-
-        # Build texts
-        column_texts = [
-            f"{col} (样本值: {sample_values.get(col, '')})"
-            for col in sheet_columns
-        ]
-        field_texts = [
-            f"{name} (提示: {hint})" if hint != "?" else name
-            for name, hint in yaml_fields
-        ]
-
-        # Generate embeddings
-        column_embeddings = self._get_embeddings(column_texts)
-        field_embeddings = self._get_embeddings(field_texts)
-
-        # Compute similarity (columns × fields)
-        similarity_matrix = F.cosine_similarity(
-            column_embeddings.unsqueeze(1),
-            field_embeddings.unsqueeze(0),
-            dim=2
-        )
-
-        # For each column find best field
-        matches: dict[str, tuple[str, float]] = {}
-        for col_idx, col in enumerate(sheet_columns):
-            scores = similarity_matrix[col_idx].tolist()
-            best_field_idx = max(range(len(scores)), key=lambda i: scores[i])
-            best_field = yaml_fields[best_field_idx][0]
-            best_score = scores[best_field_idx]
-            matches[col] = (best_field, best_score)
-
-        return matches
-
     def match_sheet_fields_to_yaml(
         self,
         sheet_row: dict[str, str],
@@ -1206,48 +948,6 @@ JSON:"""
         if on_progress:
             on_progress("match", total, total, final_stage)
         yield (final_stage, dict(result))
-
-    def match_fields_to_columns(
-        self,
-        sheet_columns: list[str],
-        yaml_fields: list[tuple[str, str]],
-        on_progress: ProgressCallback | None = None,
-    ) -> dict[str, str | None]:
-        """
-        Map template fields to sheet column names (no sample values required).
-
-        yaml_fields: list of (template_field, column_hint)
-        """
-        result: dict[str, str | None] = {}
-        total = len(yaml_fields)
-        used_columns: set[str] = set()
-
-        if on_progress:
-            on_progress(f"准备匹配 {total} 个字段", {})
-
-        for index, (template_field, hint) in enumerate(yaml_fields, start=1):
-            stage = f"正在匹配 {template_field} ({index}/{total})…"
-            if on_progress:
-                on_progress(stage, {k: v or "" for k, v in result.items()})
-
-            available = [c for c in sheet_columns if c not in used_columns]
-            column = self._try_exact_column_match(
-                template_field, hint, available
-            )
-            if column is None:
-                empty_row = {col: "" for col in available}
-                column = self._llm_match_column(
-                    template_field, hint, empty_row, available
-                )
-
-            result[template_field] = column
-            if column:
-                used_columns.add(column)
-
-            if on_progress:
-                on_progress(stage, {k: v or "" for k, v in result.items()})
-
-        return result
 
     def _try_exact_column_match(
         self,

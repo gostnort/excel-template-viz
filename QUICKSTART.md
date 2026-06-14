@@ -10,7 +10,20 @@ cd excel-template-viz
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-streamlit run streamlit_app.py
+```
+
+Windows 用户也可使用 `install.bat` 完成安装与模型下载。
+
+启动应用（端口 **8501**）：
+
+```batch
+run.bat
+```
+
+或：
+
+```bash
+python gradio_app.py
 ```
 
 将需要使用的 xlsx 文件复制到 `templates/` 目录，启动后会自动识别。  

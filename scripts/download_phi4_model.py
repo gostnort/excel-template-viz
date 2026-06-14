@@ -2,7 +2,7 @@
 Download Phi-4 GGUF model from Hugging Face Hub
 
 Automatically selects the best GGUF quantization based on available system memory
-and downloads from bartowski's optimized GGUF repository.
+and downloads from Vocabook/Phi-4-mini-instruct-GGUF on Hugging Face.
 
 Usage:
     python download_phi4_model.py         # Interactive mode
@@ -20,6 +20,7 @@ from app.services.phi4_field_matcher import (  # noqa: E402
     ModelDownloadError,
     ensure_model_downloaded,
     get_available_memory_gb,
+    gguf_filename,
     select_quantization,
 )
 
@@ -74,7 +75,7 @@ def main() -> None:
             model_path = ensure_model_downloaded(auto_mode=True, quant_name=quant_name)
         else:
             quant_name, mem_req = interactive_select_quantization()
-            model_filename = f"microsoft_Phi-4-mini-instruct-{quant_name}.gguf"
+            model_filename = gguf_filename(quant_name)
             from app.services.phi4_field_matcher import MODEL_DIR
 
             model_path = MODEL_DIR / model_filename
