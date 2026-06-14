@@ -6,7 +6,7 @@ Handles YAML configuration editing, LLM settings, and template parameters.
 import gradio as gr
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from app.services.registry import TemplateConfig
 from app.services.paste_parse_config import (
@@ -321,9 +321,15 @@ def build_config_tab(
     
     # YAML tab events
     auto_config_btn.click(
+        fn=lambda: gr.update(interactive=False),
+        outputs=[auto_config_btn],
+    ).then(
         fn=handle_yaml_auto_config,
         inputs=[current_template, credentials_state],
         outputs=[yaml_editor, yaml_status],
+    ).then(
+        fn=lambda: gr.update(interactive=True),
+        outputs=[auto_config_btn],
     )
     
     yaml_save_btn.click(
@@ -340,9 +346,15 @@ def build_config_tab(
     
     # LLM tab events
     test_llm_btn.click(
+        fn=lambda: gr.update(interactive=False),
+        outputs=[test_llm_btn],
+    ).then(
         fn=handle_llm_test,
-        inputs=[current_template, test_sheet_cols],
-        outputs=[test_result]
+        inputs=[current_template, test_sheet_cols, credentials_state],
+        outputs=[test_result],
+    ).then(
+        fn=lambda: gr.update(interactive=True),
+        outputs=[test_llm_btn],
     )
     
     # Sections tab events
@@ -545,30 +557,54 @@ def _exact_match_columns(
     return mapping
 
 
-def _column_for_matched_value(
-    value: str,
+def _iter_llm_match_columns(
+    matcher: Any,
+    template_fields: list[str],
     sheet_columns: list[str],
-    sample_row: dict[str, str],
-    available_columns: list[str],
-) -> str | None:
-    """Resolve an LLM-matched value back to a sheet column name."""
-    value_stripped = str(value).strip()
-    if not value_stripped:
-        return None
+    paste_config: PasteParseConfig,
+    existing_mapping: dict[str, str | None],
+) -> Iterator[tuple[str, dict[str, str | None]]]:
+    """Yield (stage, column_map) while LLM-matching remaining template fields."""
+    used_columns = {col for col in existing_mapping.values() if col}
+    remaining_fields = [f for f in template_fields if not existing_mapping.get(f)]
+    result = dict(existing_mapping)
 
-    direct = resolve_sheet_header(value_stripped, available_columns)
-    if direct:
-        return direct
+    if not remaining_fields:
+        yield ("", result)
+        return
 
-    val_lower = value_stripped.lower()
-    value_matches = [
-        col
-        for col in available_columns
-        if str(sample_row.get(col, "")).strip().lower() == val_lower
-    ]
-    if len(value_matches) == 1:
-        return value_matches[0]
-    return None
+    yaml_fields: list[tuple[str, str]] = []
+    for field_name in remaining_fields:
+        rules = paste_config.field_rules.get(field_name, [])
+        hint = field_name
+        if rules:
+            rule = rules[0]
+            if rule.filed and rule.filed != "?":
+                hint = rule.filed
+        yaml_fields.append((field_name, hint))
+
+    total = len(yaml_fields)
+    for index, (field_name, hint) in enumerate(yaml_fields, start=1):
+        stage = f"正在匹配 {field_name} ({index}/{total})…"
+        yield (stage, dict(result))
+
+        available = [c for c in sheet_columns if c not in used_columns]
+        column = matcher._try_exact_column_match(field_name, hint, available)
+        if column is None:
+            empty_row = {col: "" for col in available}
+            column = matcher._llm_match_column(
+                field_name, hint, empty_row, available
+            )
+
+        if column and column not in used_columns:
+            result[field_name] = column
+            used_columns.add(column)
+        elif column:
+            result[field_name] = column
+        else:
+            result[field_name] = None
+
+        yield (stage, dict(result))
 
 
 def _llm_match_columns(
@@ -578,54 +614,38 @@ def _llm_match_columns(
     sample_row: dict[str, str],
     paste_config: PasteParseConfig,
     existing_mapping: dict[str, str | None],
+    on_progress: Any | None = None,
 ) -> dict[str, str | None]:
     """Use Phi4FieldMatcher to map remaining template fields to sheet columns."""
-    used_columns = {col for col in existing_mapping.values() if col}
-    remaining_fields = [f for f in template_fields if not existing_mapping.get(f)]
-
-    if not remaining_fields:
-        return dict(existing_mapping)
-
-    yaml_subset: dict[str, Any] = {}
-    for field_name in remaining_fields:
-        rules = paste_config.field_rules.get(field_name, [])
-        hint = field_name
-        id_flag = False
-        regex = None
-        if rules:
-            rule = rules[0]
-            if rule.filed and rule.filed != "?":
-                hint = rule.filed
-            id_flag = rule.id_flag
-            regex = rule.regex
-        yaml_subset[field_name] = [{
-            "filed": hint,
-            "index": UNMAPPED_INDEX,
-            "regex": regex,
-            "ID": id_flag,
-        }]
-
-    matched_values = matcher.match_sheet_fields_to_yaml(sample_row, yaml_subset)
     result = dict(existing_mapping)
-
-    for field_name in remaining_fields:
-        matched_value = matched_values.get(field_name)
-        if not matched_value:
-            result[field_name] = None
-            continue
-
-        available = [c for c in sheet_columns if c not in used_columns]
-        column = _column_for_matched_value(
-            matched_value,
-            sheet_columns,
-            sample_row,
-            available,
-        )
-        result[field_name] = column
-        if column:
-            used_columns.add(column)
-
+    for stage, partial in _iter_llm_match_columns(
+        matcher, template_fields, sheet_columns, paste_config, existing_mapping
+    ):
+        result = partial
+        if on_progress and stage:
+            on_progress(stage, {k: v or "" for k, v in partial.items() if k in partial})
     return result
+
+
+def _format_llm_test_json(
+    stage: str,
+    matched: dict[str, str],
+    *,
+    sheet_columns: list[str] | None = None,
+    sample_row: dict[str, str] | None = None,
+) -> str:
+    """Format incremental LLM test output for the result panel."""
+    import json
+
+    payload: dict[str, Any] = {
+        "阶段": stage,
+        "匹配结果": matched,
+    }
+    if sheet_columns is not None:
+        payload["Sheet列"] = sheet_columns
+    if sample_row is not None:
+        payload["样本行"] = sample_row
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 def _apply_column_mapping_to_config(
@@ -681,31 +701,37 @@ def _apply_column_mapping_to_config(
 def handle_yaml_auto_config(
     template: TemplateConfig | None,
     credentials: Any,
-) -> tuple[str, str]:
+):
     """
     Auto-fill YAML field mappings using sheet columns and Phi-4 matching.
 
-    Returns:
-        (yaml_editor, yaml_status)
+    Yields incremental (yaml_editor, yaml_status) updates while matching.
     """
     if not template:
-        return "", "❌ 请先选择模板"
+        yield "", "❌ 请先选择模板"
+        return
 
+    yield gr.skip(), "⏳ 正在读取 Sheet 列…"
     columns, sample_row, fetch_error = _fetch_sheet_columns_and_sample(template, credentials)
     if fetch_error:
         gr.Warning(fetch_error)
-        return gr.skip(), f"⚠️ {fetch_error}"
+        yield gr.skip(), f"⚠️ {fetch_error}"
+        return
+
+    gr.Info(f"已读取 Sheet：{len(columns)} 列")
 
     try:
         template_path = Path(template.file_path)
         ensure_config_exists(template.id, template_path)
         paste_config = load_paste_parse_config(template.id)
         if not paste_config:
-            return "", f"❌ 未找到模板 '{template.id}' 的配置文件"
+            yield "", f"❌ 未找到模板 '{template.id}' 的配置文件"
+            return
 
         template_fields = list(paste_config.field_rules.keys())
         if not template_fields:
-            return "", "❌ 模板没有可映射的字段"
+            yield "", "❌ 模板没有可映射的字段"
+            return
 
         filed_hints: dict[str, str] = {}
         for field_name, rules in paste_config.field_rules.items():
@@ -715,8 +741,7 @@ def handle_yaml_auto_config(
             if rule.filed and rule.filed != "?" and rule.index >= 0:
                 filed_hints[field_name] = rule.filed
 
-        gr.Info(f"正在匹配 {len(template_fields)} 个字段与 {len(columns)} 个 Sheet 列…")
-
+        yield gr.skip(), f"⏳ 精确匹配 {len(template_fields)} 个字段…"
         column_map = _exact_match_columns(template_fields, columns, filed_hints)
         exact_count = sum(1 for col in column_map.values() if col)
 
@@ -725,40 +750,53 @@ def handle_yaml_auto_config(
 
         if unmatched:
             if not find_model_file():
-                gr.Info("首次使用 LLM，正在下载模型（根据内存自动选择量化版本）…")
+                gr.Info("正在下载 Phi-4 模型…")
+                yield gr.skip(), "⏳ 正在下载 Phi-4 模型…"
                 try:
                     ensure_model_downloaded(auto_mode=True)
-                    gr.Info("模型下载完成，正在加载…")
+                    gr.Info("模型下载完成")
                 except ModelDownloadError as exc:
                     logger.error("Model download failed: %s", exc)
                     if exact_count == 0:
-                        return "", f"❌ 模型下载失败：{exc}"
+                        yield "", f"❌ 模型下载失败：{exc}"
+                        return
                     gr.Warning(f"LLM 不可用（{exc}），已使用精确名称匹配")
                 except Exception as exc:
                     logger.error("Download failed: %s", exc)
                     if exact_count == 0:
-                        return "", f"❌ LLM 不可用：{exc}"
+                        yield "", f"❌ LLM 不可用：{exc}"
+                        return
                     gr.Warning(f"LLM 不可用（{exc}），已使用精确名称匹配")
 
             if find_model_file():
-                gr.Info("正在使用 Phi-4 智能匹配剩余字段…")
+                gr.Info("正在加载 Phi-4…")
+                yield gr.skip(), "⏳ 正在加载 Phi-4…"
                 matcher = create_field_matcher()
                 if matcher:
                     llm_used = True
-                    column_map = _llm_match_columns(
+                    gr.Info(f"Phi-4 就绪，匹配剩余 {len(unmatched)} 个字段…")
+
+                    for stage, partial_map in _iter_llm_match_columns(
                         matcher,
                         template_fields,
                         columns,
-                        sample_row,
                         paste_config,
                         column_map,
-                    )
+                    ):
+                        column_map = partial_map
+                        if stage:
+                            matched_so_far = sum(1 for c in column_map.values() if c)
+                            status = f"⏳ {stage}（已匹配 {matched_so_far}/{len(template_fields)}）"
+                            gr.Info(stage)
+                            yield gr.skip(), status
                 elif exact_count == 0:
-                    return "", "❌ Phi-4 模型加载失败，且精确名称匹配无结果"
+                    yield "", "❌ Phi-4 模型加载失败，且精确名称匹配无结果"
+                    return
                 else:
                     gr.Warning("Phi-4 模型加载失败，已使用精确名称匹配")
             elif exact_count == 0:
-                return "", "❌ LLM 模型不可用，且精确名称匹配无结果"
+                yield "", "❌ LLM 模型不可用，且精确名称匹配无结果"
+                return
 
         from app.services.data_source import load_template_data_source
 
@@ -780,90 +818,117 @@ def handle_yaml_auto_config(
         if unmapped_count:
             status += f"，{unmapped_count} 个未映射（filed=\"?\", index=-1）"
 
-        return yaml_str, status
+        yield yaml_str, status
 
     except Exception as exc:
         logger.error("Auto config failed: %s", exc)
-        return "", f"❌ 自动配置失败：{exc}"
+        yield "", f"❌ 自动配置失败：{exc}"
 
 
 def handle_llm_test(
     template: TemplateConfig | None,
-    test_cols: list | None
-) -> str:
+    test_cols: list | None,
+    credentials: Any,
+):
     """
-    Test LLM field matching (auto-downloads model if needed)
-    
-    Returns:
-        JSON result
+    Test LLM field matching with incremental result updates.
+
+    Yields JSON strings into the result panel as each field is matched.
     """
     if not template:
-        return "// 请先选择模板"
-    
-    if not test_cols or len(test_cols) == 0:
-        return "// 请从下拉列表中选择列名"
-    
+        yield "// 请先选择模板"
+        return
+
     try:
-        import json
-        
-        # Create test sheet row
-        test_sheet_row = {col: f"测试值_{i+1}" for i, col in enumerate(test_cols)}
-        
-        # Load paste config
+        sheet_columns: list[str] = []
+        sample_row: dict[str, str] = {}
+        using_manual_cols = False
+
+        yield _format_llm_test_json("正在读取 Sheet 列…", {})
+
+        columns, fetched_sample, fetch_error = _fetch_sheet_columns_and_sample(
+            template, credentials
+        )
+        if fetch_error:
+            if not test_cols:
+                gr.Warning(fetch_error)
+                yield f"// {fetch_error}"
+                return
+            sheet_columns = list(test_cols)
+            sample_row = {col: f"测试值_{i + 1}" for i, col in enumerate(test_cols)}
+            using_manual_cols = True
+            gr.Info("使用手动选择的列进行测试")
+        else:
+            sheet_columns = columns
+            sample_row = fetched_sample
+            gr.Info(f"已读取 Sheet：{len(columns)} 列")
+
+        yield _format_llm_test_json(
+            f"已读取 {len(sheet_columns)} 列",
+            {},
+            sheet_columns=sheet_columns,
+            sample_row=sample_row if not using_manual_cols else None,
+        )
+
         paste_config = load_paste_parse_config(template.id)
-        
         if not paste_config:
-            return "// 模板配置未找到"
-        
-        # Check if model exists, if not, auto-download in-process
-        model_file = find_model_file()
-        if not model_file:
-            gr.Info("首次使用，正在下载模型（根据内存自动选择量化版本）...")
-            logger.info("Model not found, starting in-process auto-download")
+            yield "// 模板配置未找到"
+            return
+
+        if not find_model_file():
+            gr.Info("正在下载 Phi-4 模型…")
+            yield _format_llm_test_json("正在下载 Phi-4 模型…", {})
             try:
                 ensure_model_downloaded(auto_mode=True)
-                gr.Info("模型下载完成，正在加载...")
-                logger.info("Model downloaded successfully")
+                gr.Info("模型下载完成")
             except ModelDownloadError as exc:
                 logger.error("Model download failed: %s", exc)
-                return f"// 模型下载失败：{exc}"
+                yield f"// 模型下载失败：{exc}"
+                return
             except Exception as exc:
                 logger.error("Download failed: %s", exc)
-                return (
+                yield (
                     f"// 下载失败：{exc}\n"
                     "// 请运行 install.bat 安装依赖，或手动执行: pip install huggingface-hub psutil"
                 )
-        
-        # Create matcher
+                return
+
+        gr.Info("正在加载 Phi-4…")
+        yield _format_llm_test_json("正在加载 Phi-4…", {})
+
         matcher = create_field_matcher()
-        
         if not matcher:
             detail = get_last_load_error()
             if detail:
-                return f"// Phi-4 模型加载失败\n// {detail}"
-            return (
-                "// Phi-4 模型加载失败\n"
-                "// 请确认 models/phi4/ 下已有 GGUF 文件，并运行 install.bat 安装 "
-                "torch、transformers>=5.0、gguf>=0.10.0"
+                yield f"// Phi-4 模型加载失败\n// {detail}"
+            else:
+                yield (
+                    "// Phi-4 模型加载失败\n"
+                    "// 请确认 models/phi4/ 下已有 GGUF 文件，并运行 install.bat 安装 "
+                    "torch、transformers>=5.0、gguf>=0.10.0"
+                )
+            return
+
+        gr.Info("Phi-4 就绪，开始逐字段匹配…")
+        yaml_dict = paste_config.to_dict()
+        matched: dict[str, str] = {}
+
+        for stage, partial in matcher.iter_match_sheet_fields_to_yaml(
+            sample_row, yaml_dict
+        ):
+            matched = partial
+            if "正在匹配" in stage:
+                gr.Info(stage)
+            yield _format_llm_test_json(
+                stage,
+                matched,
+                sheet_columns=sheet_columns,
+                sample_row=sample_row if not using_manual_cols else None,
             )
-        
-        # Perform matching
-        matched = matcher.match_sheet_fields_to_yaml(
-            test_sheet_row,
-            paste_config.to_dict()
-        )
-        
-        # Format result
-        result = {
-            "输入列": test_cols,
-            "匹配结果": matched
-        }
-        
-        return json.dumps(result, ensure_ascii=False, indent=2)
-    
-    except Exception as e:
-        logger.error(f"LLM test failed: {e}")
-        return f"// 测试失败：{str(e)}"
+
+    except Exception as exc:
+        logger.error("LLM test failed: %s", exc)
+        yield f"// 测试失败：{exc}"
 
 
 def handle_sections_save(
