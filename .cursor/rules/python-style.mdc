@@ -1,0 +1,36 @@
+---
+description: Python coding style for this repository
+alwaysApply: true
+---
+
+## Python Style
+
+### Spacing
+
+- Use **two blank lines** between top-level functions and between methods in a class.
+- Use **three blank lines** between class definitions.
+- **Inside** function and method bodies, do **not** use blank lines for vertical spacing—even when a gap would normally help readability. Use a short comment on its own line instead.
+
+### Comments
+
+- Add comments for any contiguous code block longer than **20 lines**.
+- Do **not** add section headers, file-length markers, or other decorative comments just because a file is long.
+- **Inline** comments (same line as code): explain parameter or argument usage.
+- **Trailing** comments (line after code): explain the logic of that statement or small step.
+
+### Paths
+
+- Prefer `pathlib.Path` over the `os` module for filesystem paths and operations.
+
+### General
+
+- Match the naming, types, imports, and abstraction level of the surrounding module.
+
+
+### Formatting workflow
+
+- Do **not** use automated formatters (black, ruff format, autopep8, isort as formatter, etc.).
+- Do **not** write scripts or bulk regex/sed passes to reformat Python files.
+- Do **not** run whole-file "reformat everything" batch operations.
+- Apply style changes manually, line by line, in focused edits (StrReplace / small diffs).
+- When reformatting a file, work in logical sections (one function or class at a time), not whole-file transforms.

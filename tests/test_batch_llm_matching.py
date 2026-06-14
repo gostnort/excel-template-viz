@@ -139,12 +139,3 @@ def test_prepare_llm_test_prompt_without_template():
     assert prepared is None
     assert prompt == ""
     assert "请先选择模板" in result
-
-
-def test_extract_response_text_strips_thinking_block():
-    matcher = _matcher_without_model()
-    raw = (
-        "<|channel>thought\ninternal reasoning\n<channel|>\n"
-        '<|channel>final\n{"column": "PO"}\n'
-    )
-    assert matcher._extract_response_text(raw) == '{"column": "PO"}'

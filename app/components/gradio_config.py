@@ -8,7 +8,7 @@ import json
 import logging
 import sys
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +29,6 @@ from app.services.paste_parse_config import (
     resolve_sheet_header,
 )
 from app.services.gemma4_field_matcher import (
-    FieldMatchResult,
     ModelDownloadError,
     build_batch_field_mapping_prompt,
     ensure_model_downloaded,
@@ -41,6 +40,19 @@ from app.services.gemma4_field_matcher import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class FieldMatchResult:
+    """Single field matching result for LLM test JSON output."""
+
+    filed: str
+    index: int
+    regex: str | None
+    similarity: float
+    matched_value: str
+    regex_suggested: bool
+    ID: bool = False
 
 
 def on_template_change_load_config(template: TemplateConfig | None) -> tuple:
@@ -287,7 +299,6 @@ def build_config_tab(
                     stop_llm_btn = gr.Button("⏹ 停止测试", variant="stop", interactive=False)
                     llm_test_elapsed = gr.Markdown("已用时: —")
                 
-                # 新增：显示 Prompt
                 with gr.Accordion("📝 LLM Prompt", open=False):
                     prompt_display = gr.Textbox(
                         label="发送给 LLM 的 Prompt",
@@ -296,7 +307,6 @@ def build_config_tab(
                         placeholder="点击测试后将显示 prompt..."
                     )
                 
-                # 新增：显示 LLM 响应
                 with gr.Accordion("🤖 LLM 响应", open=False):
                     llm_response = gr.Textbox(
                         label="LLM 原始响应",
@@ -305,7 +315,6 @@ def build_config_tab(
                         placeholder="等待 LLM 响应..."
                     )
                 
-                # 匹配结果
                 with gr.Accordion("✅ 匹配结果", open=True):
                     test_result_yaml = gr.Code(
                         label="可复制 YAML 片段（粘贴到「YAML 配置」标签页或 .paste.yaml）",
@@ -396,7 +405,6 @@ def build_config_tab(
         outputs=[yaml_status]
     )
     
-    # LLM tab events — step 1: build prompt (fast); step 2: load model + generate
     llm_test_event = test_llm_btn.click(
         fn=_begin_llm_test,
         outputs=[test_llm_btn, stop_llm_btn, llm_test_cancel, llm_test_start_time, llm_test_elapsed],
@@ -605,16 +613,6 @@ def _fetch_sheet_columns_and_samples(
         row = df.row(row_index, named=True)
         sample_rows.append({col: str(row.get(col, "") or "") for col in columns})
     return columns, sample_rows, None
-
-
-def _fetch_sheet_columns_and_sample(
-    template: TemplateConfig,
-    credentials: Any,
-) -> tuple[list[str], dict[str, str], str | None]:
-    """Backward compatible wrapper returning only the first sample row."""
-    columns, sample_rows, err = _fetch_sheet_columns_and_samples(template, credentials)
-    first_row = sample_rows[0] if sample_rows else {col: "" for col in columns}
-    return columns, first_row, err
 
 
 def _exact_match_columns(
@@ -831,7 +829,7 @@ def handle_yaml_auto_config(
                 progress(0.2 + 0.2 * (current / total), desc=msg)
 
             try:
-                ensure_model_downloaded(auto_mode=True, on_progress=download_progress)
+                ensure_model_downloaded(on_progress=download_progress)
                 gr.Info("模型下载完成")
             except ModelDownloadError as exc:
                 logger.error("Model download failed: %s", exc)
@@ -1214,7 +1212,7 @@ def run_llm_test_generation(
                 progress(0.15 + 0.15 * (current / total), desc=msg)
 
             try:
-                ensure_model_downloaded(auto_mode=True, on_progress=download_progress)
+                ensure_model_downloaded(on_progress=download_progress)
                 gr.Info("模型下载完成")
             except ModelDownloadError as exc:
                 logger.error("Model download failed: %s", exc)
@@ -1267,7 +1265,7 @@ def run_llm_test_generation(
                         "// Gemma 4 模型加载失败\n"
                         f"// 当前 Python: {sys.executable}\n"
                         "// 请确认 models/gemma4/ 下已有 gemma-4-E4B_q4_0-it.gguf，并执行:\n"
-                        f"// \"{sys.executable}\" -m pip install llama-cpp-python psutil"
+                        f'// "{sys.executable}" -m pip install "transformers>=5.0" torch psutil'
                     ),
                 )
             return
@@ -1357,29 +1355,6 @@ def run_llm_test_generation(
     except Exception as exc:
         logger.error("LLM test failed: %s", exc)
         yield _tick(prompt_text, result=f"// 测试失败：{exc}")
-
-
-def handle_llm_test(
-    template: TemplateConfig | None,
-    test_cols: list | None,
-    credentials: Any,
-    cancel_state: dict[str, bool],
-    start_time: float,
-    progress: gr.Progress = gr.Progress(),
-):
-    """
-    Legacy combined handler (prepare + generate). Prefer prepare_llm_test_prompt + run_llm_test_generation.
-    """
-    prepared, prompt, response, result, elapsed = prepare_llm_test_prompt(
-        template, test_cols, credentials, start_time
-    )
-    yield prompt, response, result, "", elapsed
-    if not prepared:
-        return
-    for prompt, response, result, yaml_result, elapsed in run_llm_test_generation(
-        template, prepared, cancel_state, start_time, progress
-    ):
-        yield prompt, response, result, yaml_result, elapsed
 
 
 def handle_sections_save(

@@ -16,9 +16,9 @@ PyYAML>=6.0
 
 Pillow>=10.0
 
-# LLM dependencies - llama-cpp-python for GGUF inference
-llama-cpp-python>=0.2.0
+# LLM dependencies - transformers for GGUF inference (pure Python)
+transformers>=5.0
+torch>=2.0
 huggingface-hub>=1.2.0,<2.0.0
-
 psutil>=5.9.0
 

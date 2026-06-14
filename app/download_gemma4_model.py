@@ -4,16 +4,13 @@ Download Gemma 4 E4B Q4_0 GGUF model from Hugging Face Hub.
 Downloads gemma-4-E4B_q4_0-it.gguf into models/gemma4/.
 
 Usage:
-    python download_gemma4_model.py         # Interactive mode
-    python download_gemma4_model.py --auto  # Auto mode (no user input)
+    python app/download_gemma4_model.py         # Interactive mode
+    python app/download_gemma4_model.py --auto  # Auto mode (no user input)
 """
 import argparse
 import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from app.services.gemma4_field_matcher import (  # noqa: E402
+from services.gemma4_field_matcher import (
     MODEL_DIR,
     MODEL_REPO,
     MODEL_WEIGHT_FILE,
@@ -61,7 +58,6 @@ def main() -> None:
         print("Estimated GGUF size: ~4.8 GB (this may take a while)")
         print()
         model_dir = ensure_model_downloaded(
-            auto_mode=True,
             force_redownload=args.force or (existing is not None and not args.auto),
         )
         weight = model_dir / MODEL_WEIGHT_FILE

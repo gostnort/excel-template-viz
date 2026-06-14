@@ -43,9 +43,6 @@ def test_paste_config_to_dict():
     assert result["sections"][0]["move_to"] == "down", "Sections should be preserved"
     assert result["fields_per_row"] == 7, "fields_per_row should default to 7"
     
-    print("[PASS] PasteParseConfig.to_dict() works correctly")
-    return True
-
 
 def test_section_validation():
     """Test section validation with move_to and offset"""
@@ -78,7 +75,6 @@ def test_section_validation():
     try:
         parse_sections_from_yaml(invalid_direction)
         print("[FAIL] Should have raised ValueError for invalid direction")
-        return False
     except ValueError as e:
         assert "Invalid move_to direction" in str(e), "Error message should mention invalid direction"
         print(f"[PASS] Invalid direction rejected: {e}")
@@ -93,7 +89,6 @@ def test_section_validation():
     try:
         parse_sections_from_yaml(invalid_offset)
         print("[FAIL] Should have raised ValueError for zero offset")
-        return False
     except ValueError as e:
         assert "positive integer" in str(e), "Error message should mention positive integer"
         print(f"[PASS] Zero offset rejected: {e}")
@@ -108,12 +103,10 @@ def test_section_validation():
     try:
         parse_sections_from_yaml(negative_offset)
         print("[FAIL] Should have raised ValueError for negative offset")
-        return False
     except ValueError as e:
         assert "positive integer" in str(e), "Error message should mention positive integer"
         print(f"[PASS] Negative offset rejected: {e}")
     
-    return True
 
 
 def test_data_source_config():
@@ -155,7 +148,6 @@ def test_data_source_config():
     assert loaded_after_delete is None, "Config should be deleted"
     print("[PASS] Config deleted successfully")
     
-    return True
 
 
 def test_id_field_finder():
@@ -173,7 +165,6 @@ def test_id_field_finder():
     # but we've verified the function signature and basic behavior
     print("[PASS] ID field finder helper implemented correctly")
     
-    return True
 
 
 def test_config_save_to_yaml_with_sections():
@@ -204,7 +195,6 @@ def test_config_save_to_yaml_with_sections():
     print("\nYAML Output Preview:")
     print(yaml_output[:200] + "...")
     
-    return True
 
 
 def test_form_field_loading_helpers():
@@ -267,7 +257,6 @@ def test_form_field_loading_helpers():
         pass
     print("[PASS] read_area_form_values() maps area cells to headers")
 
-    return True
 
 
 def test_refresh_data_entry_form_uses_configured_area():
@@ -340,7 +329,6 @@ def test_refresh_data_entry_form_uses_configured_area():
     except OSError:
         pass
     print("[PASS] refresh_data_entry_form() loads fields from configured area")
-    return True
 
 
 def test_refresh_output_count_stable_with_custom_fields_per_row():
@@ -423,7 +411,6 @@ def test_refresh_output_count_stable_with_custom_fields_per_row():
         pass
 
     print("[PASS] refresh output count stays aligned with custom fields_per_row")
-    return True
 
 
 def test_yaml_auto_generation_from_sections():
@@ -489,7 +476,6 @@ def test_yaml_auto_generation_from_sections():
     template_dir.rmdir()
 
     print("[PASS] Sections save creates paste.yaml and handle_yaml_load returns content")
-    return True
 
 
 def test_fields_per_row_config():
@@ -547,7 +533,6 @@ def test_fields_per_row_config():
     assert get_fields_per_row("nonexistent_template_xyz") == DEFAULT_FIELDS_PER_ROW
 
     print("[PASS] fields_per_row config round-trip and defaults work correctly")
-    return True
 
 
 def test_unmapped_field_defaults():
@@ -610,7 +595,6 @@ def test_unmapped_field_defaults():
     assert 'filed: "YY"' not in yaml_roundtrip
 
     print("[PASS] Unmapped defaults and regex normalization work correctly")
-    return True
 
 
 def test_import_without_llm_matcher():
@@ -673,7 +657,6 @@ def test_import_without_llm_matcher():
     assert form_data[0]["MM"] == "06"
 
     print("[PASS] handle_import_selected() uses rule-based fallback without LLM")
-    return True
 
 
 def test_resolve_field_header_skips_unmapped():
@@ -688,7 +671,6 @@ def test_resolve_field_header_skips_unmapped():
     assert _resolve_field_header_name("YY", field_rules) == "YY"
 
     print("[PASS] _resolve_field_header_name() skips filed='?'")
-    return True
 
 
 def test_import_history_restore():
@@ -738,7 +720,6 @@ def test_import_history_restore():
         assert "trash_count" in stats
 
         print("[PASS] unmark_ids() restores IDs from processed and trash")
-        return True
     finally:
         if original_data is not None:
             history_path.write_text(
