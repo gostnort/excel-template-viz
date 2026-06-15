@@ -202,16 +202,57 @@ APP_CSS = """
         .template-sidebar {
             display: flex !important;
             flex-direction: column !important;
-            transition: opacity 0.2s ease, max-width 0.25s ease;
+            transition: opacity 0.2s ease, max-width 0.25s ease, flex 0.25s ease, min-width 0.25s ease;
+        }
+        
+        #template-sidebar.sidebar-collapsed {
+            display: none !important;
+            flex: 0 0 0 !important;
+            width: 0 !important;
+            min-width: 0 !important;
+            max-width: 0 !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            overflow: hidden !important;
+            opacity: 0 !important;
+        }
+        
+        #main-content.main-expanded {
+            flex: 1 1 100% !important;
+            max-width: 100% !important;
+            width: 100% !important;
+        }
+        
+        #app-body-row {
+            align-items: stretch !important;
+            min-height: calc(100vh - 88px) !important;
         }
         
         .template-nav-title p {
             margin: 0 0 4px 0 !important;
         }
         
-        .template-sidebar .template-selector {
+        .template-list-scroll {
             flex: 1 1 auto !important;
             min-height: 0 !important;
+            overflow-y: auto !important;
+            overflow-x: hidden !important;
+        }
+        
+        .template-list-scroll .template-selector {
+            min-height: 0 !important;
+        }
+        
+        .sidebar-shutdown-footer {
+            flex: 0 0 auto !important;
+            margin-top: auto !important;
+            padding-top: 12px !important;
+            border-top: 1px solid #e5e7eb !important;
+        }
+        
+        .sidebar-shutdown-footer .app-shutdown-btn {
+            width: 100% !important;
+            margin: 0 !important;
         }
         
         .sidebar-toggle-btn {
@@ -247,18 +288,24 @@ APP_CSS = """
             margin: 0 !important;
         }
         
-        .app-shutdown-btn {
+        .app-header-row .app-header-actions {
+            display: flex !important;
             flex: 0 0 auto !important;
-            min-width: fit-content !important;
+            align-items: center !important;
+            gap: 8px !important;
+            margin: 0 !important;
+        }
+        
+        .app-header-row .sidebar-toggle-btn {
             margin: 0 !important;
         }
         
         .app-shutdown-btn button {
-            font-size: 1rem !important;
+            font-size: 0.9rem !important;
             font-weight: normal !important;
-            padding: 10px 20px !important;
-            min-height: 42px !important;
-            min-width: 120px !important;
+            padding: 8px 16px !important;
+            min-height: 36px !important;
+            width: 100% !important;
             border: 2px solid #dc2626 !important;
             color: #dc2626 !important;
             background: #fef2f2 !important;
@@ -299,14 +346,15 @@ def build_app() -> gr.Blocks:
                 "# Excel 模板可视化",
                 elem_classes=["app-title"],
             )
-            shutdown_btn = gr.Button(
-                "关闭应用",
-                variant="stop",
-                size="lg",
-                elem_classes=["app-shutdown-btn"],
-            )
+            with gr.Row(elem_classes=["app-header-actions"]):
+                sidebar_toggle_btn = gr.Button(
+                    "◀ 隐藏模板",
+                    variant="secondary",
+                    size="sm",
+                    elem_classes=["sidebar-toggle-btn"],
+                )
         
-        with gr.Row():
+        with gr.Row(elem_id="app-body-row"):
             # Left sidebar: Template selector
             with gr.Column(
                 scale=1,
@@ -318,23 +366,23 @@ def build_app() -> gr.Blocks:
                     "## 选择模板",
                     elem_classes=["template-nav-title", "template-nav-header"],
                 )
-                
-                template_selector = gr.Radio(
-                    choices=[],
-                    value=None,
-                    show_label=False,
-                    elem_classes=["template-selector"]
-                )
-                
-                sidebar_toggle_btn = gr.Button(
-                    "◀ 隐藏模板",
-                    variant="secondary",
-                    size="sm",
-                    elem_classes=["sidebar-toggle-btn"],
-                )
+                with gr.Column(elem_classes=["template-list-scroll"]):
+                    template_selector = gr.Radio(
+                        choices=[],
+                        value=None,
+                        show_label=False,
+                        elem_classes=["template-selector"]
+                    )
+                with gr.Column(elem_classes=["sidebar-shutdown-footer"]):
+                    shutdown_btn = gr.Button(
+                        "关闭应用",
+                        variant="stop",
+                        size="sm",
+                        elem_classes=["app-shutdown-btn"],
+                    )
             
             # Right main area: Tabs
-            with gr.Column(scale=4):
+            with gr.Column(scale=4, elem_id="main-content", elem_classes=["main-content"]) as main_column:
                 sidebar_show_btn = gr.Button(
                     "▶ 显示模板",
                     variant="secondary",
@@ -373,7 +421,12 @@ def build_app() -> gr.Blocks:
             outputs=[template_selector],
         ).then(
             fn=apply_template_and_refresh_form,
-            inputs=[template_selector, current_template, form_data_state],
+            inputs=[
+                template_selector,
+                current_template,
+                form_data_state,
+                form_components["entry_mode_state"],
+            ],
             outputs=[
                 current_template,
                 form_components["sheet_selector"],
@@ -385,7 +438,12 @@ def build_app() -> gr.Blocks:
         # Event: Template selection changed
         template_selector.change(
             fn=apply_template_and_refresh_form,
-            inputs=[template_selector, current_template, form_data_state],
+            inputs=[
+                template_selector,
+                current_template,
+                form_data_state,
+                form_components["entry_mode_state"],
+            ],
             outputs=[
                 current_template,
                 form_components["sheet_selector"],
@@ -408,7 +466,6 @@ def build_app() -> gr.Blocks:
             inputs=[current_template],
             outputs=[
                 config_components["yaml_editor"],
-                config_components["yaml_status"],
             ],
         ).then(
             fn=refresh_data_entry_form,
@@ -416,6 +473,7 @@ def build_app() -> gr.Blocks:
                 current_template,
                 form_components["sheet_selector"],
                 form_data_state,
+                form_components["entry_mode_state"],
             ],
             outputs=form_components["form_refresh_outputs"],
             show_progress="hidden",
@@ -454,6 +512,7 @@ def build_app() -> gr.Blocks:
             sidebar_column,
             sidebar_visible,
             sidebar_show_btn,
+            main_column,
         ]
         sidebar_toggle_btn.click(
             fn=toggle_sidebar_visibility,
@@ -475,13 +534,24 @@ def build_app() -> gr.Blocks:
     return app
 
 
-def toggle_sidebar_visibility(is_visible: bool) -> tuple[Any, bool, Any]:
+def toggle_sidebar_visibility(is_visible: bool) -> tuple[Any, bool, Any, Any]:
     """Toggle template selector sidebar visibility."""
     new_visible = not is_visible
+    sidebar_classes = ["template-sidebar"] if new_visible else ["template-sidebar", "sidebar-collapsed"]
+    main_classes = ["main-content"] if new_visible else ["main-content", "main-expanded"]
     return (
-        gr.update(visible=new_visible),
+        gr.update(
+            visible=new_visible,
+            scale=1 if new_visible else 0,
+            min_width=200 if new_visible else 0,
+            elem_classes=sidebar_classes,
+        ),
         new_visible,
         gr.update(visible=not new_visible),
+        gr.update(
+            scale=4 if new_visible else 1,
+            elem_classes=main_classes,
+        ),
     )
 
 
@@ -580,10 +650,11 @@ def apply_template_and_refresh_form(
     template_name: str | None,
     current_template: TemplateConfig | None,
     form_data: list[dict[str, str]],
+    entry_mode: str = "ID Auto",
 ) -> tuple:
     """Select template, resolve default sheet, and refresh the data entry form in one step."""
     new_template, sheet_update, default_sheet = on_template_change(
         template_name, current_template
     )
-    refresh = refresh_data_entry_form(new_template, default_sheet, form_data)
+    refresh = refresh_data_entry_form(new_template, default_sheet, form_data, entry_mode)
     return (new_template, sheet_update, *refresh)

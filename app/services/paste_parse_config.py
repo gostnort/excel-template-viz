@@ -118,15 +118,173 @@ def structural_order_col_offset(order: list[dict[str, Any]] | None) -> int:
     return 0
 
 
+def default_input_area_for_template(
+    template_path: Path,
+    worksheet_name: str | None,
+    data_start_row: int,
+) -> str | None:
+    """Infer a single-row input area from the template header row and data_start_row."""
+    from openpyxl import load_workbook
+    from openpyxl.utils import get_column_letter
+
+    from app.services.excel_parser import resolve_sheet_name
+
+    try:
+        wb = load_workbook(template_path, read_only=True, data_only=True)
+    except Exception:
+        return None
+    try:
+        resolved_sheet = resolve_sheet_name(template_path, worksheet_name) if worksheet_name else None
+        if resolved_sheet:
+            ws = wb[resolved_sheet]
+        elif worksheet_name and worksheet_name in wb.sheetnames:
+            ws = wb[worksheet_name]
+        else:
+            ws = wb.active
+        if ws is None:
+            return None
+        last_col = 0
+        for col_idx, cell in enumerate(ws[1], start=1):
+            if cell.value is not None and str(cell.value).strip():
+                last_col = col_idx
+        if last_col < 1:
+            return None
+        excel_row = data_start_row + 1
+        return f"A{excel_row}:{get_column_letter(last_col)}{excel_row}"
+    finally:
+        wb.close()
+
+
+def read_input_area_headers(
+    template_path: Path,
+    worksheet_name: str | None,
+    area_range: str,
+    *,
+    header_row: int | None = None,
+) -> list[str]:
+    """Read column headers for an input area from the row above the area (or template header row)."""
+    from openpyxl import load_workbook
+
+    from app.services.excel_parser import resolve_sheet_name
+    from app.services.section_detector import parse_area_range
+
+    coords = parse_area_range(area_range)
+    if coords.start_row > 1:
+        excel_header_row = coords.start_row - 1
+    elif header_row is not None:
+        excel_header_row = header_row + 1
+    else:
+        excel_header_row = 1
+    resolved_sheet = resolve_sheet_name(template_path, worksheet_name) if worksheet_name else None
+    wb = load_workbook(template_path, read_only=True, data_only=True)
+    try:
+        if resolved_sheet:
+            ws = wb[resolved_sheet]
+        elif worksheet_name and worksheet_name in wb.sheetnames:
+            ws = wb[worksheet_name]
+        else:
+            ws = wb.active
+        if ws is None:
+            return []
+        headers: list[str] = []
+        for col in range(coords.start_col, coords.end_col + 1):
+            cell_value = ws.cell(excel_header_row, col).value
+            if cell_value is not None:
+                text = str(cell_value).strip()
+                if text:
+                    headers.append(text)
+            # Skip blank header cells so wide input areas do not add placeholder columns.
+        while headers and headers[-1].startswith("col_"):
+            headers.pop()
+        seen: set[str] = set()
+        unique_headers: list[str] = []
+        for header in headers:
+            key = header.strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            unique_headers.append(header)
+        return unique_headers
+    finally:
+        wb.close()
+
+
+def read_template_header_at(
+    template_path: Path,
+    worksheet_name: str | None,
+    col_index: int,
+) -> str | None:
+    """Read one header cell from the template's first row (0-based column index)."""
+    from openpyxl import load_workbook
+
+    try:
+        wb = load_workbook(template_path, read_only=True, data_only=True)
+    except Exception:
+        return None
+    try:
+        if worksheet_name and worksheet_name in wb.sheetnames:
+            ws = wb[worksheet_name]
+        else:
+            ws = wb.active
+        if ws is None:
+            return None
+        cell_value = ws.cell(1, col_index + 1).value
+        if cell_value is None:
+            return None
+        text = str(cell_value).strip()
+        return text or None
+    finally:
+        wb.close()
+
+
+def structural_order_entry_from_template(
+    template_path: Path,
+    worksheet_name: str | None = None,
+) -> dict[str, Any] | None:
+    """Return a paste order entry when column A of the template is structural ``order``."""
+    header = read_template_header_at(template_path, worksheet_name, 0)
+    if header and is_structural_order_column(header):
+        return _order_entry_to_dict({"filed": header, "index": 0})
+    return None
+
+
+def resolve_structural_order_entry(
+    order: list[dict[str, Any]] | None,
+    template_path: Path | None = None,
+    worksheet_name: str | None = None,
+) -> dict[str, Any] | None:
+    """Prefer configured paste order; fall back to the template's column-A header."""
+    if order and structural_order_col_offset(order) == 1:
+        return _order_entry_to_dict(order[0])
+    if template_path is not None:
+        return structural_order_entry_from_template(template_path, worksheet_name)
+    return None
+
+
+def structural_order_active(
+    order: list[dict[str, Any]] | None,
+    template_path: Path | None = None,
+    worksheet_name: str | None = None,
+) -> bool:
+    """True when YAML or the Excel template reserves column A for ``order``."""
+    return resolve_structural_order_entry(order, template_path, worksheet_name) is not None
+
+
 def build_order_entries_from_mappings(
     sheet_columns: list[str],
     mapped_columns: set[str],
     *,
     include_unmapped: bool = True,
+    structural_order_seed: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Build paste order list: index-0 ``order`` column plus matched sheet columns by index."""
     new_order: list[dict[str, Any]] = []
     seen: set[str] = set()
+    if structural_order_seed:
+        seeded = _order_entry_to_dict(structural_order_seed)
+        if structural_order_col_offset([seeded]) == 1:
+            new_order.append(seeded)
+            seen.add(str(seeded.get("filed", "")).strip())
     for idx, col_name in enumerate(sheet_columns):
         col_stripped = col_name.strip()
         if not col_stripped:
@@ -145,7 +303,7 @@ def _rule_to_dict(rule: PasteParseRule) -> dict[str, Any]:
     filed = (rule.filed or "").strip() or UNMAPPED_FILED
     if _is_unmapped(filed, rule.index):
         return {
-            "ID": False,
+            "ID": rule.id_flag,
             "filed": UNMAPPED_FILED,
             "index": UNMAPPED_INDEX,
             "regex": "None",
@@ -305,7 +463,12 @@ def _normalize_rule_dict(rule: dict[str, Any]) -> dict[str, Any]:
     filed = (str(rule.get("filed", UNMAPPED_FILED)).strip()) or UNMAPPED_FILED
     index = int(rule.get("index", UNMAPPED_INDEX))
     if _is_unmapped(filed, index):
-        return _default_order_entry()
+        return {
+            "ID": bool(rule.get("ID", False)),
+            "filed": UNMAPPED_FILED,
+            "index": UNMAPPED_INDEX,
+            "regex": "None",
+        }
     regex = _normalize_regex_value(rule.get("regex"))
     return {
         "ID": bool(rule.get("ID", False)),

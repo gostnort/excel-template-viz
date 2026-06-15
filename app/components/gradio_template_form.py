@@ -4,18 +4,25 @@ Gradio Template Form Component
 Handles dynamic form rendering, area selection, ID lookup, and bulk import.
 """
 import gradio as gr
+import io
 import logging
 import polars as pl
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 from app.services.registry import TemplateConfig
-from app.services.excel_parser import list_sheet_names, read_template_sheet
+from app.services.excel_parser import list_sheet_names, read_template_sheet, resolve_sheet_name
+from app.services.export_naming import build_export_filename
+from app.services.excel_print import persist_export_file, primary_print_area, show_print_dialog
+from app.services.section_detector import calculate_next_area
 from app.services.paste_parse_config import (
     load_paste_parse_config,
     map_sheet_row_from_paste_config,
     parse_text_with_config,
-    structural_order_col_offset,
+    default_input_area_for_template,
+    read_input_area_headers,
+    id_target_field_from_config,
     DEFAULT_FIELDS_PER_ROW,
 )
 from app.services.google_sheets import (
@@ -35,6 +42,8 @@ logger = logging.getLogger(__name__)
 MAX_FORM_FIELDS = 40
 MAX_IMPORT_PREVIEW_ROWS = 1000
 HIDE_PROGRESS = {"show_progress": "hidden"}
+ENTRY_MODE_ID_AUTO = "ID Auto"
+ENTRY_MODE_MANUAL = "Manual"
 
 
 def _get_template_id(template: TemplateConfig | dict[str, Any] | None) -> str | None:
@@ -122,6 +131,54 @@ def form_refresh_output_count() -> int:
     return 6 + FORM_ROW_COUNT + MAX_FORM_FIELDS
 
 
+def _form_field_output_components(
+    field_rows: list,
+    form_field_boxes: list,
+) -> list:
+    """Gradio outputs must follow component creation order: row, its fields, next row, ..."""
+    outputs = []
+    for row_idx, field_row in enumerate(field_rows):
+        outputs.append(field_row)
+        row_start = row_idx * FORM_LAYOUT_FIELDS_PER_ROW
+        row_end = min(row_start + FORM_LAYOUT_FIELDS_PER_ROW, MAX_FORM_FIELDS)
+        for index in range(row_start, row_end):
+            outputs.append(form_field_boxes[index])
+    return outputs
+
+
+def _interleaved_row_field_updates(
+    row_updates: list[gr.update],
+    field_updates: list[gr.update],
+) -> list[gr.update]:
+    """Pair row visibility updates with the field slots created inside each row."""
+    updates = []
+    for row_idx, row_update in enumerate(row_updates):
+        updates.append(row_update)
+        row_start = row_idx * FORM_LAYOUT_FIELDS_PER_ROW
+        row_end = min(row_start + FORM_LAYOUT_FIELDS_PER_ROW, MAX_FORM_FIELDS)
+        for index in range(row_start, row_end):
+            updates.append(field_updates[index])
+    return updates
+
+
+def split_interleaved_field_refresh_updates(
+    interleaved: list,
+) -> tuple[list, list]:
+    """Split refresh tail (after fields_container) back into row and field update lists."""
+    row_updates = []
+    field_updates: list = [gr.update() for _ in range(MAX_FORM_FIELDS)]
+    pos = 0
+    for row_idx in range(FORM_ROW_COUNT):
+        row_updates.append(interleaved[pos])
+        pos += 1
+        row_start = row_idx * FORM_LAYOUT_FIELDS_PER_ROW
+        row_end = min(row_start + FORM_LAYOUT_FIELDS_PER_ROW, MAX_FORM_FIELDS)
+        for index in range(row_start, row_end):
+            field_updates[index] = interleaved[pos]
+            pos += 1
+    return row_updates, field_updates
+
+
 def get_fields_per_row(template_id: str) -> int:
     """Load fields-per-row layout from paste config (default 7)."""
     paste_config = load_paste_parse_config(template_id)
@@ -149,34 +206,48 @@ def resolve_default_sheet_name(
     return workbook_sheets[0] if workbook_sheets else None
 
 
-def _resolve_field_header_name(
-    filed: str,
-    field_rules: dict[str, list],
+def _resolve_input_area_range(
+    template: TemplateConfig,
+    sheet_name: str | None,
 ) -> str | None:
-    """Map a paste-config filed value to the form header name."""
-    filed_stripped = filed.strip()
-    if not filed_stripped or filed_stripped == "?":
-        return None
-    if filed_stripped in field_rules:
-        return filed_stripped
-    filed_lower = filed_stripped.lower()
-    for field_name, rules in field_rules.items():
-        for rule in rules:
-            rule_filed = str(rule.filed).strip()
-            if rule_filed == filed_stripped or rule_filed.lower() == filed_lower:
-                return field_name
-    return filed_stripped
+    """Resolve the template input area from paste sections or template defaults."""
+    paste_config = load_paste_parse_config(template.id)
+    if paste_config and paste_config.sections:
+        area_range = str(paste_config.sections[0].get("input_area", "")).strip()
+        if area_range:
+            return area_range
+    preferred_sheet = sheet_name or template.sheet_name or None
+    if paste_config and paste_config.worksheet:
+        preferred_sheet = paste_config.worksheet
+    return default_input_area_for_template(
+        Path(template.file_path),
+        preferred_sheet,
+        template.data_start_row,
+    )
 
 
-def get_form_field_headers(template_id: str) -> list[str]:
-    """Load form field names from paste parse config, including structural ``order`` when configured."""
-    paste_config = load_paste_parse_config(template_id)
-    if not paste_config:
+def get_form_field_headers(
+    template: TemplateConfig,
+    sheet_name: str | None = None,
+) -> list[str]:
+    """Load form field names from the Excel template columns above the input area."""
+    area_range = _resolve_input_area_range(template, sheet_name)
+    if not area_range:
         return []
-    headers = list(paste_config.field_rules.keys())
-    if structural_order_col_offset(paste_config.order) == 1:
-        return ["order", *headers]
-    return headers
+    preferred_sheet = sheet_name or template.sheet_name or None
+    paste_config = load_paste_parse_config(template.id)
+    if paste_config and paste_config.worksheet:
+        preferred_sheet = paste_config.worksheet
+    try:
+        return read_input_area_headers(
+            Path(template.file_path),
+            preferred_sheet,
+            area_range,
+            header_row=template.header_row,
+        )
+    except Exception as exc:
+        logger.error(f"Failed to read template area headers: {exc}")
+        return []
 
 
 def read_area_form_values(
@@ -184,10 +255,8 @@ def read_area_form_values(
     sheet_name: str,
     area_range: str,
     headers: list[str],
-    *,
-    col_offset: int = 0,
 ) -> dict[str, str]:
-    """Read one template row from an Excel area and map values to field headers."""
+    """Read template cells in an input area and map values to column headers."""
     from openpyxl import load_workbook
 
     from app.services.excel_parser import format_cell_display, resolve_sheet_name
@@ -199,13 +268,15 @@ def read_area_form_values(
     try:
         ws = wb[resolved_sheet]
         values: dict[str, str] = {}
-        area_cols = coords.end_col - coords.start_col + 1
         area_rows = coords.end_row - coords.start_row + 1
+        area_cols = coords.end_col - coords.start_col + 1
 
-        if len(headers) <= area_cols and area_rows == 1:
-            for index, header in enumerate(headers):
-                cell = ws.cell(coords.start_row, coords.start_col + col_offset + index)
-                values[header] = format_cell_display(cell.value)
+        if area_rows == 1:
+            for index, col in enumerate(range(coords.start_col, coords.end_col + 1)):
+                if index >= len(headers):
+                    break
+                cell = ws.cell(coords.start_row, col)
+                values[headers[index]] = format_cell_display(cell.value)
             return values
 
         pos = 0
@@ -221,8 +292,113 @@ def read_area_form_values(
         wb.close()
 
 
+def write_area_form_values(
+    worksheet,
+    area_range: str,
+    headers: list[str],
+    values: dict[str, str],
+) -> None:
+    """Write header-mapped values into template cells for an input area."""
+    from app.services.section_detector import parse_area_range
+
+    coords = parse_area_range(area_range)
+    area_rows = coords.end_row - coords.start_row + 1
+
+    if area_rows == 1:
+        for index, col in enumerate(range(coords.start_col, coords.end_col + 1)):
+            if index >= len(headers):
+                break
+            header = headers[index]
+            cell = worksheet.cell(coords.start_row, col)
+            if cell.data_type == "f":
+                continue
+            text = values.get(header, "")
+            cell.value = text if text else None
+        return
+
+    pos = 0
+    for row_idx in range(coords.start_row, coords.end_row + 1):
+        for col_idx in range(coords.start_col, coords.end_col + 1):
+            if pos >= len(headers):
+                return
+            header = headers[pos]
+            cell = worksheet.cell(row_idx, col_idx)
+            if cell.data_type != "f":
+                text = values.get(header, "")
+                cell.value = text if text else None
+            pos += 1
+
+
+def build_export_workbook_bytes(
+    template: TemplateConfig,
+    sheet_name: str,
+    form_data: list[dict[str, str]],
+) -> bytes:
+    """Copy the template workbook and write all form rows into input areas."""
+    from openpyxl import load_workbook
+
+    workbook_path = Path(template.file_path)
+    resolved_sheet = resolve_sheet_name(workbook_path, sheet_name)
+    headers = get_form_field_headers(template, sheet_name)
+    if not headers:
+        raise ValueError("未找到表头")
+    base_area = _resolve_input_area_range(template, sheet_name)
+    if not base_area:
+        raise ValueError("未找到输入区域")
+    move_to = "down"
+    offset = 1
+    paste_config = load_paste_parse_config(template.id)
+    if paste_config and paste_config.sections:
+        section = paste_config.sections[0]
+        move_to = str(section.get("move_to", "down"))
+        offset = int(section.get("offset", 1))
+    rows = form_data if form_data else [{header: "" for header in headers}]
+    wb = load_workbook(workbook_path)
+    try:
+        ws = wb[resolved_sheet]
+        for row_idx, row_dict in enumerate(rows):
+            area_range = base_area
+            if row_idx > 0:
+                area_range = calculate_next_area(base_area, move_to, offset * row_idx)
+            row_values = _row_values_for_headers(headers, row_dict)
+            write_area_form_values(ws, area_range, headers, row_values)
+        buffer = io.BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+        return buffer.getvalue()
+    finally:
+        wb.close()
+
+
+def _merge_field_boxes_into_form_data(
+    template: TemplateConfig,
+    sheet_name: str | None,
+    form_data: list[dict[str, str]],
+    row_selector_value: str | None,
+    field_values: tuple[str, ...],
+) -> list[dict[str, str]]:
+    """Merge visible textbox values into form_data for the selected row."""
+    headers = get_form_field_headers(template, sheet_name)
+    if not headers:
+        return list(form_data)
+    merged = [dict(row) for row in form_data] if form_data else []
+    if not merged:
+        merged = [{header: "" for header in headers}]
+    target_idx = _resolve_row_index(row_selector_value, len(merged))
+    row_dict = dict(merged[target_idx])
+    for index, header in enumerate(headers):
+        if index < len(field_values):
+            row_dict[header] = field_values[index] or ""
+    merged[target_idx] = _row_values_for_headers(headers, row_dict)
+    return merged
+
+
+def _hidden_field_slot_update() -> gr.update:
+    return gr.update(visible=False, value="", label="")
+
+
 def _empty_field_updates() -> list[gr.update]:
-    return [gr.update(visible=False) for _ in range(MAX_FORM_FIELDS)]
+    return [_hidden_field_slot_update() for _ in range(MAX_FORM_FIELDS)]
 
 
 def _empty_row_updates() -> list[gr.update]:
@@ -255,6 +431,24 @@ def _row_values_for_headers(headers: list[str], row_dict: dict[str, str]) -> dic
     return {header: row_dict.get(header, "") for header in headers}
 
 
+def _merge_mapped_into_row(
+    headers: list[str],
+    existing_row: dict[str, str],
+    mapped: dict[str, str],
+) -> dict[str, str]:
+    """Overlay mapped data-source values onto an existing form row; keep unmapped template cells."""
+    merged = _row_values_for_headers(headers, existing_row)
+    for key, value in mapped.items():
+        if key not in headers:
+            continue
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            merged[key] = text
+    return merged
+
+
 def _field_updates_for_row(headers: list[str], row_values: dict[str, str]) -> list[gr.update]:
     updates: list[gr.update] = []
     for index in range(MAX_FORM_FIELDS):
@@ -269,21 +463,60 @@ def _field_updates_for_row(headers: list[str], row_values: dict[str, str]) -> li
                 )
             )
         else:
-            updates.append(gr.update(visible=False))
+            updates.append(_hidden_field_slot_update())
     return updates
 
 
-def _paste_input_update(headers: list[str], *, interactive: bool = True) -> gr.update:
+def _paste_input_update(
+    headers: list[str],
+    *,
+    entry_mode: str = ENTRY_MODE_ID_AUTO,
+    interactive: bool = True,
+) -> gr.update:
     count = len(headers)
+    manual = entry_mode == ENTRY_MODE_MANUAL
     placeholder = "粘贴 Tab 分隔的一行（可从 Excel 复制）"
     if count:
-        placeholder += "；填入「选择行」当前行，未选则第 1 行"
+        if manual:
+            placeholder += "；将按 YAML 配置解析并填入表单"
+        else:
+            placeholder += "；填入「选择行」当前行，未选则第 1 行"
     return gr.update(
         value="",
-        visible=count > 0,
+        visible=count > 0 and manual,
         interactive=interactive,
         placeholder=placeholder,
         label=f"粘贴数据（已配置 {count} 个字段）" if count else "粘贴数据",
+    )
+
+
+def _row_selector_update(
+    choices: list[str],
+    value: str | None,
+    *,
+    entry_mode: str = ENTRY_MODE_ID_AUTO,
+    active: bool = True,
+) -> gr.update:
+    id_auto = entry_mode == ENTRY_MODE_ID_AUTO
+    return gr.update(
+        choices=choices,
+        value=value,
+        visible=id_auto and active,
+    )
+
+
+def on_entry_mode_change(
+    entry_mode: str,
+    template: TemplateConfig | None,
+) -> tuple:
+    """Sync entry mode state and toggle row selector vs paste input visibility."""
+    headers = get_form_field_headers(template) if template else []
+    has_headers = bool(headers)
+    id_auto = entry_mode == ENTRY_MODE_ID_AUTO
+    return (
+        entry_mode,
+        gr.update(visible=id_auto and has_headers),
+        _paste_input_update(headers, entry_mode=entry_mode),
     )
 
 
@@ -297,10 +530,11 @@ def _should_parse_paste(paste_text: str) -> bool:
 def _build_field_updates(
     headers: list[str],
     row_values: dict[str, str],
+    entry_mode: str = ENTRY_MODE_ID_AUTO,
 ) -> tuple[list[gr.update], list[gr.update], gr.update]:
     updates = _field_updates_for_row(headers, row_values)
     row_updates = _build_row_updates(headers)
-    paste_update = _paste_input_update(headers)
+    paste_update = _paste_input_update(headers, entry_mode=entry_mode)
     return updates, row_updates, paste_update
 
 
@@ -308,14 +542,13 @@ def _inactive_form_refresh(form_data: list[dict[str, str]]) -> tuple:
     field_updates = _empty_field_updates()
     row_updates = _empty_row_updates()
     return (
-        gr.update(visible=False),
+        gr.update(visible=True),
         [],
         form_data,
-        gr.update(choices=[], value=None),
+        gr.update(choices=[], value=None, visible=False),
         gr.update(value="", visible=False, interactive=True),
-        gr.update(visible=False),
-        *row_updates,
-        *field_updates,
+        gr.update(visible=True),
+        *_interleaved_row_field_updates(row_updates, field_updates),
     )
 
 
@@ -323,38 +556,26 @@ def refresh_data_entry_form(
     template: TemplateConfig | None,
     sheet_name: str | None,
     form_data: list[dict[str, str]],
+    entry_mode: str = ENTRY_MODE_ID_AUTO,
 ) -> tuple:
     """
     Detect areas and populate dynamic form fields from paste/sections config.
 
     Returns updates for:
     form_container, detected_areas_state, form_data_state,
-    row_selector, paste_input, fields_container, *field_rows, *form_field_boxes
+    row_selector, paste_input, fields_container,
+    then each field row and its textboxes in creation order.
     """
     if not template or not sheet_name:
         return _inactive_form_refresh(form_data)
 
-    headers = get_form_field_headers(template.id)
+    headers = get_form_field_headers(template, sheet_name)
     if not headers:
-        gr.Warning("未找到字段配置，请先在「参数配置」中保存 YAML 或区域配置")
-        inactive = _inactive_form_refresh(form_data)
-        return (
-            gr.update(visible=True),
-            inactive[1],
-            inactive[2],
-            inactive[3],
-            gr.update(value="", visible=False, interactive=True),
-            gr.update(visible=False),
-            *inactive[6:],
-        )
+        gr.Warning("未找到模板输入区域或表头，请检查 Excel 模板或区域配置")
+        return _inactive_form_refresh(form_data)
 
-    paste_config = load_paste_parse_config(template.id)
+    active_area_range = _resolve_input_area_range(template, sheet_name)
     detected_areas = []
-    active_area_range: str | None = None
-
-    if paste_config and paste_config.sections:
-        section = paste_config.sections[0]
-        active_area_range = str(section.get("input_area", "")).strip() or None
 
     row_values: dict[str, str] = {header: "" for header in headers}
     if active_area_range:
@@ -370,16 +591,17 @@ def refresh_data_entry_form(
             gr.Warning(f"读取区域数据失败：{exc}")
 
     form_data = [row_values]
-    field_updates, row_updates, status_update = _build_field_updates(headers, row_values)
+    field_updates, row_updates, status_update = _build_field_updates(
+        headers, row_values, entry_mode
+    )
     return (
         gr.update(visible=True),
         detected_areas,
         form_data,
-        gr.update(choices=["Row 1"], value="Row 1"),
+        _row_selector_update(["Row 1"], "Row 1", entry_mode=entry_mode, active=True),
         status_update,
         gr.update(visible=True),
-        *row_updates,
-        *field_updates,
+        *_interleaved_row_field_updates(row_updates, field_updates),
     )
 
 
@@ -394,12 +616,12 @@ def apply_pasted_form_data(
     row_selector_value: str | None,
 ) -> tuple:
     """Parse tab-separated paste text and fill form rows using paste YAML index rules."""
-    headers = get_form_field_headers(template.id) if template else []
+    headers = get_form_field_headers(template) if template else []
     if not template:
         gr.Warning("请先选择模板")
         return form_data, gr.update(), gr.update(interactive=True), *_NO_CHANGE_FIELD_UPDATES
     if not headers:
-        gr.Warning("未找到字段配置")
+        gr.Warning("未找到模板输入区域或表头")
         return form_data, gr.update(), gr.update(interactive=True), *_NO_CHANGE_FIELD_UPDATES
     if not _should_parse_paste(paste_text):
         return form_data, gr.update(), gr.update(interactive=True), *_NO_CHANGE_FIELD_UPDATES
@@ -452,7 +674,7 @@ def sync_form_fields_to_row(
     """Show the selected form row in field textboxes."""
     if not template:
         return _empty_field_updates()
-    headers = get_form_field_headers(template.id)
+    headers = get_form_field_headers(template)
     if not headers:
         return _empty_field_updates()
     if not form_data:
@@ -554,14 +776,119 @@ def _find_id_field_key(template_id: str) -> str | None:
     paste_config = load_paste_parse_config(template_id)
     if not paste_config:
         return None
-    
-    for field_key, field_config in paste_config.to_dict().items():
-        if isinstance(field_config, list):
-            for rule in field_config:
-                if isinstance(rule, dict) and rule.get('ID'):
-                    return field_key
-    
-    return None
+    return id_target_field_from_config(paste_config)
+
+
+def _id_field_header_index(template_id: str, headers: list[str]) -> int | None:
+    """Return the form field index for the paste-config ID field, if present."""
+    id_field = _find_id_field_key(template_id)
+    if not id_field:
+        return None
+    try:
+        return headers.index(id_field)
+    except ValueError:
+        return None
+
+
+def _id_lookup_no_change(
+    form_data: list[dict[str, str]],
+    template_id: str | None,
+    headers: list[str],
+) -> tuple:
+    """Keep form state unchanged and re-enable the ID field after a lookup attempt."""
+    updates = list(_NO_CHANGE_FIELD_UPDATES)
+    if template_id:
+        id_idx = _id_field_header_index(template_id, headers)
+        if id_idx is not None:
+            updates[id_idx] = gr.update(interactive=True)
+    return (form_data, *updates)
+
+
+def _begin_id_lookup_gate(
+    field_index: int,
+    field_value: str,
+    template: TemplateConfig | None,
+    entry_mode: str,
+) -> gr.update:
+    """Disable the ID field while fetching sheet data; no-op for other fields."""
+    if entry_mode != ENTRY_MODE_ID_AUTO or not template:
+        return gr.update()
+    headers = get_form_field_headers(template)
+    id_idx = _id_field_header_index(template.id, headers)
+    if id_idx is None or field_index != id_idx:
+        return gr.update()
+    if not str(field_value or "").strip():
+        return gr.update()
+    return gr.update(interactive=False)
+
+
+def handle_id_field_lookup(
+    field_index: int,
+    field_value: str,
+    template: TemplateConfig | None,
+    credentials: Any,
+    form_data: list[dict[str, str]],
+    row_selector_value: str | None,
+    entry_mode: str,
+) -> tuple:
+    """Look up a sheet row by ID and populate the current form row (ID Auto mode)."""
+    headers = get_form_field_headers(template) if template else []
+    template_id = _get_template_id(template)
+
+    def no_change() -> tuple:
+        return _id_lookup_no_change(form_data, template_id, headers)
+
+    if entry_mode != ENTRY_MODE_ID_AUTO or not template or not template_id:
+        return no_change()
+    id_idx = _id_field_header_index(template_id, headers)
+    if id_idx is None or field_index != id_idx:
+        return no_change()
+    id_value = str(field_value or "").strip()
+    if not id_value:
+        return no_change()
+    if not credentials:
+        gr.Warning("请先连接 Google 账号")
+        return no_change()
+    from app.services.data_source import load_template_data_source
+
+    data_source = load_template_data_source(template_id)
+    if not data_source:
+        gr.Warning("模板未配置数据源")
+        return no_change()
+    paste_config = load_paste_parse_config(template_id)
+    if not paste_config:
+        gr.Warning("模板粘贴配置加载失败")
+        return no_change()
+    try:
+        sheet_df = _load_template_sheet_df(credentials, data_source)
+        sheet_row = lookup_row_by_id(sheet_df, data_source.id_column, id_value)
+        if not sheet_row:
+            gr.Warning(f"未找到 ID: {id_value}")
+            return no_change()
+        matched = map_sheet_row_from_paste_config(sheet_row, paste_config)
+        id_field_key = id_target_field_from_config(paste_config)
+        if id_field_key:
+            matched[id_field_key] = id_value
+        if not matched:
+            gr.Warning("未能匹配任何字段")
+            return no_change()
+        if not form_data:
+            form_data = [{header: "" for header in headers}]
+        target_idx = _resolve_row_index(row_selector_value, len(form_data))
+        while len(form_data) <= target_idx:
+            form_data.append({header: "" for header in headers})
+        existing_row = form_data[target_idx] if target_idx < len(form_data) else {}
+        form_data[target_idx] = _merge_mapped_into_row(headers, existing_row, matched)
+        field_updates = _field_updates_for_row(headers, form_data[target_idx])
+        gr.Info(f"已自动填充 ID {id_value} 的数据")
+        return (form_data, *field_updates)
+    except GoogleSheetsError as exc:
+        gr.Warning(str(exc))
+        return no_change()
+    except Exception as exc:
+        logger.error(f"ID lookup failed: {exc}")
+        gr.Warning(f"查询失败：{exc}")
+        return no_change()
 
 
 def build_form_tab(
@@ -579,39 +906,45 @@ def build_form_tab(
     components = {}
     import_view_state = gr.State("unprocessed")
     components["import_view_state"] = import_view_state
+    entry_mode_state = gr.State(ENTRY_MODE_ID_AUTO)
+    components["entry_mode_state"] = entry_mode_state
     
     with gr.Column():
-        # Sheet selector
-        sheet_selector = gr.Dropdown(
-            label="选择工作表",
-            choices=[],
-            value=None,
-            interactive=True
+        gr.Markdown("## 表单数据")
+        entry_mode = gr.Radio(
+            choices=[ENTRY_MODE_ID_AUTO, ENTRY_MODE_MANUAL],
+            value=ENTRY_MODE_ID_AUTO,
+            label="录入方式",
+            interactive=True,
         )
-        components["sheet_selector"] = sheet_selector
-        
-        # Form container
-        with gr.Column(visible=False) as form_container:
-            gr.Markdown("### 表单数据")
-            
-            # Row selector
+        components["entry_mode"] = entry_mode
+        with gr.Row():
+            sheet_selector = gr.Dropdown(
+                label="选择工作表",
+                choices=[],
+                value=None,
+                interactive=True,
+            )
+            components["sheet_selector"] = sheet_selector
             row_selector = gr.Dropdown(
                 label="选择行",
                 choices=[],
-                value=None
+                value=None,
+                visible=True,
             )
             components["row_selector"] = row_selector
-            
-            paste_input = gr.Textbox(
-                label="粘贴数据",
-                placeholder="粘贴 Tab 分隔的一行（可从 Excel 复制）；填入「选择行」当前行，未选则第 1 行",
-                lines=2,
-                max_lines=6,
-                visible=False,
-                interactive=True,
-            )
-            components["paste_input"] = paste_input
-
+        paste_input = gr.Textbox(
+            label="粘贴数据",
+            placeholder="粘贴 Tab 分隔的一行（可从 Excel 复制）；将按 YAML 配置解析并填入表单",
+            lines=3,
+            max_lines=8,
+            visible=False,
+            interactive=True,
+        )
+        components["paste_input"] = paste_input
+        
+        # Field grid (field slots toggle via refresh; container stays mounted)
+        with gr.Column(visible=True) as form_container:
             form_field_boxes: list[gr.Textbox] = []
             field_rows: list[gr.Row] = []
             # Row/column shells stay visible; only textbox slots toggle via refresh updates.
@@ -640,9 +973,11 @@ def build_form_tab(
         with gr.Row():
             export_btn = gr.Button("导出 Excel", variant="primary")
             print_btn = gr.Button("打印预览")
+        export_download = gr.File(label="导出文件", visible=False, interactive=False)
         
         components["export_btn"] = export_btn
         components["print_btn"] = print_btn
+        components["export_download"] = export_download
         
         # Bulk import section (always visible; no gr.Group — avoids Gradio panel background)
         gr.Markdown("## 批量导入")
@@ -715,16 +1050,43 @@ def build_form_tab(
         row_selector,
         paste_input,
         fields_container,
-        *field_rows,
-        *form_field_boxes,
+        *_form_field_output_components(field_rows, form_field_boxes),
     ]
 
     sheet_selector.change(
         fn=refresh_data_entry_form,
-        inputs=[current_template, sheet_selector, form_data_state],
+        inputs=[current_template, sheet_selector, form_data_state, entry_mode_state],
         outputs=form_refresh_outputs,
         **HIDE_PROGRESS,
     )
+
+    entry_mode.change(
+        fn=on_entry_mode_change,
+        inputs=[entry_mode, current_template],
+        outputs=[entry_mode_state, row_selector, paste_input],
+        **HIDE_PROGRESS,
+    )
+
+    id_lookup_outputs = [form_data_state, *form_field_boxes]
+    for index, field_box in enumerate(form_field_boxes):
+        field_box.blur(
+            fn=partial(_begin_id_lookup_gate, index),
+            inputs=[field_box, current_template, entry_mode_state],
+            outputs=[field_box],
+            **HIDE_PROGRESS,
+        ).then(
+            fn=partial(handle_id_field_lookup, index),
+            inputs=[
+                field_box,
+                current_template,
+                credentials_state,
+                form_data_state,
+                row_selector,
+                entry_mode_state,
+            ],
+            outputs=id_lookup_outputs,
+            **HIDE_PROGRESS,
+        )
 
     paste_apply_outputs = [form_data_state, row_selector, paste_input, *form_field_boxes]
 
@@ -825,10 +1187,30 @@ def build_form_tab(
         outputs=[import_stats]
     )
     
-    # Export button (no File output until export is implemented)
+    # Export filled workbook to exports/ and trigger browser download
     export_btn.click(
         fn=handle_export,
-        inputs=[current_template, form_data_state],
+        inputs=[
+            current_template,
+            form_data_state,
+            sheet_selector,
+            row_selector,
+            *form_field_boxes,
+        ],
+        outputs=[export_download],
+        **HIDE_PROGRESS,
+    )
+
+    print_btn.click(
+        fn=handle_print_preview,
+        inputs=[
+            current_template,
+            form_data_state,
+            sheet_selector,
+            row_selector,
+            *form_field_boxes,
+        ],
+        **HIDE_PROGRESS,
     )
     
     components["form_refresh_outputs"] = form_refresh_outputs
@@ -1353,20 +1735,77 @@ def handle_clear_history(template: TemplateConfig | None) -> str:
         return update_import_stats(template)
 
 
-def handle_export(
+def handle_print_preview(
     template: TemplateConfig | None,
-    form_data: list[dict[str, str]]
+    form_data: list[dict[str, str]],
+    sheet_name: str | None,
+    row_selector_value: str | None,
+    *field_values: str,
 ) -> None:
-    """Export form data to Excel (not yet implemented)."""
+    """Build a filled workbook and open the Windows print-preview dialog."""
     if not template:
         gr.Warning("请先选择模板")
         return None
-    
-    try:
-        # TODO: Implement Excel export using excel_parser
-        gr.Info("导出功能开发中...")
+    if not sheet_name:
+        gr.Warning("请先选择工作表")
         return None
-        
+    try:
+        merged_rows = _merge_field_boxes_into_form_data(
+            template,
+            sheet_name,
+            form_data,
+            row_selector_value,
+            field_values,
+        )
+        if not merged_rows:
+            gr.Warning("没有可打印的数据")
+            return None
+        xlsx_bytes = build_export_workbook_bytes(template, sheet_name, merged_rows)
+        filename = build_export_filename(Path(template.file_path), merged_rows)
+        export_path = persist_export_file(template.id, xlsx_bytes, filename)
+        area = primary_print_area(export_path)
+        if not area:
+            gr.Warning("模板未定义打印区域")
+            return None
+        show_print_dialog(export_path, area.sheet, area.range)
+        gr.Info("已打开打印预览")
+        return None
+    except Exception as e:
+        logger.error(f"Print preview failed: {e}")
+        gr.Warning(f"打印预览失败：{str(e)}")
+        return None
+
+
+def handle_export(
+    template: TemplateConfig | None,
+    form_data: list[dict[str, str]],
+    sheet_name: str | None,
+    row_selector_value: str | None,
+    *field_values: str,
+) -> str | None:
+    """Export form data to a filled Excel copy and offer it for download."""
+    if not template:
+        gr.Warning("请先选择模板")
+        return None
+    if not sheet_name:
+        gr.Warning("请先选择工作表")
+        return None
+    try:
+        merged_rows = _merge_field_boxes_into_form_data(
+            template,
+            sheet_name,
+            form_data,
+            row_selector_value,
+            field_values,
+        )
+        if not merged_rows:
+            gr.Warning("没有可导出的数据")
+            return None
+        xlsx_bytes = build_export_workbook_bytes(template, sheet_name, merged_rows)
+        filename = build_export_filename(Path(template.file_path), merged_rows)
+        export_path = persist_export_file(template.id, xlsx_bytes, filename)
+        gr.Info(f"已导出：{filename}")
+        return str(export_path)
     except Exception as e:
         logger.error(f"Export failed: {e}")
         gr.Warning(f"导出失败：{str(e)}")

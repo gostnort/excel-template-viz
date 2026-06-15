@@ -581,6 +581,7 @@ def prepare_batch_input(
     source_columns: list[str],
     sample_rows: list[dict[str, str]],
     min_rows: int = 5,
+    column_indices: dict[str, int] | None = None,
 ) -> list[SourceColumnData]:
     """Prepare batch input payload with at least min_rows sample values per column."""
     if len(sample_rows) < min_rows:
@@ -589,7 +590,8 @@ def prepare_batch_input(
     rows = sample_rows[:min_rows]
     for idx, header in enumerate(source_columns):
         data = [str(row.get(header, "") or "") for row in rows]
-        result.append({"index": idx, "header": header, "data": data})
+        col_idx = column_indices[header] if column_indices and header in column_indices else idx
+        result.append({"index": col_idx, "header": header, "data": data})
     return result
 
 
@@ -757,9 +759,11 @@ class Gemma4FieldMatcher:
         mappings_list: list[Any],
         source_columns: list[str],
         expected_fields: list[str],
+        header_to_index: dict[str, int] | None = None,
     ) -> dict[str, FieldMappingResult]:
         """Validate mapping objects and fill defaults for missing fields."""
         header_by_norm = {h.strip().lower(): h for h in source_columns}
+        index_by_header = header_to_index or {h: source_columns.index(h) for h in source_columns}
         result: dict[str, FieldMappingResult] = {}
         for item in mappings_list:
             if not isinstance(item, dict):
@@ -781,10 +785,14 @@ class Gemma4FieldMatcher:
                     "confidence_reason": f"{reason} (invalid source column: {filed_str})",
                 }
                 continue
-            idx = source_columns.index(canonical)
+            idx = index_by_header.get(canonical, -1)
             index_raw = item.get("index", -1)
-            if isinstance(index_raw, int) and 0 <= index_raw < len(source_columns):
-                if source_columns[index_raw] == canonical:
+            if isinstance(index_raw, int) and index_raw >= 0:
+                index_header = next(
+                    (header for header, col_idx in index_by_header.items() if col_idx == index_raw),
+                    None,
+                )
+                if index_header == canonical:
                     idx = index_raw
             result[field] = {"filed": canonical, "index": idx, "confidence_reason": reason}
         for field in expected_fields:
@@ -800,6 +808,7 @@ class Gemma4FieldMatcher:
         response_text: str,
         source_columns: list[str],
         expected_fields: list[str],
+        header_to_index: dict[str, int] | None = None,
     ) -> dict[str, FieldMappingResult]:
         """Parse batch JSON response into validated field mapping dictionary."""
         # Extract mappings JSON and validate each field entry
@@ -823,7 +832,12 @@ class Gemma4FieldMatcher:
             salvaged = self._salvage_mapping_objects(json_text)
             if salvaged:
                 logger.info("Salvaged %d mapping objects from truncated JSON", len(salvaged))
-                return self._parse_mappings_list(salvaged, source_columns, expected_fields)
+                return self._parse_mappings_list(
+                    salvaged,
+                    source_columns,
+                    expected_fields,
+                    header_to_index=header_to_index,
+                )
             return {
                 field: {
                     "filed": "?",
@@ -833,7 +847,12 @@ class Gemma4FieldMatcher:
                 for field in expected_fields
             }
         mappings_list = parsed.get("mappings", []) if isinstance(parsed, dict) else []
-        return self._parse_mappings_list(mappings_list, source_columns, expected_fields)
+        return self._parse_mappings_list(
+            mappings_list,
+            source_columns,
+            expected_fields,
+            header_to_index=header_to_index,
+        )
 
 
     def batch_match_all_fields(
@@ -851,7 +870,13 @@ class Gemma4FieldMatcher:
         max_tokens = batch_mapping_max_tokens(len(yaml_field_names))
         response = self._generate(prompt_text, max_new_tokens=max_tokens, temperature=0.0)
         source_columns = [col["header"] for col in source_columns_data]
-        mappings = self._parse_batch_mapping_result(response, source_columns, yaml_field_names)
+        header_to_index = {col["header"]: int(col["index"]) for col in source_columns_data}
+        mappings = self._parse_batch_mapping_result(
+            response,
+            source_columns,
+            yaml_field_names,
+            header_to_index=header_to_index,
+        )
         mappings = propagate_date_component_mappings(mappings, yaml_field_names)
         return mappings, prompt_text, response
 

@@ -186,6 +186,7 @@ def test_config_save_to_yaml_with_sections():
     yaml_output = config_to_yaml(config_dict)
     
     assert "sections:" in yaml_output, "YAML should contain sections"
+    assert any(line == "sections:" for line in yaml_output.splitlines()), "sections must be top-level"
     assert "input_area:" in yaml_output, "YAML should contain input_area"
     assert "move_to:" in yaml_output, "YAML should contain move_to"
     assert "offset:" in yaml_output, "YAML should contain offset"
@@ -194,6 +195,51 @@ def test_config_save_to_yaml_with_sections():
     print("[PASS] Sections are correctly saved to YAML")
     print("\nYAML Output Preview:")
     print(yaml_output[:200] + "...")
+    
+
+
+def test_sections_top_level_after_order():
+    """Sections nested under order must hoist to a top-level key on save."""
+    print("\n=== Test 5b: Sections Top-Level After Order ===")
+
+    from app.services.paste_parse_config import config_from_dict, config_to_yaml
+
+    nested = {
+        "determiner": "tab",
+        "fields_per_row": 7,
+        "worksheet": "List",
+        "order": [
+            {
+                "ID": False,
+                "filed": "order",
+                "index": 0,
+                "regex": "None",
+                "sections": [
+                    {"input_area": "A2:L2", "move_to": "down", "offset": 1},
+                ],
+            },
+        ],
+        "YY": [{"filed": "?", "index": -1, "regex": "None", "ID": False}],
+    }
+    yaml_output = config_to_yaml(nested)
+    lines = yaml_output.splitlines()
+    order_idx = next(i for i, line in enumerate(lines) if line == "order:")
+    sections_idx = next(i for i, line in enumerate(lines) if line == "sections:")
+    assert sections_idx > order_idx, "sections should appear after order block"
+    assert not any(line.lstrip().startswith("sections:") and line.startswith("  ") for line in lines), (
+        "sections must not be indented under order"
+    )
+
+    loaded = config_from_dict(__import__("yaml").safe_load(yaml_output))
+    assert loaded is not None
+    assert loaded.sections and loaded.sections[0]["input_area"] == "A2:L2"
+    assert "sections" not in (loaded.order[0] if loaded.order else {})
+
+    yaml_omit = config_to_yaml(nested, omit_unmapped_fields=True)
+    assert "sections:" in yaml_omit
+    assert "YY:" not in yaml_omit
+
+    print("[PASS] Nested sections hoist to top-level and round-trip correctly")
     
 
 
@@ -209,48 +255,55 @@ def test_form_field_loading_helpers():
     from app.services.registry import TemplateConfig
     from openpyxl import Workbook
 
-    headers = get_form_field_headers("Ginger_Lots")
-    assert headers, "Ginger_Lots paste config should expose field headers"
-    assert headers[0] == "YY", "first mapped template field should lead headers"
-    assert "P.O. No." in headers, "Expected template field in headers"
-    assert len(headers) == 11, "Ginger_Lots should expose 11 template columns (order pseudo skipped)"
-    print("[PASS] get_form_field_headers() loads configured fields")
+    ginger_headers = [
+        "order", "YY", "MM", "DD", "P.O. No.", "Container No.",
+        "Container Seal No.", "Lot No.", "Receiving Date",
+        "Product Description", "Supplier", "Truck Line",
+    ]
+    temp_path = Path("tests/_tmp_form_headers.xlsx")
+    temp_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "List"
+    for col_idx, header in enumerate(ginger_headers, start=1):
+        sheet.cell(1, col_idx, header)
+    sheet["A2"] = "1"
+    sheet["B2"] = "24"
+    workbook.save(temp_path)
+    workbook.close()
 
     template = TemplateConfig(
         id="Ginger_Lots",
         display_name="Ginger Lots",
         description="",
-        file_path=Path("templates/Ginger_Lots.xlsx"),
+        file_path=temp_path,
         sheet_name="",
         header_row=0,
         data_start_row=1,
-        config_path=Path("templates/Ginger_Lots.config.json"),
+        config_path=Path("templates/Ginger_Lots/Ginger_Lots.config.json"),
     )
+
+    headers = get_form_field_headers(template, "List")
+    assert headers, "Template input area should expose field headers"
+    assert headers[0] == "order", "column A header should be order"
+    assert headers[1] == "YY", "column B header should be YY"
+    assert "P.O. No." in headers, "Expected template field in headers"
+    assert len(headers) == 12, "Ginger_Lots input area should expose 12 columns"
+    print("[PASS] get_form_field_headers() loads template column headers")
+
     resolved = resolve_default_sheet_name(template, ["Summary", "List", "Archive"])
     assert resolved == "List", "Paste config worksheet should be preferred"
     print("[PASS] resolve_default_sheet_name() prefers paste config worksheet")
 
-    temp_path = Path("tests/_tmp_form_read_area.xlsx")
-    temp_path.parent.mkdir(parents=True, exist_ok=True)
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "List"
-    sheet["A2"] = "24"
-    sheet["B2"] = "06"
-    sheet["C2"] = "13"
-    sheet["D2"] = "PO-001"
-    workbook.save(temp_path)
-    workbook.close()
-
     values = read_area_form_values(
         temp_path,
         "List",
-        "A2:D2",
-        ["YY", "MM", "DD", "P.O. No."],
+        "A2:L2",
+        headers,
     )
 
+    assert values["order"] == "1"
     assert values["YY"] == "24"
-    assert values["P.O. No."] == "PO-001"
     try:
         temp_path.unlink(missing_ok=True)
     except OSError:
@@ -264,10 +317,13 @@ def test_refresh_data_entry_form_uses_configured_area():
     print("\n=== Test 6b: Refresh Data Entry Form ===")
 
     from app.components.gradio_template_form import (
+        ENTRY_MODE_ID_AUTO,
+        ENTRY_MODE_MANUAL,
         FORM_ROW_COUNT,
         MAX_FORM_FIELDS,
         form_refresh_output_count,
         refresh_data_entry_form,
+        split_interleaved_field_refresh_updates,
     )
     from app.services.registry import TemplateConfig
     from openpyxl import Workbook
@@ -277,10 +333,22 @@ def test_refresh_data_entry_form_uses_configured_area():
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "List"
-    sheet["A2"] = "24"
-    sheet["B2"] = "06"
-    sheet["C2"] = "13"
-    sheet["D2"] = "PO-001"
+    sheet["A1"] = "order"
+    sheet["B1"] = "YY"
+    sheet["C1"] = "MM"
+    sheet["D1"] = "DD"
+    sheet["E1"] = "P.O. No."
+    for col_idx, header in enumerate(
+        ["Container No.", "Container Seal No.", "Lot No.", "Receiving Date",
+         "Product Description", "Supplier", "Truck Line"],
+        start=6,
+    ):
+        sheet.cell(1, col_idx, header)
+    sheet["A2"] = "1"
+    sheet["B2"] = "24"
+    sheet["C2"] = "06"
+    sheet["D2"] = "13"
+    sheet["E2"] = "PO-001"
     workbook.save(temp_path)
     workbook.close()
 
@@ -295,30 +363,42 @@ def test_refresh_data_entry_form_uses_configured_area():
         config_path=Path("templates/Ginger_Lots.config.json"),
     )
 
-    result = refresh_data_entry_form(template, "List", [])
+    result = refresh_data_entry_form(template, "List", [], ENTRY_MODE_ID_AUTO)
     assert len(result) == form_refresh_output_count()
 
     form_container_update = result[0]
     assert form_container_update.get("visible") is True
 
+    row_selector_update = result[3]
+    assert row_selector_update.get("visible") is True
+
     status_update = result[4]
-    assert status_update.get("visible") is True
-    assert "11" in str(status_update.get("value", ""))
+    assert status_update.get("visible") is False
+    assert "12" in str(status_update.get("label", ""))
+
+    manual_result = refresh_data_entry_form(template, "List", [], ENTRY_MODE_MANUAL)
+    manual_paste = manual_result[4]
+    assert manual_paste.get("visible") is True
 
     fields_container_update = result[5]
     assert fields_container_update.get("visible") is True
 
-    row_updates = result[6:6 + FORM_ROW_COUNT]
+    row_updates, field_updates = split_interleaved_field_refresh_updates(result[6:])
     visible_rows = sum(1 for update in row_updates if update.get("visible") is True)
-    assert visible_rows == 2, "11 fields at 7/row should show 2 rows"
+    assert visible_rows == 2, "12 fields at 7/row should show 2 rows"
 
-    field_updates = result[6 + FORM_ROW_COUNT:]
     visible_fields = sum(1 for update in field_updates if update.get("visible") is True)
-    assert visible_fields == 11
+    assert visible_fields == 12
     assert len(field_updates) == MAX_FORM_FIELDS
+    for index, update in enumerate(field_updates):
+        if index >= 12:
+            assert update.get("visible") is False
+            assert update.get("value") == ""
+            assert update.get("label") == ""
 
     form_data = result[2]
     assert len(form_data) == 1
+    assert form_data[0].get("order") == "1"
     assert form_data[0].get("YY") == "24"
     assert form_data[0].get("MM") == "06"
     assert form_data[0].get("DD") == "13"
@@ -329,6 +409,84 @@ def test_refresh_data_entry_form_uses_configured_area():
     except OSError:
         pass
     print("[PASS] refresh_data_entry_form() loads fields from configured area")
+
+
+def test_id_lookup_preserves_unmapped_template_values():
+    """ID lookup should overlay sheet fields without clearing template Excel values."""
+    print("\n=== Test 6d: ID Lookup Preserves Template Values ===")
+
+    from app.components.gradio_template_form import (
+        ENTRY_MODE_ID_AUTO,
+        _merge_mapped_into_row,
+        get_form_field_headers,
+        handle_id_field_lookup,
+    )
+    from app.services.registry import load_templates
+
+    template = next(item for item in load_templates() if item.id == "Ginger_Lots")
+    headers = get_form_field_headers(template, "List")
+    existing = {
+        "Product Description": "FRESH  GINGER",
+        "Supplier": "Santao",
+        "Truck Line": "SL",
+        "YY": "26",
+    }
+    mapped = {
+        "P.O. No.": "PO-999",
+        "Container No.": "CNT-1",
+        "MM": "03",
+        "DD": "15",
+        "Receiving Date": "03/15",
+    }
+    merged = _merge_mapped_into_row(headers, existing, mapped)
+    assert merged["Product Description"] == "FRESH  GINGER"
+    assert merged["Supplier"] == "Santao"
+    assert merged["Truck Line"] == "SL"
+    assert merged["YY"] == "26"
+    assert merged["P.O. No."] == "PO-999"
+    assert merged["Container No."] == "CNT-1"
+    assert merged["MM"] == "03"
+
+    from unittest.mock import patch
+
+    form_data = [_merge_mapped_into_row(headers, {header: "" for header in headers}, existing)]
+    paste_config = __import__(
+        "app.services.paste_parse_config", fromlist=["load_paste_parse_config"]
+    ).load_paste_parse_config("Ginger_Lots")
+    id_idx = headers.index("P.O. No.")
+    with patch(
+        "app.components.gradio_template_form._load_template_sheet_df",
+        return_value=object(),
+    ), patch(
+        "app.components.gradio_template_form.lookup_row_by_id",
+        return_value={"PO": "PO-999", "Container#": "CNT-1", "recv. date": "03/15"},
+    ), patch(
+        "app.components.gradio_template_form.load_paste_parse_config",
+        return_value=paste_config,
+    ), patch(
+        "app.services.data_source.load_template_data_source",
+        return_value=type("DS", (), {"sheet_url": "u", "worksheet_name": "List", "id_column": "PO"})(),
+    ), patch(
+        "app.components.gradio_template_form.gr.Info",
+    ), patch(
+        "app.components.gradio_template_form.gr.Warning",
+    ):
+        result = handle_id_field_lookup(
+            id_idx,
+            "PO-999",
+            template,
+            object(),
+            form_data,
+            "Row 1",
+            ENTRY_MODE_ID_AUTO,
+        )
+
+    updated = result[0][0]
+    assert updated["Product Description"] == "FRESH  GINGER"
+    assert updated["Supplier"] == "Santao"
+    assert updated["P.O. No."] == "PO-999"
+
+    print("[PASS] ID lookup merges mapped fields and keeps template values")
 
 
 def test_refresh_output_count_stable_with_custom_fields_per_row():
@@ -343,6 +501,7 @@ def test_refresh_output_count_stable_with_custom_fields_per_row():
         MAX_FORM_FIELDS,
         form_refresh_output_count,
         refresh_data_entry_form,
+        split_interleaved_field_refresh_updates,
     )
     from app.services.paste_parse_config import paste_config_path
     from app.services.registry import TemplateConfig
@@ -396,8 +555,7 @@ def test_refresh_output_count_stable_with_custom_fields_per_row():
     elapsed = time.perf_counter() - t0
 
     assert len(result) == form_refresh_output_count()
-    row_updates = result[6:6 + FORM_ROW_COUNT]
-    field_updates = result[6 + FORM_ROW_COUNT:]
+    row_updates, field_updates = split_interleaved_field_refresh_updates(result[6:])
     assert len(row_updates) == FORM_ROW_COUNT
     assert len(field_updates) == MAX_FORM_FIELDS
     assert sum(1 for update in field_updates if update.get("visible") is True) == 2
@@ -464,12 +622,11 @@ def test_yaml_auto_generation_from_sections():
     assert loaded.sections and loaded.sections[0]["input_area"] == "A2:B2"
     assert "Name" in loaded.field_rules
 
-    yaml_text, load_status = handle_yaml_load(template)
+    yaml_text = handle_yaml_load(template)
     assert yaml_text.strip(), "YAML editor content should not be empty"
     assert "sections:" in yaml_text
     assert "A2:B2" in yaml_text
     assert "Name:" in yaml_text
-    assert "✓" in load_status
 
     config_path.unlink(missing_ok=True)
     template_path.unlink(missing_ok=True)
@@ -590,7 +747,8 @@ def test_unmapped_field_defaults():
         "order": [{"filed": "YY", "index": -1, "regex": "None", "ID": False}],
         "YY": [{"filed": "YY", "index": -1, "regex": "None", "ID": False}],
     })
-    assert yaml_roundtrip.count('filed: "?"') >= 2
+    assert yaml_roundtrip.count('filed: "?"') == 1
+    assert "order:" not in yaml_roundtrip
     assert "index: -1" in yaml_roundtrip
     assert 'filed: "YY"' not in yaml_roundtrip
 
@@ -659,18 +817,84 @@ def test_import_without_llm_matcher():
     print("[PASS] handle_import_selected() uses rule-based fallback without LLM")
 
 
-def test_resolve_field_header_skips_unmapped():
-    """filed='?' should not resolve to a form header."""
-    print("\n=== Test 9c: Resolve Field Header Skips Unmapped ===")
+def test_template_headers_without_paste_config():
+    """Form headers must come from the Excel template even without paste YAML."""
+    print("\n=== Test 9d: Template Headers Without Paste Config ===")
 
-    from app.components.gradio_template_form import _resolve_field_header_name
-    from app.services.paste_parse_config import PasteParseRule
+    from openpyxl import Workbook
 
-    field_rules = {"YY": [PasteParseRule(filed="?", index=-1)]}
-    assert _resolve_field_header_name("?", field_rules) is None
-    assert _resolve_field_header_name("YY", field_rules) == "YY"
+    from app.components.gradio_template_form import get_form_field_headers
+    from app.services.registry import TemplateConfig
 
-    print("[PASS] _resolve_field_header_name() skips filed='?'")
+    temp_path = Path("tests/_tmp_form_no_yaml.xlsx")
+    temp_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Data"
+    sheet["A1"] = "Name"
+    sheet["B1"] = "Value"
+    workbook.save(temp_path)
+    workbook.close()
+
+    template = TemplateConfig(
+        id="test_form_no_yaml",
+        display_name="No YAML",
+        description="",
+        file_path=temp_path,
+        sheet_name="",
+        header_row=0,
+        data_start_row=1,
+        config_path=Path("templates/test_form_no_yaml.config.json"),
+    )
+
+    headers = get_form_field_headers(template, "Data")
+    assert headers == ["Name", "Value"]
+
+    try:
+        temp_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+    print("[PASS] get_form_field_headers() works without paste config")
+
+
+def test_llm_test_filtered_column_indices():
+    """Filtered LLM test columns must keep full-sheet indices in prompt payload."""
+    print("\n=== Test 11: LLM Test Filtered Column Indices ===")
+
+    from app.components.gradio_config import _build_llm_test_source_data
+    from app.services.gemma4_field_matcher import prepare_batch_input
+
+    sheet_columns = [
+        "PO", "Group", "Supplier", "Com.Inv", "Container#", "BL#",
+        "x6", "x7", "x8", "x9", "x10", "x11", "recv. date", "Product",
+    ]
+    filtered_columns = ["PO", "Container#", "BL#", "recv. date"]
+    filtered_rows = [
+        {col: f"r{row}_{col}" for col in sheet_columns}
+        for row in range(5)
+    ]
+    column_indices = {col: idx for idx, col in enumerate(sheet_columns)}
+
+    source_data = _build_llm_test_source_data(sheet_columns, filtered_columns, filtered_rows)
+    index_by_header = {item["header"]: item["index"] for item in source_data}
+
+    assert index_by_header["PO"] == 0
+    assert index_by_header["Container#"] == 4
+    assert index_by_header["BL#"] == 5
+    assert index_by_header["recv. date"] == 12
+    assert len(source_data) == 4
+
+    batch_input = prepare_batch_input(
+        filtered_columns,
+        filtered_rows,
+        min_rows=5,
+        column_indices=column_indices,
+    )
+    batch_indices = {item["header"]: item["index"] for item in batch_input}
+    assert batch_indices == index_by_header
+
+    print("[PASS] filtered LLM test columns preserve full-sheet indices")
 
 
 def test_import_history_restore():
@@ -742,14 +966,17 @@ def run_all_tests():
         ("Data Source Config", test_data_source_config),
         ("ID Field Finder", test_id_field_finder),
         ("Sections Save to YAML", test_config_save_to_yaml_with_sections),
+        ("Sections Top-Level After Order", test_sections_top_level_after_order),
         ("Form Field Loading Helpers", test_form_field_loading_helpers),
         ("Refresh Data Entry Form", test_refresh_data_entry_form_uses_configured_area),
+        ("ID Lookup Preserves Template Values", test_id_lookup_preserves_unmapped_template_values),
         ("Refresh Output Alignment", test_refresh_output_count_stable_with_custom_fields_per_row),
         ("YAML Auto-Generation from Sections", test_yaml_auto_generation_from_sections),
         ("fields_per_row Config", test_fields_per_row_config),
         ("Unmapped Field Defaults", test_unmapped_field_defaults),
         ("Import Without LLM Matcher", test_import_without_llm_matcher),
-        ("Resolve Field Header Skips Unmapped", test_resolve_field_header_skips_unmapped),
+        ("Template Headers Without Paste Config", test_template_headers_without_paste_config),
+        ("LLM Test Filtered Column Indices", test_llm_test_filtered_column_indices),
         ("Import History Restore", test_import_history_restore),
     ]
     
