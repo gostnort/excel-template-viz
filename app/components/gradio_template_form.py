@@ -15,7 +15,13 @@ from app.services.registry import TemplateConfig
 from app.services.excel_parser import list_sheet_names, read_template_sheet, resolve_sheet_name
 from app.services.export_naming import build_export_filename
 from app.services.excel_print import persist_export_file, primary_print_area, show_print_dialog
-from app.services.section_detector import calculate_next_area
+from app.services.section_detector import (
+    DetectedArea,
+    SectionConfig,
+    calculate_next_area,
+    detect_multi_areas,
+    parse_area_range,
+)
 from app.services.paste_parse_config import (
     load_paste_parse_config,
     map_sheet_row_from_paste_config,
@@ -34,7 +40,7 @@ from app.services.google_sheets import (
 from app.services.gemma4_field_matcher import create_field_matcher
 from app.services.import_history import (
     load_import_history, mark_as_processed, mark_as_trash,
-    unmark_ids, get_import_stats, clear_history,
+    unmark_ids, get_import_stats, clear_history, save_import_history,
 )
 
 logger = logging.getLogger(__name__)
@@ -101,6 +107,103 @@ def _is_row_selected(row: list[Any]) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"true", "1", "yes"}
     return bool(value)
+
+
+def _empty_import_selection() -> dict[str, Any]:
+    return {"ids": [], "index": 0}
+
+
+def _selected_import_ids(preview_rows: list[list[Any]]) -> list[str]:
+    """Preserve preview-table order while collecting checked row IDs."""
+    ids: list[str] = []
+    seen: set[str] = set()
+    for row in preview_rows:
+        if not _is_row_selected(row) or len(row) < 2:
+            continue
+        id_val = str(row[1]).strip()
+        if not id_val or id_val in seen:
+            continue
+        ids.append(id_val)
+        seen.add(id_val)
+    return ids
+
+
+def _build_sheet_row_cache(
+    df: pl.DataFrame,
+    id_column: str,
+) -> dict[str, dict[str, str]]:
+    if df.height == 0 or id_column not in df.columns:
+        return {}
+    cache: dict[str, dict[str, str]] = {}
+    for record in df.iter_rows(named=True):
+        id_val = str(record.get(id_column, "")).strip()
+        if not id_val:
+            continue
+        cache[id_val] = {
+            str(key): "" if value is None else str(value)
+            for key, value in record.items()
+        }
+    return cache
+
+
+def _map_sheet_row_to_form_fields(
+    template_id: str,
+    headers: list[str],
+    sheet_row: dict[str, str],
+    base_row: dict[str, str],
+    id_value: str | None = None,
+) -> dict[str, str]:
+    paste_config = load_paste_parse_config(template_id)
+    if not paste_config:
+        return _row_values_for_headers(headers, base_row)
+    matched = map_sheet_row_from_paste_config(sheet_row, paste_config)
+    id_field = id_target_field_from_config(paste_config)
+    if id_field and id_field in headers and id_value:
+        matched[id_field] = id_value
+    return _merge_mapped_into_row(headers, base_row, matched)
+
+
+def _import_preview_sync_outputs(
+    template: TemplateConfig,
+    form_data: list[dict[str, str]],
+    selection_state: dict[str, Any],
+    sheet_cache: dict[str, dict[str, str]],
+    entry_mode: str,
+) -> tuple[Any, dict[str, Any], tuple]:
+    headers = get_form_field_headers(template)
+    if not headers:
+        return gr.update(), selection_state, tuple(_empty_field_updates())
+    ids = selection_state.get("ids", [])
+    if not ids:
+        return gr.update(), _empty_import_selection(), tuple(_empty_field_updates())
+    index = selection_state.get("index", 0)
+    index = max(0, min(index, len(ids) - 1))
+    selection_state = {"ids": ids, "index": index}
+    row_choices = _row_choices_for_form_data(len(ids))
+    selected_label = row_choices[index]
+    id_value = ids[index]
+    sheet_row = sheet_cache.get(id_value)
+    if not sheet_row:
+        mapped_row = {header: "" for header in headers}
+    else:
+        base_idx = 0
+        if form_data:
+            base_idx = min(base_idx, len(form_data) - 1)
+        base_row = form_data[base_idx] if form_data else {header: "" for header in headers}
+        mapped_row = _map_sheet_row_to_form_fields(
+            template.id,
+            headers,
+            sheet_row,
+            base_row,
+            id_value=id_value,
+        )
+    field_updates = tuple(_field_updates_for_row(headers, mapped_row))
+    row_selector_update = _row_selector_update(
+        row_choices,
+        selected_label,
+        entry_mode=entry_mode,
+    )
+    return row_selector_update, selection_state, field_updates
 
 
 def _format_last_import(last_import: Any) -> str:
@@ -217,7 +320,8 @@ def _resolve_input_area_range(
         if area_range:
             return area_range
     preferred_sheet = sheet_name or template.sheet_name or None
-    if paste_config and paste_config.worksheet:
+    # Respect an explicit sheet selection; only default via paste config when unset.
+    if not sheet_name and paste_config and paste_config.worksheet:
         preferred_sheet = paste_config.worksheet
     return default_input_area_for_template(
         Path(template.file_path),
@@ -236,7 +340,8 @@ def get_form_field_headers(
         return []
     preferred_sheet = sheet_name or template.sheet_name or None
     paste_config = load_paste_parse_config(template.id)
-    if paste_config and paste_config.worksheet:
+    # When no sheet is selected yet, fall back to the paste-config worksheet.
+    if not sheet_name and paste_config and paste_config.worksheet:
         preferred_sheet = paste_config.worksheet
     try:
         return read_input_area_headers(
@@ -416,14 +521,180 @@ def _build_row_updates(headers: list[str]) -> list[gr.update]:
     return updates
 
 
+def _first_section_config(template_id: str) -> SectionConfig | None:
+    """Build section config from the first paste YAML section entry."""
+    paste_config = load_paste_parse_config(template_id)
+    if not paste_config or not paste_config.sections:
+        return None
+    section_dict = paste_config.sections[0]
+    input_area = str(section_dict.get("input_area", "")).strip()
+    if not input_area:
+        return None
+    move_to = str(section_dict.get("move_to", "down")).strip().lower()
+    if move_to not in {"down", "up", "left", "right"}:
+        move_to = "down"
+    try:
+        offset = int(section_dict.get("offset", 1))
+    except (TypeError, ValueError):
+        offset = 1
+    if offset <= 0:
+        offset = 1
+    return SectionConfig(input_area=input_area, move_to=move_to, offset=offset)
+
+
+def _detect_form_areas(
+    template: TemplateConfig,
+    sheet_name: str,
+    base_area: str,
+) -> list[DetectedArea]:
+    """Scan the worksheet for repeated input areas using paste section rules."""
+    workbook_path = Path(template.file_path)
+    resolved_sheet = resolve_sheet_name(workbook_path, sheet_name)
+    section_config = _first_section_config(template.id)
+    if section_config:
+        try:
+            areas = detect_multi_areas(workbook_path, resolved_sheet, section_config)
+            if areas:
+                return areas
+        except Exception as exc:
+            logger.error(f"Area detection failed: {exc}")
+    coords = parse_area_range(base_area)
+    return [DetectedArea(index=1, area=base_area, coords=coords, has_data=True)]
+
+
+def _align_form_data_to_areas(
+    form_data: list[dict[str, str]],
+    headers: list[str],
+    area_count: int,
+) -> list[dict[str, str]]:
+    """Pad or trim in-memory form rows to match the detected area count."""
+    aligned = [dict(row) for row in form_data[:area_count]]
+    while len(aligned) < area_count:
+        aligned.append({header: "" for header in headers})
+    return aligned
+
+
+def _load_form_data_for_areas(
+    template: TemplateConfig,
+    sheet_name: str,
+    headers: list[str],
+    areas: list[DetectedArea],
+) -> list[dict[str, str]]:
+    """Read template cell values for each detected input area."""
+    workbook_path = Path(template.file_path)
+    rows: list[dict[str, str]] = []
+    for area in areas:
+        try:
+            row_values = read_area_form_values(
+                workbook_path,
+                sheet_name,
+                area.area,
+                headers,
+            )
+        except Exception as exc:
+            logger.error(f"Failed to read area {area.area}: {exc}")
+            row_values = {header: "" for header in headers}
+        rows.append(row_values)
+    return rows
+
+
+def build_row_brief(
+    row_values: dict[str, str],
+    static_values: dict[str, str],
+    headers: list[str],
+) -> str:
+    """Build dropdown brief: non-empty values that differ from template static cells."""
+    parts: list[str] = []
+    for header in headers:
+        value = str(row_values.get(header, "") or "").strip()
+        if not value:
+            continue
+        static = str(static_values.get(header, "") or "").strip()
+        if value == static:
+            continue
+        parts.append(value)
+    return " | ".join(parts)
+
+
+def format_row_choice_label(
+    row_index: int,
+    area_range: str | None,
+    brief: str,
+) -> str:
+    """Format a 区域选择 dropdown entry."""
+    if area_range and ":" in area_range:
+        prefix = area_range
+    else:
+        prefix = f"Row {row_index}"
+    if brief:
+        return f"{prefix} — {brief}"
+    return prefix
+
+
+def _row_choices_for_areas(
+    areas: list[DetectedArea],
+    form_rows: list[dict[str, str]],
+    static_values: dict[str, str],
+    headers: list[str],
+) -> list[str]:
+    choices: list[str] = []
+    for index, area in enumerate(areas):
+        row_values = form_rows[index] if index < len(form_rows) else {}
+        brief = build_row_brief(row_values, static_values, headers)
+        choices.append(format_row_choice_label(area.index, area.area, brief))
+    return choices
+
+
+def _load_static_template_row_values(
+    template: TemplateConfig,
+    sheet_name: str,
+    headers: list[str],
+    area_range: str,
+) -> dict[str, str]:
+    """Template defaults from the configured input area on disk."""
+    try:
+        return read_area_form_values(
+            Path(template.file_path),
+            sheet_name,
+            area_range,
+            headers,
+        )
+    except Exception as exc:
+        logger.error(f"Failed to read static template row: {exc}")
+        return {header: "" for header in headers}
+
+
+def _row_choices_for_form_data(
+    form_data_len: int,
+    *,
+    areas: list[DetectedArea] | None = None,
+    form_rows: list[dict[str, str]] | None = None,
+    static_values: dict[str, str] | None = None,
+    headers: list[str] | None = None,
+) -> list[str]:
+    if areas and form_rows is not None and static_values is not None and headers:
+        return _row_choices_for_areas(areas, form_rows, static_values, headers)
+    return [f"Row {index + 1}" for index in range(form_data_len)]
+
+
 def _resolve_row_index(row_selector_value: str | None, form_data_len: int) -> int:
     if form_data_len <= 0:
         return 0
-    if row_selector_value and row_selector_value.startswith("Row "):
+    if not row_selector_value:
+        return 0
+    if row_selector_value.startswith("Row "):
+        number_text = row_selector_value[4:].split(" —", 1)[0].strip()
         try:
-            return max(0, min(form_data_len - 1, int(row_selector_value[4:].strip()) - 1))
+            return max(0, min(form_data_len - 1, int(number_text) - 1))
         except ValueError:
             pass
+    if " — " in row_selector_value:
+        prefix = row_selector_value.split(" — ", 1)[0].strip()
+        if prefix.startswith("Row "):
+            try:
+                return max(0, min(form_data_len - 1, int(prefix[4:].strip()) - 1))
+            except ValueError:
+                pass
     return 0
 
 
@@ -480,7 +751,7 @@ def _paste_input_update(
         if manual:
             placeholder += "；将按 YAML 配置解析并填入表单"
         else:
-            placeholder += "；填入「选择行」当前行，未选则第 1 行"
+            placeholder += "；填入「区域选择」当前区域，未选则第 1 个"
     return gr.update(
         value="",
         visible=count > 0 and manual,
@@ -538,6 +809,580 @@ def _build_field_updates(
     return updates, row_updates, paste_update
 
 
+def _build_row_choices_for_template(
+    template: TemplateConfig,
+    sheet_name: str | None,
+    form_data: list[dict[str, str]],
+    detected_areas: list[DetectedArea] | None,
+) -> list[str]:
+    headers = get_form_field_headers(template, sheet_name)
+    if not headers:
+        return _row_choices_for_form_data(len(form_data))
+    area_range = _resolve_input_area_range(template, sheet_name) or ""
+    if not area_range and detected_areas:
+        area_range = detected_areas[0].area
+    static_values = (
+        _load_static_template_row_values(template, sheet_name or "", headers, area_range)
+        if area_range
+        else {header: "" for header in headers}
+    )
+    return _row_choices_for_form_data(
+        len(form_data),
+        areas=detected_areas,
+        form_rows=form_data,
+        static_values=static_values,
+        headers=headers,
+    )
+
+
+def _empty_form_session() -> dict[str, Any]:
+    return {
+        "dirty": False,
+        "snapshot": None,
+        "pending": None,
+        "dialog_step": "",
+    }
+
+
+def _mark_form_dirty(session: dict[str, Any]) -> dict[str, Any]:
+    if session.get("dirty"):
+        return session
+    updated = dict(session)
+    updated["dirty"] = True
+    return updated
+
+
+def _capture_form_snapshot(
+    template_id: str | None,
+    form_data: list[dict[str, str]],
+    import_selection: dict[str, Any],
+    import_preview_active: bool,
+    sheet_cache: dict[str, dict[str, str]],
+    import_view: str,
+    import_preview_rows: list[list[Any]] | None,
+) -> dict[str, Any]:
+    history_payload = None
+    if template_id:
+        history_payload = load_import_history(template_id).to_dict()
+    preview_copy = None
+    if import_preview_rows:
+        preview_copy = [list(row) for row in import_preview_rows]
+    return {
+        "form_data": [dict(row) for row in form_data],
+        "history": history_payload,
+        "import_selection": dict(import_selection or _empty_import_selection()),
+        "import_preview_active": bool(import_preview_active),
+        "sheet_cache": dict(sheet_cache or {}),
+        "import_view": import_view or "unprocessed",
+        "import_preview_rows": preview_copy,
+    }
+
+
+def _restore_form_snapshot(template_id: str | None, snapshot: dict[str, Any] | None) -> None:
+    if not template_id or not snapshot:
+        return
+    history_payload = snapshot.get("history")
+    if history_payload:
+        from app.services.import_history import ImportHistoryConfig
+
+        save_import_history(ImportHistoryConfig.from_dict(history_payload))
+
+
+def _session_after_clean_refresh(
+    session: dict[str, Any],
+    snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "dirty": False,
+        "snapshot": snapshot,
+        "pending": None,
+        "dialog_step": "",
+    }
+
+
+def _begin_unsaved_switch_dialog(session: dict[str, Any], pending: dict[str, Any]) -> dict[str, Any]:
+    updated = dict(session)
+    updated["pending"] = pending
+    updated["dialog_step"] = "switch"
+    return updated
+
+
+def _begin_unsaved_save_dialog(session: dict[str, Any]) -> dict[str, Any]:
+    updated = dict(session)
+    updated["dialog_step"] = "save"
+    return updated
+
+
+def _clear_unsaved_dialog(session: dict[str, Any]) -> dict[str, Any]:
+    updated = dict(session)
+    updated["pending"] = None
+    updated["dialog_step"] = ""
+    return updated
+
+
+def _revert_to_session_snapshot(
+    template: TemplateConfig | None,
+    session: dict[str, Any],
+) -> tuple[list[dict[str, str]], dict[str, Any], dict[str, dict[str, str]], bool, str, list[list[Any]] | None]:
+    snapshot = session.get("snapshot") or {}
+    template_id = _get_template_id(template)
+    _restore_form_snapshot(template_id, snapshot)
+    form_data = [dict(row) for row in snapshot.get("form_data", [])]
+    import_selection = dict(snapshot.get("import_selection") or _empty_import_selection())
+    sheet_cache = dict(snapshot.get("sheet_cache") or {})
+    import_preview_active = bool(snapshot.get("import_preview_active"))
+    import_view = str(snapshot.get("import_view") or "unprocessed")
+    import_preview_rows = snapshot.get("import_preview_rows")
+    preview_copy = [list(row) for row in import_preview_rows] if import_preview_rows else None
+    return form_data, import_selection, sheet_cache, import_preview_active, import_view, preview_copy
+
+
+def _unsaved_dialog_updates(step: str) -> tuple[gr.update, gr.update]:
+    return (
+        gr.update(visible=step == "switch"),
+        gr.update(visible=step == "save"),
+    )
+
+
+def _hold_form_refresh_outputs(
+    form_data: list[dict[str, str]],
+    detected_areas: list,
+) -> tuple:
+    """Keep the mounted form unchanged while an unsaved-change dialog is open."""
+    return (
+        gr.update(),
+        detected_areas,
+        form_data,
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        *_interleaved_row_field_updates(_empty_row_updates(), _empty_field_updates()),
+    )
+
+
+def try_sheet_select(
+    new_sheet: str | None,
+    committed_sheet: str | None,
+    template: TemplateConfig | None,
+    form_data: list[dict[str, str]],
+    detected_areas: list,
+    entry_mode: str,
+    session: dict[str, Any],
+    import_selection: dict[str, Any],
+    import_preview_active: bool,
+    sheet_cache: dict[str, dict[str, str]],
+    import_view: str,
+    import_preview_rows: Any,
+) -> tuple:
+    """Intercept worksheet picks when the form session has unsaved edits."""
+    preview_rows = _normalize_preview_rows(import_preview_rows)
+    if (
+        session.get("dirty")
+        and new_sheet
+        and committed_sheet
+        and new_sheet != committed_sheet
+    ):
+        gr.Warning("当前有未保存的更改，切换工作表前请确认")
+        pending = {"type": "sheet", "target": new_sheet}
+        switch_update, save_update = _unsaved_dialog_updates("switch")
+        return (
+            committed_sheet,
+            _begin_unsaved_switch_dialog(session, pending),
+            switch_update,
+            save_update,
+            *_hold_form_refresh_outputs(form_data, detected_areas),
+        )
+    refresh = refresh_data_entry_form(
+        template, new_sheet, form_data, entry_mode, preserve_form_data=True,
+    )
+    template_id = _get_template_id(template)
+    snapshot = _capture_form_snapshot(
+        template_id,
+        refresh[2],
+        import_selection,
+        import_preview_active,
+        sheet_cache,
+        import_view,
+        preview_rows,
+    )
+    switch_update, save_update = _unsaved_dialog_updates("")
+    return (
+        new_sheet,
+        _session_after_clean_refresh(session, snapshot),
+        switch_update,
+        save_update,
+        *refresh,
+    )
+
+
+def try_template_select(
+    template_name: str | None,
+    current_template: TemplateConfig | None,
+    committed_template_name: str | None,
+    form_data: list[dict[str, str]],
+    detected_areas: list,
+    entry_mode: str,
+    session: dict[str, Any],
+    committed_sheet: str | None,
+    import_selection: dict[str, Any],
+    import_preview_active: bool,
+    sheet_cache: dict[str, dict[str, str]],
+    import_view: str,
+    import_preview_rows: Any,
+) -> tuple:
+    """Intercept template picks when the form session has unsaved edits."""
+    from app.gradio_main import on_template_change
+
+    preview_rows = _normalize_preview_rows(import_preview_rows)
+    if (
+        session.get("dirty")
+        and template_name
+        and committed_template_name
+        and template_name != committed_template_name
+    ):
+        gr.Warning("当前有未保存的更改，切换模板前请确认")
+        pending = {"type": "template", "target": template_name}
+        switch_update, save_update = _unsaved_dialog_updates("switch")
+        return (
+            committed_template_name,
+            committed_template_name,
+            current_template,
+            gr.update(),
+            committed_sheet,
+            _begin_unsaved_switch_dialog(session, pending),
+            switch_update,
+            save_update,
+            *_hold_form_refresh_outputs(form_data, detected_areas),
+        )
+    new_template, sheet_update, default_sheet = on_template_change(template_name, current_template)
+    refresh = refresh_data_entry_form(
+        new_template, default_sheet, form_data, entry_mode, preserve_form_data=True,
+    )
+    template_id = _get_template_id(new_template)
+    snapshot = _capture_form_snapshot(
+        template_id,
+        refresh[2],
+        import_selection,
+        import_preview_active,
+        sheet_cache,
+        import_view,
+        preview_rows,
+    )
+    switch_update, save_update = _unsaved_dialog_updates("")
+    return (
+        template_name,
+        template_name,
+        new_template,
+        sheet_update,
+        default_sheet,
+        _session_after_clean_refresh(session, snapshot),
+        switch_update,
+        save_update,
+        *refresh,
+    )
+
+
+def complete_pending_sheet_navigation(
+    template: TemplateConfig | None,
+    form_data: list[dict[str, str]],
+    entry_mode: str,
+    session: dict[str, Any],
+    import_selection: dict[str, Any],
+    import_preview_active: bool,
+    sheet_cache: dict[str, dict[str, str]],
+    import_view: str,
+    import_preview_rows: Any,
+    *,
+    clear_dirty: bool = False,
+) -> tuple:
+    """Switch to the deferred worksheet while keeping in-memory form data."""
+    pending = session.get("pending") or {}
+    target_sheet = pending.get("target")
+    preview_rows = _normalize_preview_rows(import_preview_rows)
+    refresh = refresh_data_entry_form(
+        template,
+        target_sheet,
+        form_data,
+        entry_mode,
+        preserve_form_data=True,
+    )
+    template_id = _get_template_id(template)
+    snapshot = _capture_form_snapshot(
+        template_id,
+        refresh[2],
+        import_selection,
+        import_preview_active,
+        sheet_cache,
+        import_view,
+        preview_rows,
+    )
+    switch_update, save_update = _unsaved_dialog_updates("")
+    if clear_dirty:
+        session_update = _session_after_clean_refresh(session, snapshot)
+    else:
+        session_update = _clear_unsaved_dialog(session)
+        session_update["snapshot"] = snapshot
+    return (
+        target_sheet,
+        session_update,
+        switch_update,
+        save_update,
+        *refresh,
+    )
+
+
+def complete_pending_template_navigation(
+    form_data: list[dict[str, str]],
+    entry_mode: str,
+    session: dict[str, Any],
+    import_selection: dict[str, Any],
+    import_preview_active: bool,
+    sheet_cache: dict[str, dict[str, str]],
+    import_view: str,
+    import_preview_rows: Any,
+    *,
+    clear_dirty: bool = False,
+) -> tuple:
+    """Switch to the deferred template while keeping in-memory form data."""
+    from app.gradio_main import on_template_change
+
+    pending = session.get("pending") or {}
+    template_name = pending.get("target")
+    preview_rows = _normalize_preview_rows(import_preview_rows)
+    new_template, sheet_update, default_sheet = on_template_change(template_name, None)
+    refresh = refresh_data_entry_form(
+        new_template,
+        default_sheet,
+        form_data,
+        entry_mode,
+        preserve_form_data=True,
+    )
+    template_id = _get_template_id(new_template)
+    snapshot = _capture_form_snapshot(
+        template_id,
+        refresh[2],
+        import_selection,
+        import_preview_active,
+        sheet_cache,
+        import_view,
+        preview_rows,
+    )
+    switch_update, save_update = _unsaved_dialog_updates("")
+    if clear_dirty:
+        session_update = _session_after_clean_refresh(session, snapshot)
+    else:
+        session_update = _clear_unsaved_dialog(session)
+        session_update["snapshot"] = snapshot
+    return (
+        template_name,
+        template_name,
+        new_template,
+        sheet_update,
+        default_sheet,
+        session_update,
+        switch_update,
+        save_update,
+        update_import_stats(new_template),
+        *refresh,
+    )
+
+
+def handle_unsaved_switch_no(
+    session: dict[str, Any],
+    template: TemplateConfig | None,
+    committed_sheet: str | None,
+    form_data: list[dict[str, str]],
+    detected_areas: list,
+) -> tuple:
+    """Cancel deferred navigation and keep all current form data."""
+    switch_update, save_update = _unsaved_dialog_updates("")
+    return (
+        committed_sheet,
+        _clear_unsaved_dialog(session),
+        switch_update,
+        save_update,
+        *_hold_form_refresh_outputs(form_data, detected_areas),
+    )
+
+
+def handle_unsaved_switch_no_with_template(
+    session: dict[str, Any],
+    template: TemplateConfig | None,
+    committed_template_name: str | None,
+    committed_sheet: str | None,
+    form_data: list[dict[str, str]],
+    detected_areas: list,
+) -> tuple:
+    """Cancel deferred navigation and keep all current form data."""
+    switch_update, save_update = _unsaved_dialog_updates("")
+    return (
+        gr.update(),
+        committed_template_name,
+        gr.update(),
+        gr.update(),
+        committed_sheet,
+        _clear_unsaved_dialog(session),
+        switch_update,
+        save_update,
+        update_import_stats(template),
+        *_hold_form_refresh_outputs(form_data, detected_areas),
+    )
+
+
+def handle_unsaved_save_with_template(
+    session: dict[str, Any],
+    template: TemplateConfig | None,
+    form_data: list[dict[str, str]],
+    committed_sheet: str | None,
+    row_selector_value: str | None,
+    entry_mode: str,
+    import_selection: dict[str, Any],
+    import_preview_active: bool,
+    sheet_cache: dict[str, dict[str, str]],
+    import_view: str,
+    import_preview_rows: Any,
+    *field_values: str,
+) -> tuple:
+    pending = session.get("pending") or {}
+    if pending.get("type") == "template":
+        return save_export_and_complete_pending_template(
+            template,
+            form_data,
+            committed_sheet,
+            row_selector_value,
+            entry_mode,
+            session,
+            import_selection,
+            import_preview_active,
+            sheet_cache,
+            import_view,
+            import_preview_rows,
+            *field_values,
+        )
+    sheet_result = save_export_and_complete_pending_sheet(
+        template,
+        form_data,
+        committed_sheet,
+        row_selector_value,
+        entry_mode,
+        session,
+        import_selection,
+        import_preview_active,
+        sheet_cache,
+        import_view,
+        import_preview_rows,
+        *field_values,
+    )
+    return (
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        *sheet_result[:4],
+        update_import_stats(template),
+        *sheet_result[4:],
+    )
+
+
+def save_export_and_complete_pending_sheet(
+    template: TemplateConfig | None,
+    form_data: list[dict[str, str]],
+    committed_sheet: str | None,
+    row_selector_value: str | None,
+    entry_mode: str,
+    session: dict[str, Any],
+    import_selection: dict[str, Any],
+    import_preview_active: bool,
+    sheet_cache: dict[str, dict[str, str]],
+    import_view: str,
+    import_preview_rows: Any,
+    *field_values: str,
+) -> tuple:
+    """Export current form data (same as 导出 Excel), then switch worksheet."""
+    merged = form_data
+    if template and committed_sheet:
+        merged = _merge_field_boxes_into_form_data(
+            template,
+            committed_sheet,
+            form_data,
+            row_selector_value,
+            field_values,
+        )
+        handle_export(
+            template,
+            merged,
+            committed_sheet,
+            row_selector_value,
+        )
+    return complete_pending_sheet_navigation(
+        template,
+        merged,
+        entry_mode,
+        session,
+        import_selection,
+        import_preview_active,
+        sheet_cache,
+        import_view,
+        import_preview_rows,
+        clear_dirty=True,
+    )
+
+
+def save_export_and_complete_pending_template(
+    template: TemplateConfig | None,
+    form_data: list[dict[str, str]],
+    committed_sheet: str | None,
+    row_selector_value: str | None,
+    entry_mode: str,
+    session: dict[str, Any],
+    import_selection: dict[str, Any],
+    import_preview_active: bool,
+    sheet_cache: dict[str, dict[str, str]],
+    import_view: str,
+    import_preview_rows: Any,
+    *field_values: str,
+) -> tuple:
+    """Export current form data (same as 导出 Excel), then switch template."""
+    merged = form_data
+    if template and committed_sheet:
+        merged = _merge_field_boxes_into_form_data(
+            template,
+            committed_sheet,
+            form_data,
+            row_selector_value,
+            field_values,
+        )
+        handle_export(
+            template,
+            merged,
+            committed_sheet,
+            row_selector_value,
+        )
+    return complete_pending_template_navigation(
+        merged,
+        entry_mode,
+        session,
+        import_selection,
+        import_preview_active,
+        sheet_cache,
+        import_view,
+        import_preview_rows,
+        clear_dirty=True,
+    )
+
+
+def stay_on_current_view(session: dict[str, Any]) -> tuple:
+    """Close unsaved dialogs and keep the current template/worksheet."""
+    switch_update, save_update = _unsaved_dialog_updates("")
+    return _clear_unsaved_dialog(session), switch_update, save_update
+
+
+def confirm_unsaved_switch_yes(session: dict[str, Any]) -> tuple:
+    """First-step confirm: offer save or return."""
+    switch_update, save_update = _unsaved_dialog_updates("save")
+    return _begin_unsaved_save_dialog(session), switch_update, save_update
+
+
 def _inactive_form_refresh(form_data: list[dict[str, str]]) -> tuple:
     field_updates = _empty_field_updates()
     row_updates = _empty_row_updates()
@@ -557,6 +1402,8 @@ def refresh_data_entry_form(
     sheet_name: str | None,
     form_data: list[dict[str, str]],
     entry_mode: str = ENTRY_MODE_ID_AUTO,
+    *,
+    preserve_form_data: bool = False,
 ) -> tuple:
     """
     Detect areas and populate dynamic form fields from paste/sections config.
@@ -575,22 +1422,30 @@ def refresh_data_entry_form(
         return _inactive_form_refresh(form_data)
 
     active_area_range = _resolve_input_area_range(template, sheet_name)
-    detected_areas = []
-
-    row_values: dict[str, str] = {header: "" for header in headers}
+    detected_areas: list[DetectedArea] = []
     if active_area_range:
-        try:
-            row_values = read_area_form_values(
-                Path(template.file_path),
-                sheet_name,
-                active_area_range,
-                headers,
-            )
-        except Exception as exc:
-            logger.error(f"Failed to read area values: {exc}")
-            gr.Warning(f"读取区域数据失败：{exc}")
-
-    form_data = [row_values]
+        detected_areas = _detect_form_areas(template, sheet_name, active_area_range)
+    if detected_areas:
+        if preserve_form_data and form_data:
+            form_data = _align_form_data_to_areas(form_data, headers, len(detected_areas))
+        else:
+            form_data = _load_form_data_for_areas(template, sheet_name, headers, detected_areas)
+    else:
+        form_data = [{header: "" for header in headers}]
+    static_area = active_area_range or (detected_areas[0].area if detected_areas else "")
+    static_values = (
+        _load_static_template_row_values(template, sheet_name, headers, static_area)
+        if static_area
+        else {header: "" for header in headers}
+    )
+    row_choices = _row_choices_for_form_data(
+        len(form_data),
+        areas=detected_areas or None,
+        form_rows=form_data,
+        static_values=static_values,
+        headers=headers,
+    )
+    row_values = form_data[0] if form_data else {header: "" for header in headers}
     field_updates, row_updates, status_update = _build_field_updates(
         headers, row_values, entry_mode
     )
@@ -598,7 +1453,12 @@ def refresh_data_entry_form(
         gr.update(visible=True),
         detected_areas,
         form_data,
-        _row_selector_update(["Row 1"], "Row 1", entry_mode=entry_mode, active=True),
+        _row_selector_update(
+            row_choices,
+            row_choices[0] if row_choices else None,
+            entry_mode=entry_mode,
+            active=True,
+        ),
         status_update,
         gr.update(visible=True),
         *_interleaved_row_field_updates(row_updates, field_updates),
@@ -614,29 +1474,32 @@ def apply_pasted_form_data(
     paste_text: str,
     form_data: list[dict[str, str]],
     row_selector_value: str | None,
+    detected_areas: list | None = None,
+    sheet_name: str | None = None,
+    session: dict[str, Any] | None = None,
 ) -> tuple:
     """Parse tab-separated paste text and fill form rows using paste YAML index rules."""
     headers = get_form_field_headers(template) if template else []
     if not template:
         gr.Warning("请先选择模板")
-        return form_data, gr.update(), gr.update(interactive=True), *_NO_CHANGE_FIELD_UPDATES
+        return form_data, gr.update(), gr.update(interactive=True), session or _empty_form_session(), *_NO_CHANGE_FIELD_UPDATES
     if not headers:
         gr.Warning("未找到模板输入区域或表头")
-        return form_data, gr.update(), gr.update(interactive=True), *_NO_CHANGE_FIELD_UPDATES
+        return form_data, gr.update(), gr.update(interactive=True), session or _empty_form_session(), *_NO_CHANGE_FIELD_UPDATES
     if not _should_parse_paste(paste_text):
-        return form_data, gr.update(), gr.update(interactive=True), *_NO_CHANGE_FIELD_UPDATES
+        return form_data, gr.update(), gr.update(interactive=True), session or _empty_form_session(), *_NO_CHANGE_FIELD_UPDATES
     paste_config = load_paste_parse_config(template.id)
     if not paste_config:
         gr.Warning("模板粘贴配置加载失败")
-        return form_data, gr.update(), gr.update(interactive=True), *_NO_CHANGE_FIELD_UPDATES
+        return form_data, gr.update(), gr.update(interactive=True), session or _empty_form_session(), *_NO_CHANGE_FIELD_UPDATES
     try:
         parsed_rows = parse_text_with_config(paste_text.strip(), paste_config)
     except ValueError as exc:
         gr.Warning(f"解析失败：{exc}")
-        return form_data, gr.update(), gr.update(interactive=True), *_NO_CHANGE_FIELD_UPDATES
+        return form_data, gr.update(), gr.update(interactive=True), session or _empty_form_session(), *_NO_CHANGE_FIELD_UPDATES
     if not parsed_rows:
         gr.Warning("未能解析粘贴数据")
-        return form_data, gr.update(), gr.update(interactive=True), *_NO_CHANGE_FIELD_UPDATES
+        return form_data, gr.update(), gr.update(interactive=True), session or _empty_form_session(), *_NO_CHANGE_FIELD_UPDATES
     has_values = any(
         value
         for row in parsed_rows
@@ -645,7 +1508,7 @@ def apply_pasted_form_data(
     )
     if not has_values:
         gr.Warning("粘贴数据未匹配任何字段，请检查 YAML index 配置")
-        return form_data, gr.update(), gr.update(interactive=True), *_NO_CHANGE_FIELD_UPDATES
+        return form_data, gr.update(), gr.update(interactive=True), session or _empty_form_session(), *_NO_CHANGE_FIELD_UPDATES
     if not form_data:
         form_data = [{header: "" for header in headers}]
     target_idx = _resolve_row_index(row_selector_value, len(form_data))
@@ -654,14 +1517,120 @@ def apply_pasted_form_data(
         while len(form_data) <= row_idx:
             form_data.append({header: "" for header in headers})
         form_data[row_idx] = _row_values_for_headers(headers, parsed)
-    row_choices = [f"Row {index + 1}" for index in range(len(form_data))]
-    selected_row = f"Row {target_idx + 1}"
+    row_choices = _build_row_choices_for_template(
+        template,
+        sheet_name,
+        form_data,
+        detected_areas or [],
+    )
+    selected_row = row_choices[target_idx] if target_idx < len(row_choices) else row_choices[0]
     field_updates = _field_updates_for_row(headers, form_data[target_idx])
     gr.Info(f"已填充 {len(parsed_rows)} 行数据到表单")
     return (
         form_data,
         gr.update(choices=row_choices, value=selected_row),
         gr.update(value="", interactive=True),
+        _mark_form_dirty(session or _empty_form_session()),
+        *field_updates,
+    )
+
+
+def _begin_advance_next() -> gr.update:
+    return gr.update(interactive=False)
+
+
+def advance_to_next_area(
+    template: TemplateConfig | None,
+    sheet_name: str | None,
+    form_data: list[dict[str, str]],
+    row_selector_value: str | None,
+    import_selection_state: dict[str, Any],
+    sheet_cache: dict[str, dict[str, str]],
+    import_preview_active: bool,
+    entry_mode: str,
+    session: dict[str, Any],
+    detected_areas: list,
+    *field_values: str,
+) -> tuple:
+    """Save the current row and move the row selector to the next area."""
+    if (
+        import_preview_active
+        and template
+        and import_selection_state.get("ids")
+    ):
+        ids = import_selection_state["ids"]
+        current_idx = max(0, min(import_selection_state.get("index", 0), len(ids) - 1))
+        next_idx = current_idx + 1
+        if next_idx >= len(ids):
+            gr.Info("已是最后一个选中行")
+            next_idx = current_idx
+        else:
+            gr.Info(f"已切换到选中行 {next_idx + 1}/{len(ids)}")
+        new_state = {"ids": ids, "index": next_idx}
+        row_selector_update, new_state, field_updates = _import_preview_sync_outputs(
+            template,
+            form_data,
+            new_state,
+            sheet_cache,
+            entry_mode,
+        )
+        return (
+            form_data,
+            row_selector_update,
+            gr.update(interactive=True),
+            new_state,
+            session,
+            *field_updates,
+        )
+    if not template or not sheet_name:
+        gr.Warning("请先选择模板和工作表")
+        return (
+            form_data,
+            gr.update(),
+            gr.update(interactive=True),
+            gr.update(),
+            session,
+            *_NO_CHANGE_FIELD_UPDATES,
+        )
+    headers = get_form_field_headers(template, sheet_name)
+    if not headers:
+        gr.Warning("未找到模板输入区域或表头")
+        return (
+            form_data,
+            gr.update(),
+            gr.update(interactive=True),
+            gr.update(),
+            session,
+            *_empty_field_updates(),
+        )
+    merged = _merge_field_boxes_into_form_data(
+        template,
+        sheet_name,
+        form_data,
+        row_selector_value,
+        field_values,
+    )
+    current_idx = _resolve_row_index(row_selector_value, len(merged))
+    next_idx = current_idx + 1
+    if next_idx >= len(merged):
+        gr.Info("已是最后一个区域")
+        next_idx = current_idx
+    else:
+        gr.Info(f"已切换到 Row {next_idx + 1}")
+    row_choices = _build_row_choices_for_template(
+        template,
+        sheet_name,
+        merged,
+        detected_areas or [],
+    )
+    selected_row = row_choices[next_idx] if next_idx < len(row_choices) else f"Row {next_idx + 1}"
+    field_updates = _field_updates_for_row(headers, merged[next_idx])
+    return (
+        merged,
+        gr.update(value=selected_row),
+        gr.update(interactive=True),
+        gr.update(),
+        _mark_form_dirty(session or _empty_form_session()),
         *field_updates,
     )
 
@@ -670,18 +1639,110 @@ def sync_form_fields_to_row(
     template: TemplateConfig | None,
     row_selector_value: str | None,
     form_data: list[dict[str, str]],
+    import_selection_state: dict[str, Any],
+    sheet_cache: dict[str, dict[str, str]],
+    import_preview_active: bool,
+    entry_mode: str,
 ) -> tuple:
     """Show the selected form row in field textboxes."""
+    if (
+        import_preview_active
+        and template
+        and import_selection_state.get("ids")
+    ):
+        ids = import_selection_state["ids"]
+        index = _resolve_row_index(row_selector_value, len(ids))
+        new_state = {"ids": ids, "index": index}
+        _, _, field_updates = _import_preview_sync_outputs(
+            template,
+            form_data,
+            new_state,
+            sheet_cache,
+            entry_mode,
+        )
+        return *field_updates, new_state
     if not template:
-        return _empty_field_updates()
+        return *_empty_field_updates(), gr.update()
     headers = get_form_field_headers(template)
     if not headers:
-        return _empty_field_updates()
+        return *_empty_field_updates(), gr.update()
     if not form_data:
-        return tuple(_field_updates_for_row(headers, {header: "" for header in headers}))
+        return tuple(_field_updates_for_row(headers, {header: "" for header in headers})), gr.update()
     target_idx = _resolve_row_index(row_selector_value, len(form_data))
     row_values = _row_values_for_headers(headers, form_data[target_idx])
-    return tuple(_field_updates_for_row(headers, row_values))
+    return tuple(_field_updates_for_row(headers, row_values)), gr.update()
+
+
+def handle_import_preview_selection_change(
+    preview_data: Any,
+    template: TemplateConfig | None,
+    form_data: list[dict[str, str]],
+    selection_state: dict[str, Any],
+    sheet_cache: dict[str, dict[str, str]],
+    preview_active: bool,
+    entry_mode: str,
+) -> tuple:
+    """Lightweight preview of checked import rows using cached sheet data."""
+    if not preview_active or not template:
+        return gr.update(), gr.update(), *_NO_CHANGE_FIELD_UPDATES
+    preview_rows = _normalize_preview_rows(preview_data)
+    selected_ids = _selected_import_ids(preview_rows)
+    prev_ids = selection_state.get("ids", [])
+    if not selected_ids:
+        headers = get_form_field_headers(template)
+        if not headers:
+            return gr.update(), _empty_import_selection(), *_NO_CHANGE_FIELD_UPDATES
+        row_count = len(form_data) if form_data else 1
+        row_choices = _row_choices_for_form_data(row_count)
+        target_idx = min(selection_state.get("index", 0), max(0, row_count - 1))
+        row_values = (
+            form_data[target_idx]
+            if form_data and target_idx < len(form_data)
+            else {header: "" for header in headers}
+        )
+        return (
+            _row_selector_update(
+                row_choices,
+                row_choices[target_idx] if row_choices else None,
+                entry_mode=entry_mode,
+            ),
+            _empty_import_selection(),
+            *_field_updates_for_row(headers, row_values),
+        )
+    if selected_ids == prev_ids:
+        return gr.update(), gr.update(), *_NO_CHANGE_FIELD_UPDATES
+    new_state = {"ids": selected_ids, "index": 0}
+    row_selector_update, new_state, field_updates = _import_preview_sync_outputs(
+        template,
+        form_data,
+        new_state,
+        sheet_cache,
+        entry_mode,
+    )
+    return row_selector_update, new_state, *field_updates
+
+
+def _restore_form_row_selector(
+    template: TemplateConfig,
+    form_data: list[dict[str, str]],
+    entry_mode: str,
+) -> gr.update:
+    headers = get_form_field_headers(template)
+    row_count = len(form_data) if form_data else 1
+    row_choices = _row_choices_for_form_data(row_count)
+    return _row_selector_update(
+        row_choices,
+        row_choices[0] if row_choices else None,
+        entry_mode=entry_mode,
+        active=bool(headers),
+    )
+
+
+def _import_refresh_tail(
+    sheet_cache: dict[str, dict[str, str]],
+    preview_active: bool,
+) -> tuple[dict[str, dict[str, str]], dict[str, Any], bool]:
+    return sheet_cache, _empty_import_selection(), preview_active
 
 
 def update_import_stats(template: TemplateConfig | dict[str, Any] | None) -> str:
@@ -715,6 +1776,35 @@ def _begin_bulk_refresh() -> tuple[Any, str]:
     return (
         gr.update(interactive=False),
         "📊 **导入统计** | 正在从 Google Sheet 加载数据...",
+    )
+
+
+def _begin_import_selected() -> tuple[Any, Any]:
+    return gr.update(interactive=False), gr.update(interactive=False)
+
+
+def _import_failure_returns(
+    form_data: list[dict[str, str]],
+    template: TemplateConfig | dict[str, Any] | None,
+    session: dict[str, Any] | None = None,
+) -> tuple:
+    headers = get_form_field_headers(template) if template and isinstance(template, TemplateConfig) else []
+    field_updates = (
+        tuple(_field_updates_for_row(headers, form_data[0]))
+        if headers and form_data
+        else _NO_CHANGE_FIELD_UPDATES
+    )
+    return (
+        form_data,
+        gr.update(),
+        gr.update(),
+        gr.update(interactive=True),
+        gr.update(interactive=True),
+        update_import_stats(template),
+        gr.update(),
+        gr.update(),
+        session or _empty_form_session(),
+        *field_updates,
     )
 
 
@@ -794,6 +1884,7 @@ def _id_lookup_no_change(
     form_data: list[dict[str, str]],
     template_id: str | None,
     headers: list[str],
+    session: dict[str, Any],
 ) -> tuple:
     """Keep form state unchanged and re-enable the ID field after a lookup attempt."""
     updates = list(_NO_CHANGE_FIELD_UPDATES)
@@ -801,7 +1892,7 @@ def _id_lookup_no_change(
         id_idx = _id_field_header_index(template_id, headers)
         if id_idx is not None:
             updates[id_idx] = gr.update(interactive=True)
-    return (form_data, *updates)
+    return (form_data, *updates, session)
 
 
 def _begin_id_lookup_gate(
@@ -809,8 +1900,11 @@ def _begin_id_lookup_gate(
     field_value: str,
     template: TemplateConfig | None,
     entry_mode: str,
+    import_preview_active: bool,
 ) -> gr.update:
     """Disable the ID field while fetching sheet data; no-op for other fields."""
+    if import_preview_active:
+        return gr.update()
     if entry_mode != ENTRY_MODE_ID_AUTO or not template:
         return gr.update()
     headers = get_form_field_headers(template)
@@ -830,14 +1924,19 @@ def handle_id_field_lookup(
     form_data: list[dict[str, str]],
     row_selector_value: str | None,
     entry_mode: str,
+    import_preview_active: bool,
+    session: dict[str, Any],
 ) -> tuple:
     """Look up a sheet row by ID and populate the current form row (ID Auto mode)."""
     headers = get_form_field_headers(template) if template else []
     template_id = _get_template_id(template)
+    session = session or _empty_form_session()
 
     def no_change() -> tuple:
-        return _id_lookup_no_change(form_data, template_id, headers)
+        return _id_lookup_no_change(form_data, template_id, headers, session)
 
+    if import_preview_active:
+        return no_change()
     if entry_mode != ENTRY_MODE_ID_AUTO or not template or not template_id:
         return no_change()
     id_idx = _id_field_header_index(template_id, headers)
@@ -881,7 +1980,7 @@ def handle_id_field_lookup(
         form_data[target_idx] = _merge_mapped_into_row(headers, existing_row, matched)
         field_updates = _field_updates_for_row(headers, form_data[target_idx])
         gr.Info(f"已自动填充 ID {id_value} 的数据")
-        return (form_data, *field_updates)
+        return (form_data, *field_updates, _mark_form_dirty(session))
     except GoogleSheetsError as exc:
         gr.Warning(str(exc))
         return no_change()
@@ -895,7 +1994,8 @@ def build_form_tab(
     current_template: gr.State,
     credentials_state: gr.State,
     form_data_state: gr.State,
-    detected_areas_state: gr.State
+    detected_areas_state: gr.State,
+    template_selector: gr.Dropdown | None = None,
 ) -> dict:
     """
     Build the data entry tab
@@ -906,8 +2006,20 @@ def build_form_tab(
     components = {}
     import_view_state = gr.State("unprocessed")
     components["import_view_state"] = import_view_state
+    import_sheet_cache_state = gr.State({})
+    components["import_sheet_cache_state"] = import_sheet_cache_state
+    import_selection_state = gr.State(_empty_import_selection())
+    components["import_selection_state"] = import_selection_state
+    import_preview_active_state = gr.State(False)
+    components["import_preview_active_state"] = import_preview_active_state
     entry_mode_state = gr.State(ENTRY_MODE_ID_AUTO)
     components["entry_mode_state"] = entry_mode_state
+    form_session_state = gr.State(_empty_form_session())
+    components["form_session_state"] = form_session_state
+    committed_sheet_state = gr.State(None)
+    components["committed_sheet_state"] = committed_sheet_state
+    committed_template_name_state = gr.State(None)
+    components["committed_template_name_state"] = committed_template_name_state
     
     with gr.Column():
         gr.Markdown("## 表单数据")
@@ -927,7 +2039,7 @@ def build_form_tab(
             )
             components["sheet_selector"] = sheet_selector
             row_selector = gr.Dropdown(
-                label="选择行",
+                label="区域选择",
                 choices=[],
                 value=None,
                 visible=True,
@@ -942,6 +2054,18 @@ def build_form_tab(
             interactive=True,
         )
         components["paste_input"] = paste_input
+        with gr.Column(visible=False) as unsaved_switch_group:
+            gr.Markdown("### 有未保存的更改\n是否继续切换？当前数据将保留。")
+            with gr.Row():
+                unsaved_switch_yes_btn = gr.Button("是")
+                unsaved_switch_no_btn = gr.Button("否", variant="primary")
+        with gr.Column(visible=False) as unsaved_save_group:
+            gr.Markdown("### 是否先保存？\n保存将导出 Excel；返回将留在当前页面。")
+            with gr.Row():
+                unsaved_save_btn = gr.Button("保存并切换")
+                unsaved_stay_btn = gr.Button("返回当前", variant="primary")
+        components["unsaved_switch_group"] = unsaved_switch_group
+        components["unsaved_save_group"] = unsaved_save_group
         
         # Field grid (field slots toggle via refresh; container stays mounted)
         with gr.Column(visible=True) as form_container:
@@ -966,6 +2090,9 @@ def build_form_tab(
             components["form_field_boxes"] = form_field_boxes
             components["field_rows"] = field_rows
             components["fields_container"] = fields_container
+            with gr.Row(elem_classes=["form-next-row"]):
+                next_area_btn = gr.Button("下一个", scale=0, min_width=100)
+            components["next_area_btn"] = next_area_btn
         
         components["form_container"] = form_container
         
@@ -1053,10 +2180,33 @@ def build_form_tab(
         *_form_field_output_components(field_rows, form_field_boxes),
     ]
 
-    sheet_selector.change(
-        fn=refresh_data_entry_form,
-        inputs=[current_template, sheet_selector, form_data_state, entry_mode_state],
-        outputs=form_refresh_outputs,
+    guarded_sheet_outputs = [
+        committed_sheet_state,
+        form_session_state,
+        unsaved_switch_group,
+        unsaved_save_group,
+        *form_refresh_outputs,
+    ]
+
+    # User-initiated sheet picks only: .change also fires on template-driven gr.update
+    # and can refresh with a stale current_template, leaving visible slots at label "".
+    sheet_selector.select(
+        fn=try_sheet_select,
+        inputs=[
+            sheet_selector,
+            committed_sheet_state,
+            current_template,
+            form_data_state,
+            detected_areas_state,
+            entry_mode_state,
+            form_session_state,
+            import_selection_state,
+            import_preview_active_state,
+            import_sheet_cache_state,
+            import_view_state,
+            import_preview,
+        ],
+        outputs=guarded_sheet_outputs,
         **HIDE_PROGRESS,
     )
 
@@ -1071,7 +2221,12 @@ def build_form_tab(
     for index, field_box in enumerate(form_field_boxes):
         field_box.blur(
             fn=partial(_begin_id_lookup_gate, index),
-            inputs=[field_box, current_template, entry_mode_state],
+            inputs=[
+                field_box,
+                current_template,
+                entry_mode_state,
+                import_preview_active_state,
+            ],
             outputs=[field_box],
             **HIDE_PROGRESS,
         ).then(
@@ -1083,17 +2238,53 @@ def build_form_tab(
                 form_data_state,
                 row_selector,
                 entry_mode_state,
+                import_preview_active_state,
+                form_session_state,
             ],
-            outputs=id_lookup_outputs,
+            outputs=[*id_lookup_outputs, form_session_state],
+            **HIDE_PROGRESS,
+        )
+        field_box.change(
+            fn=_mark_form_dirty,
+            inputs=[form_session_state],
+            outputs=[form_session_state],
             **HIDE_PROGRESS,
         )
 
-    paste_apply_outputs = [form_data_state, row_selector, paste_input, *form_field_boxes]
+    paste_apply_outputs = [form_data_state, row_selector, paste_input, form_session_state, *form_field_boxes]
 
     row_selector.change(
         fn=sync_form_fields_to_row,
-        inputs=[current_template, row_selector, form_data_state],
-        outputs=form_field_boxes,
+        inputs=[
+            current_template,
+            row_selector,
+            form_data_state,
+            import_selection_state,
+            import_sheet_cache_state,
+            import_preview_active_state,
+            entry_mode_state,
+        ],
+        outputs=[import_selection_state, *form_field_boxes],
+        **HIDE_PROGRESS,
+    )
+
+    import_preview_selection_outputs = [
+        row_selector,
+        import_selection_state,
+        *form_field_boxes,
+    ]
+    import_preview.change(
+        fn=handle_import_preview_selection_change,
+        inputs=[
+            import_preview,
+            current_template,
+            form_data_state,
+            import_selection_state,
+            import_sheet_cache_state,
+            import_preview_active_state,
+            entry_mode_state,
+        ],
+        outputs=import_preview_selection_outputs,
         **HIDE_PROGRESS,
     )
 
@@ -1103,7 +2294,15 @@ def build_form_tab(
         **HIDE_PROGRESS,
     ).then(
         fn=apply_pasted_form_data,
-        inputs=[current_template, paste_input, form_data_state, row_selector],
+        inputs=[
+            current_template,
+            paste_input,
+            form_data_state,
+            row_selector,
+            detected_areas_state,
+            sheet_selector,
+            form_session_state,
+        ],
         outputs=paste_apply_outputs,
         **HIDE_PROGRESS,
     )
@@ -1114,12 +2313,55 @@ def build_form_tab(
         **HIDE_PROGRESS,
     ).then(
         fn=apply_pasted_form_data,
-        inputs=[current_template, paste_input, form_data_state, row_selector],
+        inputs=[
+            current_template,
+            paste_input,
+            form_data_state,
+            row_selector,
+            detected_areas_state,
+            sheet_selector,
+            form_session_state,
+        ],
         outputs=paste_apply_outputs,
         **HIDE_PROGRESS,
     )
+
+    next_apply_outputs = [
+        form_data_state,
+        row_selector,
+        next_area_btn,
+        import_selection_state,
+        form_session_state,
+        *form_field_boxes,
+    ]
+    next_area_btn.click(
+        fn=_begin_advance_next,
+        outputs=[next_area_btn],
+        **HIDE_PROGRESS,
+    ).then(
+        fn=advance_to_next_area,
+        inputs=[
+            current_template,
+            sheet_selector,
+            form_data_state,
+            row_selector,
+            import_selection_state,
+            import_sheet_cache_state,
+            import_preview_active_state,
+            entry_mode_state,
+            form_session_state,
+            detected_areas_state,
+            *form_field_boxes,
+        ],
+        outputs=next_apply_outputs,
+        **HIDE_PROGRESS,
+    )
     
-    # Refresh button for bulk import: fast UI feedback, then sheet fetch
+    import_refresh_tail_outputs = [
+        import_sheet_cache_state,
+        import_selection_state,
+        import_preview_active_state,
+    ]
     refresh_btn.click(
         fn=_begin_bulk_refresh,
         outputs=[refresh_btn, import_stats],
@@ -1130,6 +2372,7 @@ def build_form_tab(
         outputs=[
             import_preview, import_btn, mark_trash_btn, restore_btn,
             clear_history_btn, refresh_btn, import_stats, import_view_state,
+            *import_refresh_tail_outputs,
         ],
         **HIDE_PROGRESS,
     )
@@ -1141,6 +2384,7 @@ def build_form_tab(
         outputs=[
             import_preview, import_btn, mark_trash_btn, restore_btn,
             clear_history_btn, import_view_state,
+            *import_refresh_tail_outputs,
         ],
         **HIDE_PROGRESS,
     )
@@ -1152,15 +2396,42 @@ def build_form_tab(
         outputs=[
             import_preview, import_btn, mark_trash_btn, restore_btn,
             clear_history_btn, import_view_state,
+            *import_refresh_tail_outputs,
         ],
         **HIDE_PROGRESS,
     )
     
+    import_apply_outputs = [
+        form_data_state,
+        row_selector,
+        import_preview,
+        import_btn,
+        mark_trash_btn,
+        import_stats,
+        import_selection_state,
+        import_preview_active_state,
+        form_session_state,
+        *form_field_boxes,
+    ]
     # Import selected rows
     import_btn.click(
+        fn=_begin_import_selected,
+        outputs=[import_btn, mark_trash_btn],
+        **HIDE_PROGRESS,
+    ).then(
         fn=handle_import_selected,
-        inputs=[import_preview, current_template, form_data_state, credentials_state, detected_areas_state],
-        outputs=[form_data_state, row_selector, import_preview, import_btn, mark_trash_btn, import_stats],
+        inputs=[
+            import_preview,
+            current_template,
+            form_data_state,
+            credentials_state,
+            detected_areas_state,
+            import_sheet_cache_state,
+            entry_mode_state,
+            sheet_selector,
+            form_session_state,
+        ],
+        outputs=import_apply_outputs,
         **HIDE_PROGRESS,
     )
     
@@ -1170,6 +2441,11 @@ def build_form_tab(
         inputs=[import_preview, current_template],
         outputs=[import_preview, mark_trash_btn, import_stats],
         **HIDE_PROGRESS,
+    ).then(
+        fn=_mark_form_dirty,
+        inputs=[form_session_state],
+        outputs=[form_session_state],
+        **HIDE_PROGRESS,
     )
     
     # Restore selected rows to unprocessed
@@ -1178,13 +2454,23 @@ def build_form_tab(
         inputs=[import_preview, current_template],
         outputs=[import_preview, restore_btn, import_stats],
         **HIDE_PROGRESS,
+    ).then(
+        fn=_mark_form_dirty,
+        inputs=[form_session_state],
+        outputs=[form_session_state],
+        **HIDE_PROGRESS,
     )
     
     # Clear history
     clear_history_btn.click(
         fn=handle_clear_history,
         inputs=[current_template],
-        outputs=[import_stats]
+        outputs=[import_stats],
+    ).then(
+        fn=_mark_form_dirty,
+        inputs=[form_session_state],
+        outputs=[form_session_state],
+        **HIDE_PROGRESS,
     )
     
     # Export filled workbook to exports/ and trigger browser download
@@ -1214,7 +2500,106 @@ def build_form_tab(
     )
     
     components["form_refresh_outputs"] = form_refresh_outputs
+    components["guarded_sheet_outputs"] = guarded_sheet_outputs
     components["update_on_template_change"] = [sheet_selector]
+
+    unsaved_dialog_outputs = [
+        committed_sheet_state,
+        form_session_state,
+        unsaved_switch_group,
+        unsaved_save_group,
+        *form_refresh_outputs,
+    ]
+    unsaved_switch_yes_btn.click(
+        fn=confirm_unsaved_switch_yes,
+        inputs=[form_session_state],
+        outputs=[form_session_state, unsaved_switch_group, unsaved_save_group],
+        **HIDE_PROGRESS,
+    )
+    unsaved_stay_btn.click(
+        fn=stay_on_current_view,
+        inputs=[form_session_state],
+        outputs=[form_session_state, unsaved_switch_group, unsaved_save_group],
+        **HIDE_PROGRESS,
+    )
+    if template_selector is not None:
+        guarded_template_outputs = [
+            template_selector,
+            committed_template_name_state,
+            current_template,
+            sheet_selector,
+            committed_sheet_state,
+            form_session_state,
+            unsaved_switch_group,
+            unsaved_save_group,
+            import_stats,
+            *form_refresh_outputs,
+        ]
+        components["guarded_template_outputs"] = guarded_template_outputs
+        unsaved_switch_no_btn.click(
+            fn=handle_unsaved_switch_no_with_template,
+            inputs=[
+                form_session_state,
+                current_template,
+                committed_template_name_state,
+                committed_sheet_state,
+                form_data_state,
+                detected_areas_state,
+            ],
+            outputs=guarded_template_outputs,
+            **HIDE_PROGRESS,
+        )
+        unsaved_save_btn.click(
+            fn=handle_unsaved_save_with_template,
+            inputs=[
+                form_session_state,
+                current_template,
+                form_data_state,
+                committed_sheet_state,
+                row_selector,
+                entry_mode_state,
+                import_selection_state,
+                import_preview_active_state,
+                import_sheet_cache_state,
+                import_view_state,
+                import_preview,
+                *form_field_boxes,
+            ],
+            outputs=guarded_template_outputs,
+            **HIDE_PROGRESS,
+        )
+    else:
+        unsaved_switch_no_btn.click(
+            fn=handle_unsaved_switch_no,
+            inputs=[
+                form_session_state,
+                current_template,
+                committed_sheet_state,
+                form_data_state,
+                detected_areas_state,
+            ],
+            outputs=unsaved_dialog_outputs,
+            **HIDE_PROGRESS,
+        )
+        unsaved_save_btn.click(
+            fn=handle_unsaved_save_with_template,
+            inputs=[
+                form_session_state,
+                current_template,
+                form_data_state,
+                committed_sheet_state,
+                row_selector,
+                entry_mode_state,
+                import_selection_state,
+                import_preview_active_state,
+                import_sheet_cache_state,
+                import_view_state,
+                import_preview,
+                *form_field_boxes,
+            ],
+            outputs=unsaved_dialog_outputs,
+            **HIDE_PROGRESS,
+        )
 
     return components
 
@@ -1243,6 +2628,7 @@ def handle_refresh_unrecorded(
             gr.update(interactive=True),
             update_import_stats(template),
             "unprocessed",
+            *_import_refresh_tail({}, False),
         )
     
     try:
@@ -1260,6 +2646,7 @@ def handle_refresh_unrecorded(
                 gr.update(interactive=True),
                 update_import_stats(template),
                 "unprocessed",
+                *_import_refresh_tail({}, False),
             )
         
         history = load_import_history(template.id)
@@ -1280,6 +2667,7 @@ def handle_refresh_unrecorded(
                 gr.update(interactive=True),
                 update_import_stats(template),
                 "unprocessed",
+                *_import_refresh_tail({}, False),
             )
         
         if df.height > MAX_IMPORT_PREVIEW_ROWS:
@@ -1307,8 +2695,10 @@ def handle_refresh_unrecorded(
                 gr.update(interactive=True),
                 update_import_stats(template),
                 "unprocessed",
+                *_import_refresh_tail({}, False),
             )
         
+        sheet_cache = _build_sheet_row_cache(df, data_source.id_column)
         info_msg = f"找到 {len(unrecorded_rows)} 行未处理数据"
         if len(unrecorded_rows) >= MAX_IMPORT_PREVIEW_ROWS:
             info_msg += f"（已达到显示上限 {MAX_IMPORT_PREVIEW_ROWS} 行）"
@@ -1323,6 +2713,7 @@ def handle_refresh_unrecorded(
             gr.update(interactive=True),
             update_import_stats(template),
             "unprocessed",
+            *_import_refresh_tail(sheet_cache, True),
         )
         
     except GoogleSheetsError as e:
@@ -1336,6 +2727,7 @@ def handle_refresh_unrecorded(
             gr.update(interactive=True),
             update_import_stats(template),
             "unprocessed",
+            *_import_refresh_tail({}, False),
         )
     except Exception as e:
         logger.error(f"Refresh failed: {e}")
@@ -1349,6 +2741,7 @@ def handle_refresh_unrecorded(
             gr.update(interactive=True),
             update_import_stats(template),
             "unprocessed",
+            *_import_refresh_tail({}, False),
         )
 
 
@@ -1357,86 +2750,65 @@ def handle_import_selected(
     template: TemplateConfig | None,
     form_data: list[dict[str, str]],
     credentials: Any,
-    detected_areas: list
+    detected_areas: list,
+    sheet_cache: dict[str, dict[str, str]],
+    entry_mode: str,
+    sheet_name: str | None,
+    session: dict[str, Any],
 ) -> tuple:
     """
     Import selected rows from preview using Gemma 4 field matching
     
     Returns:
-        (form_data_state, row_selector, import_preview, import_btn, mark_trash_btn, import_stats)
+        (form_data_state, row_selector, import_preview, import_btn, mark_trash_btn,
+         import_stats, import_selection_state, import_preview_active_state, *field_boxes)
     """
     preview_rows = _normalize_preview_rows(preview_data)
     template_id = _get_template_id(template)
-    if not preview_rows or not template_id:
-        return (
-            form_data, 
-            gr.update(), 
-            gr.update(), 
-            gr.update(interactive=True), 
-            gr.update(interactive=True),
-            update_import_stats(template)
-        )
+    if not preview_rows or not template_id or not template:
+        return _import_failure_returns(form_data, template, session)
     
     try:
-        # Get selected rows (where first column is True)
         selected_rows = [row for row in preview_rows if _is_row_selected(row)]
         
         if not selected_rows:
             gr.Warning("请勾选要导入的行")
-            return (
-                form_data, 
-                gr.update(), 
-                gr.update(), 
-                gr.update(interactive=True), 
-                gr.update(interactive=True),
-                update_import_stats(template)
-            )
+            return _import_failure_returns(form_data, template, session)
         
-        # Load data source config and paste config
         from app.services.data_source import load_template_data_source
         
         data_source = load_template_data_source(template_id)
         if not data_source or not credentials:
             gr.Warning("请先配置数据源")
-            return (
-                form_data, 
-                gr.update(), 
-                gr.update(), 
-                gr.update(interactive=True), 
-                gr.update(interactive=True),
-                update_import_stats(template)
-            )
+            return _import_failure_returns(form_data, template, session)
         
         paste_config = load_paste_parse_config(template_id)
         if not paste_config:
             gr.Warning("模板配置加载失败")
-            return (
-                form_data, 
-                gr.update(), 
-                gr.update(), 
-                gr.update(interactive=True), 
-                gr.update(interactive=True),
-                update_import_stats(template)
-            )
+            return _import_failure_returns(form_data, template, session)
         
-        # Get field matcher (optional — fall back to rule-based mapping)
         field_matcher = create_field_matcher()
         if field_matcher is None:
             gr.Warning("LLM 模型未加载，使用规则匹配")
         
-        sheet_df = _load_template_sheet_df(credentials, data_source)
+        sheet_df = None
+        if not sheet_cache:
+            sheet_df = _load_template_sheet_df(credentials, data_source)
         imported_count = 0
         imported_ids = []
+        headers = get_form_field_headers(template)
         
-        # Process each selected row
         for row in selected_rows:
-            id_value = str(row[1])  # Second column is ID
-            
-            sheet_row = lookup_row_by_id(
-                sheet_df,
-                data_source.id_column,
-                id_value,
-            )
+            id_value = str(row[1])
+            sheet_row = sheet_cache.get(id_value)
+            if sheet_row is None:
+                if sheet_df is None:
+                    sheet_df = _load_template_sheet_df(credentials, data_source)
+                sheet_row = lookup_row_by_id(
+                    sheet_df,
+                    data_source.id_column,
+                    id_value,
+                )
             
             if not sheet_row:
                 logger.warning(f"Row not found for ID: {id_value}")
@@ -1455,7 +2827,6 @@ def handle_import_selected(
                 imported_ids.append(id_value)
                 imported_count += 1
         
-        # Mark imported IDs as processed
         if imported_ids:
             mark_as_processed(template_id, imported_ids)
         
@@ -1464,29 +2835,40 @@ def handle_import_selected(
         else:
             gr.Warning("未能导入任何数据，请检查配置")
         
-        # Update row selector
-        row_choices = [f"Row {i+1}" for i in range(len(form_data))]
+        row_choices = _build_row_choices_for_template(
+            template,
+            sheet_name,
+            form_data,
+            detected_areas or [],
+        )
+        row_selector_update = _row_selector_update(
+            row_choices,
+            row_choices[0] if row_choices else None,
+            entry_mode=entry_mode,
+        )
+        field_updates = (
+            tuple(_field_updates_for_row(headers, form_data[0]))
+            if headers and form_data
+            else _NO_CHANGE_FIELD_UPDATES
+        )
         
         return (
             form_data,
-            gr.update(choices=row_choices, value=row_choices[0] if row_choices else None),
-            gr.update(visible=False),  # Hide import preview after import
-            gr.update(interactive=True),  # Re-enable import button
-            gr.update(interactive=True),  # Re-enable mark trash button
-            update_import_stats(template)
+            row_selector_update,
+            gr.update(visible=False),
+            gr.update(interactive=True),
+            gr.update(interactive=True),
+            update_import_stats(template),
+            _empty_import_selection(),
+            False,
+            _mark_form_dirty(session or _empty_form_session()),
+            *field_updates,
         )
         
     except Exception as e:
         logger.error(f"Import failed: {e}")
         gr.Warning(f"导入失败：{str(e)}")
-        return (
-            form_data, 
-            gr.update(), 
-            gr.update(), 
-            gr.update(interactive=True), 
-            gr.update(interactive=True),
-            update_import_stats(template)
-        )
+        return _import_failure_returns(form_data, template, session)
 
 
 def handle_show_processed(
@@ -1505,6 +2887,7 @@ def handle_show_processed(
         return (
             gr.update(), gr.update(visible=False), gr.update(visible=False),
             gr.update(visible=False), gr.update(visible=False), "unprocessed",
+            *_import_refresh_tail({}, False),
         )
     
     try:
@@ -1516,6 +2899,7 @@ def handle_show_processed(
             return (
                 gr.update(), gr.update(visible=False), gr.update(visible=False),
                 gr.update(visible=False), gr.update(visible=False), "unprocessed",
+                *_import_refresh_tail({}, False),
             )
         
         history = load_import_history(template.id)
@@ -1525,6 +2909,7 @@ def handle_show_processed(
             return (
                 gr.update(), gr.update(visible=False), gr.update(visible=False),
                 gr.update(visible=False), gr.update(visible=False), "unprocessed",
+                *_import_refresh_tail({}, False),
             )
         
         df = _load_template_sheet_df(credentials, data_source)
@@ -1538,6 +2923,7 @@ def handle_show_processed(
         )
         
         gr.Info(f"找到 {len(processed_rows)} 行已处理数据")
+        sheet_cache = _build_sheet_row_cache(df, data_source.id_column)
         
         return (
             gr.update(value=processed_rows, visible=True),
@@ -1546,6 +2932,7 @@ def handle_show_processed(
             gr.update(visible=True),
             gr.update(visible=True),
             "processed",
+            *_import_refresh_tail(sheet_cache, True),
         )
     except Exception as e:
         logger.error(f"Show processed failed: {e}")
@@ -1553,6 +2940,7 @@ def handle_show_processed(
         return (
             gr.update(), gr.update(visible=False), gr.update(visible=False),
             gr.update(visible=False), gr.update(visible=False), "unprocessed",
+            *_import_refresh_tail({}, False),
         )
 
 
@@ -1572,6 +2960,7 @@ def handle_show_trash(
         return (
             gr.update(), gr.update(visible=False), gr.update(visible=False),
             gr.update(visible=False), gr.update(visible=False), "unprocessed",
+            *_import_refresh_tail({}, False),
         )
     
     try:
@@ -1583,6 +2972,7 @@ def handle_show_trash(
             return (
                 gr.update(), gr.update(visible=False), gr.update(visible=False),
                 gr.update(visible=False), gr.update(visible=False), "unprocessed",
+                *_import_refresh_tail({}, False),
             )
         
         history = load_import_history(template.id)
@@ -1592,6 +2982,7 @@ def handle_show_trash(
             return (
                 gr.update(), gr.update(visible=False), gr.update(visible=False),
                 gr.update(visible=False), gr.update(visible=False), "unprocessed",
+                *_import_refresh_tail({}, False),
             )
         
         df = _load_template_sheet_df(credentials, data_source)
@@ -1605,6 +2996,7 @@ def handle_show_trash(
         )
         
         gr.Info(f"找到 {len(trash_rows)} 行垃圾数据")
+        sheet_cache = _build_sheet_row_cache(df, data_source.id_column)
         
         return (
             gr.update(value=trash_rows, visible=True),
@@ -1613,6 +3005,7 @@ def handle_show_trash(
             gr.update(visible=True),
             gr.update(visible=True),
             "trash",
+            *_import_refresh_tail(sheet_cache, True),
         )
     except Exception as e:
         logger.error(f"Show trash failed: {e}")
@@ -1620,6 +3013,7 @@ def handle_show_trash(
         return (
             gr.update(), gr.update(visible=False), gr.update(visible=False),
             gr.update(visible=False), gr.update(visible=False), "unprocessed",
+            *_import_refresh_tail({}, False),
         )
 
 

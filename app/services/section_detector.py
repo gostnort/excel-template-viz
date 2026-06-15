@@ -177,6 +177,15 @@ def is_cell_empty_content(cell: Cell) -> bool:
     return False
 
 
+def _cell_content_key(value: Any) -> str:
+    """Normalize a cell value for exact row-content comparison."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
 def _read_area_content(ws: Worksheet, coords: AreaCoords) -> list[list[Any]]:
     """Read cell values from area (excluding formulas)"""
     content = []
@@ -195,6 +204,19 @@ def _read_area_content(ws: Worksheet, coords: AreaCoords) -> list[list[Any]]:
         content.append(row_values)
     
     return content
+
+
+def _area_content_signature(ws: Worksheet, coords: AreaCoords) -> tuple[str, ...]:
+    """Flat tuple of normalized values across the whole input area."""
+    signature: list[str] = []
+    for row_idx in range(coords.start_row, coords.end_row + 1):
+        for col_idx in range(coords.start_col, coords.end_col + 1):
+            cell = ws.cell(row_idx, col_idx)
+            if cell.data_type == 'f':
+                signature.append("")
+            else:
+                signature.append(_cell_content_key(cell.value))
+    return tuple(signature)
 
 
 def _is_area_completely_empty(ws: Worksheet, coords: AreaCoords) -> bool:
@@ -246,35 +268,67 @@ def _areas_have_same_format(
     return True
 
 
+def _area_within_sheet(ws: Worksheet, coords: AreaCoords) -> bool:
+    if coords.start_row < 1 or coords.start_col < 1:
+        return False
+    if coords.end_row > ws.max_row or coords.end_col > ws.max_column:
+        return False
+    return True
+
+
+def _scan_homogeneous_group(
+    ws: Worksheet,
+    start_area_str: str,
+    section_config: SectionConfig,
+) -> tuple[list[str], str | None]:
+    """
+    Collect consecutive single-step areas whose full-row content matches exactly.
+
+    Returns:
+        (area strings in the group, next area to scan after the group or None)
+    """
+    group: list[str] = []
+    current_area_str = start_area_str
+    reference_signature: tuple[str, ...] | None = None
+    while True:
+        try:
+            coords = parse_area_range(current_area_str)
+        except ValueError:
+            break
+        if not _area_within_sheet(ws, coords):
+            break
+        if _is_area_completely_empty(ws, coords):
+            break
+        signature = _area_content_signature(ws, coords)
+        if reference_signature is None:
+            reference_signature = signature
+            group.append(current_area_str)
+        elif signature == reference_signature:
+            group.append(current_area_str)
+        else:
+            return group, current_area_str
+        try:
+            current_area_str = calculate_next_area(
+                current_area_str,
+                section_config.move_to,
+                section_config.offset,
+            )
+        except ValueError:
+            break
+    return group, None
+
+
 def detect_multi_areas(
     workbook_path: Path,
     sheet_name: str,
     section_config: SectionConfig
 ) -> list[DetectedArea]:
     """
-    Detect multiple repeated areas in Excel sheet
-    
-    Args:
-        workbook_path: Path to Excel file
-        sheet_name: Worksheet name
-        section_config: Section configuration from YAML
-    
-    Returns:
-        List of detected areas
-    
-    Algorithm:
-    1. Parse first area coordinates
-    2. Read first area content as reference format
-    3. Loop:
-       a. Calculate next area coordinates
-       b. Check if out of bounds -> stop
-       c. Read next area content
-       d. Compare format consistency (exclude formulas)
-       e. Stop conditions:
-          - Content format inconsistent with first area
-          - Completely empty (no non-formula content)
-       f. Add to results if valid
-    4. Return all detected areas
+    Detect the first contiguous block of identical input rows from YAML input_area.
+
+    Each returned area is one dropdown entry. Only consecutive rows whose full
+    area content matches exactly are included; a content change, empty row, or
+    sheet end stops the block. Later differing groups are ignored.
     """
     logger.info(f"Detecting areas in {sheet_name} with config: {section_config}")
     
@@ -284,68 +338,30 @@ def detect_multi_areas(
         raise ValueError(f"Sheet '{sheet_name}' not found. Available: {wb.sheetnames}")
     
     ws = wb[sheet_name]
-    
-    # Parse first area
-    first_coords = parse_area_range(section_config.input_area)
-    
-    detected_areas = []
-    current_area_str = section_config.input_area
-    area_index = 1
-    
-    # Add first area
-    has_data = not _is_area_completely_empty(ws, first_coords)
-    detected_areas.append(DetectedArea(
-        index=area_index,
-        area=current_area_str,
-        coords=first_coords,
-        has_data=has_data
-    ))
-    
-    logger.info(f"First area: {current_area_str}, has_data: {has_data}")
-    
-    # Detect subsequent areas
-    while True:
-        try:
-            # Calculate next area
-            next_area_str = calculate_next_area(
-                current_area_str,
-                section_config.move_to,
-                section_config.offset
-            )
-            next_coords = parse_area_range(next_area_str)
-            
-            # Check if out of sheet bounds
-            if next_coords.end_row > ws.max_row or next_coords.end_col > ws.max_column:
-                logger.info(f"Area {next_area_str} exceeds sheet bounds, stopping")
-                break
-            
-            # Check if completely empty
-            if _is_area_completely_empty(ws, next_coords):
-                logger.info(f"Area {next_area_str} is completely empty, stopping")
-                break
-            
-            # Check format consistency with first area
-            if not _areas_have_same_format(ws, first_coords, next_coords):
-                logger.info(f"Area {next_area_str} has different format, stopping")
-                break
-            
-            # Valid area found
-            area_index += 1
-            has_data = not _is_area_completely_empty(ws, next_coords)
-            detected_areas.append(DetectedArea(
-                index=area_index,
-                area=next_area_str,
-                coords=next_coords,
-                has_data=has_data
-            ))
-            
-            logger.info(f"Detected area {area_index}: {next_area_str}, has_data: {has_data}")
-            
-            current_area_str = next_area_str
-            
-        except (ValueError, Exception) as e:
-            logger.warning(f"Stopped detection: {e}")
-            break
+    detected_areas: list[DetectedArea] = []
+    scan_area_str = section_config.input_area
+    try:
+        scan_coords = parse_area_range(scan_area_str)
+    except ValueError:
+        wb.close()
+        return detected_areas
+    if not _area_within_sheet(ws, scan_coords):
+        wb.close()
+        return detected_areas
+    if _is_area_completely_empty(ws, scan_coords):
+        wb.close()
+        return detected_areas
+    group_areas, _next_scan = _scan_homogeneous_group(ws, scan_area_str, section_config)
+    for area_index, area_str in enumerate(group_areas, start=1):
+        coords = parse_area_range(area_str)
+        has_data = not _is_area_completely_empty(ws, coords)
+        detected_areas.append(DetectedArea(
+            index=area_index,
+            area=area_str,
+            coords=coords,
+            has_data=has_data,
+        ))
+        logger.info(f"Detected area {area_index}: {area_str}, has_data: {has_data}")
     
     wb.close()
     

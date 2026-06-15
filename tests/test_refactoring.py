@@ -411,6 +411,320 @@ def test_refresh_data_entry_form_uses_configured_area():
     print("[PASS] refresh_data_entry_form() loads fields from configured area")
 
 
+def test_refresh_detects_multiple_areas():
+    """refresh_data_entry_form should detect multiple scroll areas from YAML."""
+    print("\n=== Test 6c: Multi-Area Refresh ===")
+
+    from app.components.gradio_template_form import (
+        ENTRY_MODE_ID_AUTO,
+        refresh_data_entry_form,
+    )
+    from app.services.paste_parse_config import paste_config_path
+    from app.services.registry import TemplateConfig
+    from openpyxl import Workbook
+
+    template_id = "test_multi_area_refresh"
+    template_dir = Path("templates") / template_id
+    template_dir.mkdir(parents=True, exist_ok=True)
+    config_path = paste_config_path(template_id)
+    temp_path = template_dir / f"{template_id}.xlsx"
+    config_path.write_text(
+        (
+            'determiner: "tab"\n'
+            'worksheet: "List"\n'
+            "sections:\n"
+            '  - input_area: "A2:B2"\n'
+            '    move_to: "down"\n'
+            "    offset: 1\n"
+            "Alpha:\n"
+            '  - filed: "Alpha"\n'
+            "    index: 0\n"
+            "Beta:\n"
+            '  - filed: "Beta"\n'
+            "    index: 1\n"
+        ),
+        encoding="utf-8",
+    )
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "List"
+    sheet["A1"] = "Alpha"
+    sheet["B1"] = "Beta"
+    sheet["A2"] = "r1a"
+    sheet["B2"] = "r1b"
+    sheet["A3"] = "r1a"
+    sheet["B3"] = "r1b"
+    workbook.save(temp_path)
+    workbook.close()
+
+    template = TemplateConfig(
+        id=template_id,
+        display_name="Multi Area",
+        description="",
+        file_path=temp_path,
+        sheet_name="",
+        header_row=0,
+        data_start_row=1,
+        config_path=template_dir / f"{template_id}.config.json",
+    )
+
+    result = refresh_data_entry_form(template, "List", [], ENTRY_MODE_ID_AUTO)
+    form_data = result[2]
+    row_selector_update = result[3]
+    assert len(form_data) == 2, "Two stacked areas should yield two form rows"
+    assert form_data[0]["Alpha"] == "r1a"
+    assert form_data[1]["Alpha"] == "r1a"
+    choices = row_selector_update.get("choices") or []
+    assert len(choices) == 2
+    assert choices[0].startswith("A2:B2") or choices[0].startswith("Row 1")
+    assert choices[1].startswith("A3:B3") or choices[1].startswith("Row 2")
+    assert row_selector_update.get("value") == choices[0]
+
+    try:
+        config_path.unlink(missing_ok=True)
+        temp_path.unlink(missing_ok=True)
+        template_dir.rmdir()
+    except OSError:
+        pass
+    print("[PASS] refresh_data_entry_form() detects multiple areas")
+    return True
+
+
+def test_advance_to_next_area():
+    """advance_to_next_area should save edits and switch the selected row."""
+    print("\n=== Test 6d: Advance To Next Area ===")
+
+    from app.components.gradio_template_form import (
+        advance_to_next_area,
+        refresh_data_entry_form,
+        ENTRY_MODE_ID_AUTO,
+        _empty_import_selection,
+    )
+    from app.services.paste_parse_config import paste_config_path
+    from app.services.registry import TemplateConfig
+    from openpyxl import Workbook
+
+    template_id = "test_advance_next_area"
+    template_dir = Path("templates") / template_id
+    template_dir.mkdir(parents=True, exist_ok=True)
+    config_path = paste_config_path(template_id)
+    temp_path = template_dir / f"{template_id}.xlsx"
+    config_path.write_text(
+        (
+            'determiner: "tab"\n'
+            'worksheet: "List"\n'
+            "sections:\n"
+            '  - input_area: "A2:B2"\n'
+            '    move_to: "down"\n'
+            "    offset: 1\n"
+            "Alpha:\n"
+            '  - filed: "Alpha"\n'
+            "    index: 0\n"
+            "Beta:\n"
+            '  - filed: "Beta"\n'
+            "    index: 1\n"
+        ),
+        encoding="utf-8",
+    )
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "List"
+    sheet["A1"] = "Alpha"
+    sheet["B1"] = "Beta"
+    sheet["A2"] = "r1a"
+    sheet["B2"] = "r1b"
+    sheet["A3"] = "r1a"
+    sheet["B3"] = "r1b"
+    workbook.save(temp_path)
+    workbook.close()
+
+    template = TemplateConfig(
+        id=template_id,
+        display_name="Advance Next",
+        description="",
+        file_path=temp_path,
+        sheet_name="",
+        header_row=0,
+        data_start_row=1,
+        config_path=template_dir / f"{template_id}.config.json",
+    )
+
+    refresh = refresh_data_entry_form(template, "List", [], ENTRY_MODE_ID_AUTO)
+    form_data = refresh[2]
+    advance = advance_to_next_area(
+        template,
+        "List",
+        form_data,
+        refresh[3].get("value") or "Row 1",
+        _empty_import_selection(),
+        {},
+        False,
+        ENTRY_MODE_ID_AUTO,
+        {"dirty": False, "snapshot": None, "pending": None, "dialog_step": ""},
+        refresh[1],
+        "edited-a",
+        "edited-b",
+    )
+    merged = advance[0]
+    row_selector_update = advance[1]
+    field_updates = advance[5:]
+    assert merged[0]["Alpha"] == "edited-a"
+    assert merged[0]["Beta"] == "edited-b"
+    next_value = row_selector_update.get("value", "")
+    assert next_value.startswith("A3:B3") or next_value.startswith("Row 2")
+    assert field_updates[0].get("value") == "r1a"
+    assert field_updates[1].get("value") == "r1b"
+
+    at_end = advance_to_next_area(
+        template,
+        "List",
+        merged,
+        advance[1].get("value") or "A3:B3",
+        _empty_import_selection(),
+        {},
+        False,
+        ENTRY_MODE_ID_AUTO,
+        {"dirty": True, "snapshot": None, "pending": None, "dialog_step": ""},
+        refresh[1],
+        "r1a",
+        "r1b",
+    )
+    assert at_end[1].get("value") == advance[1].get("value")
+
+    try:
+        config_path.unlink(missing_ok=True)
+        temp_path.unlink(missing_ok=True)
+        template_dir.rmdir()
+    except OSError:
+        pass
+    print("[PASS] advance_to_next_area() switches rows and preserves edits")
+    return True
+
+
+def test_get_form_field_headers_respects_selected_sheet():
+    """Explicit sheet_name must drive header reads, not paste-config worksheet."""
+    print("\n=== Test 6e: Headers Respect Selected Sheet ===")
+
+    from openpyxl import Workbook
+
+    from app.components.gradio_template_form import get_form_field_headers
+    from app.services.paste_parse_config import paste_config_path
+    from app.services.registry import TemplateConfig
+
+    template_id = "test_headers_sheet_select"
+    template_dir = Path("templates") / template_id
+    template_dir.mkdir(parents=True, exist_ok=True)
+    config_path = paste_config_path(template_id)
+    temp_path = template_dir / f"{template_id}.xlsx"
+    config_path.write_text(
+        (
+            'determiner: "tab"\n'
+            'worksheet: "List"\n'
+            "sections:\n"
+            '  - input_area: "A2:B2"\n'
+            '    move_to: "down"\n'
+            "    offset: 1\n"
+            "Alpha:\n"
+            '  - filed: "Alpha"\n'
+            "    index: 0\n"
+            "Beta:\n"
+            '  - filed: "Beta"\n'
+            "    index: 1\n"
+        ),
+        encoding="utf-8",
+    )
+
+    workbook = Workbook()
+    list_sheet = workbook.active
+    list_sheet.title = "List"
+    list_sheet["A1"] = "Alpha"
+    list_sheet["B1"] = "Beta"
+    other = workbook.create_sheet("Other")
+    other["A1"] = "Only"
+    other["A2"] = "x"
+    workbook.save(temp_path)
+    workbook.close()
+
+    template = TemplateConfig(
+        id=template_id,
+        display_name="Sheet Select",
+        description="",
+        file_path=temp_path,
+        sheet_name="",
+        header_row=0,
+        data_start_row=1,
+        config_path=template_dir / f"{template_id}.config.json",
+    )
+
+    list_headers = get_form_field_headers(template, "List")
+    other_headers = get_form_field_headers(template, "Other")
+    assert list_headers == ["Alpha", "Beta"]
+    assert other_headers == ["Only"]
+
+    try:
+        config_path.unlink(missing_ok=True)
+        temp_path.unlink(missing_ok=True)
+        template_dir.rmdir()
+    except OSError:
+        pass
+
+    print("[PASS] get_form_field_headers() honors the selected worksheet")
+
+
+def test_on_template_change_ensures_paste_config():
+    """Template switch should ensure paste YAML exists before form refresh runs."""
+    print("\n=== Test 6f: Template Change Ensures Paste Config ===")
+
+    from unittest.mock import patch
+
+    from app.gradio_main import on_template_change
+    from app.services.registry import TemplateConfig
+
+    temp_path = Path("tests/_tmp_ensure_config.xlsx")
+    temp_path.parent.mkdir(parents=True, exist_ok=True)
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Data"
+    sheet["A1"] = "Name"
+    workbook.save(temp_path)
+    workbook.close()
+
+    template = TemplateConfig(
+        id="test_template_ensure_config",
+        display_name="Ensure Config Test",
+        description="",
+        file_path=temp_path,
+        sheet_name="",
+        header_row=0,
+        data_start_row=1,
+        config_path=Path("templates/test_template_ensure_config.config.json"),
+    )
+
+    with patch("app.gradio_main.load_templates", return_value=[template]), patch(
+        "app.gradio_main.list_sheet_names",
+        return_value=["Data"],
+    ), patch(
+        "app.gradio_main.ensure_config_exists",
+        return_value=True,
+    ) as ensure_mock, patch(
+        "app.gradio_main.gr.Info",
+    ):
+        on_template_change("Ensure Config Test", None)
+
+    ensure_mock.assert_called_once_with(template.id, temp_path)
+
+    try:
+        temp_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+    print("[PASS] on_template_change() calls ensure_config_exists()")
+
+
 def test_id_lookup_preserves_unmapped_template_values():
     """ID lookup should overlay sheet fields without clearing template Excel values."""
     print("\n=== Test 6d: ID Lookup Preserves Template Values ===")
@@ -479,6 +793,8 @@ def test_id_lookup_preserves_unmapped_template_values():
             form_data,
             "Row 1",
             ENTRY_MODE_ID_AUTO,
+            False,
+            {"dirty": False, "snapshot": None, "pending": None, "dialog_step": ""},
         )
 
     updated = result[0][0]
@@ -761,7 +1077,10 @@ def test_import_without_llm_matcher():
 
     from unittest.mock import patch
 
-    from app.components.gradio_template_form import handle_import_selected
+    from app.components.gradio_template_form import (
+        ENTRY_MODE_ID_AUTO,
+        handle_import_selected,
+    )
     from app.services.paste_parse_config import PasteParseConfig, PasteParseRule
     from app.services.registry import TemplateConfig
 
@@ -792,6 +1111,9 @@ def test_import_without_llm_matcher():
         "app.services.data_source.load_template_data_source",
         return_value=type("DS", (), {"worksheet_name": "List", "id_column": "ID"})(),
     ), patch(
+        "app.components.gradio_template_form.get_form_field_headers",
+        return_value=["YY", "MM"],
+    ), patch(
         "app.components.gradio_template_form._load_template_sheet_df",
         return_value=object(),
     ), patch(
@@ -807,7 +1129,17 @@ def test_import_without_llm_matcher():
     ), patch(
         "app.components.gradio_template_form.gr.Info",
     ):
-        result = handle_import_selected(preview_data, template, [], object(), [])
+        result = handle_import_selected(
+            preview_data,
+            template,
+            [],
+            object(),
+            [],
+            {"test-id-1": sheet_row},
+            ENTRY_MODE_ID_AUTO,
+            "List",
+            {"dirty": False, "snapshot": None, "pending": None, "dialog_step": ""},
+        )
 
     form_data = result[0]
     assert len(form_data) == 1
@@ -815,6 +1147,184 @@ def test_import_without_llm_matcher():
     assert form_data[0]["MM"] == "06"
 
     print("[PASS] handle_import_selected() uses rule-based fallback without LLM")
+
+
+def test_import_preview_selection_uses_cache():
+    """Checkbox selection should preview from cache without sheet fetch or LLM."""
+    print("\n=== Test 9c: Import Preview Selection Uses Cache ===")
+
+    from unittest.mock import patch
+
+    from app.components.gradio_template_form import (
+        ENTRY_MODE_ID_AUTO,
+        _empty_import_selection,
+        _build_sheet_row_cache,
+        handle_import_preview_selection_change,
+    )
+    from app.services.paste_parse_config import PasteParseConfig, PasteParseRule
+    from app.services.registry import TemplateConfig
+    import polars as pl
+
+    template = TemplateConfig(
+        id="Ginger_Lots",
+        display_name="Ginger Lots",
+        description="",
+        file_path=Path("templates/Ginger_Lots/Ginger_Lots.xlsx"),
+        sheet_name="",
+        header_row=0,
+        data_start_row=1,
+        config_path=Path("templates/Ginger_Lots/Ginger_Lots.config.json"),
+    )
+    paste_config = PasteParseConfig(
+        determiner="tab",
+        field_rules={
+            "YY": [PasteParseRule(filed="YY", index=0)],
+            "MM": [PasteParseRule(filed="MM", index=0)],
+        },
+    )
+    df = pl.DataFrame({"ID": ["a1", "a2"], "YY": ["24", "25"], "MM": ["06", "07"]})
+    sheet_cache = _build_sheet_row_cache(df, "ID")
+    preview_data = [
+        [True, "a1", "新数据", "24 | 06 | "],
+        [True, "a2", "新数据", "25 | 07 | "],
+    ]
+
+    with patch(
+        "app.components.gradio_template_form.load_paste_parse_config",
+        return_value=paste_config,
+    ), patch(
+        "app.components.gradio_template_form.get_form_field_headers",
+        return_value=["YY", "MM"],
+    ), patch(
+        "app.components.gradio_template_form._load_template_sheet_df",
+    ) as fetch_mock, patch(
+        "app.components.gradio_template_form.create_field_matcher",
+    ) as matcher_mock:
+        row_selector_update, selection_state, *field_updates = handle_import_preview_selection_change(
+            preview_data,
+            template,
+            [],
+            _empty_import_selection(),
+            sheet_cache,
+            True,
+            ENTRY_MODE_ID_AUTO,
+        )
+
+    fetch_mock.assert_not_called()
+    matcher_mock.assert_not_called()
+    assert selection_state["ids"] == ["a1", "a2"]
+    assert selection_state["index"] == 0
+    assert row_selector_update.get("value") == "Row 1"
+    visible = [update for update in field_updates if update.get("visible")]
+    assert visible[0].get("value") == "24"
+    assert visible[1].get("value") == "06"
+
+    print("[PASS] import preview selection uses cached sheet rows only")
+
+
+def test_id_lookup_skipped_during_import_preview():
+    """Clicking import checkboxes must not trigger ID blur lookups."""
+    print("\n=== Test 9d: ID Lookup Skipped During Import Preview ===")
+
+    from unittest.mock import patch
+
+    from app.components.gradio_template_form import (
+        ENTRY_MODE_ID_AUTO,
+        _begin_id_lookup_gate,
+        handle_id_field_lookup,
+    )
+    from app.services.registry import load_templates
+
+    template = next(item for item in load_templates() if item.id == "Ginger_Lots")
+    gate = _begin_id_lookup_gate(0, "PO-1", template, ENTRY_MODE_ID_AUTO, True)
+    assert gate.get("__type__") == "update"
+    assert "interactive" not in gate
+
+    with patch(
+        "app.components.gradio_template_form._load_template_sheet_df",
+    ) as fetch_mock:
+        result = handle_id_field_lookup(
+            0,
+            "PO-1",
+            template,
+            object(),
+            [{}],
+            "Row 1",
+            ENTRY_MODE_ID_AUTO,
+            True,
+            {"dirty": False, "snapshot": None, "pending": None, "dialog_step": ""},
+        )
+
+    fetch_mock.assert_not_called()
+    assert result[0] == [{}]
+
+    print("[PASS] ID lookup is suppressed while import preview is active")
+
+
+def test_advance_next_import_selection():
+    """Next button should cycle checked import rows without importing."""
+    print("\n=== Test 9e: Advance Next Import Selection ===")
+
+    from unittest.mock import patch
+
+    from app.components.gradio_template_form import (
+        ENTRY_MODE_ID_AUTO,
+        advance_to_next_area,
+        _empty_import_selection,
+    )
+    from app.services.paste_parse_config import PasteParseConfig, PasteParseRule
+    from app.services.registry import TemplateConfig
+
+    template = TemplateConfig(
+        id="Ginger_Lots",
+        display_name="Ginger Lots",
+        description="",
+        file_path=Path("templates/Ginger_Lots/Ginger_Lots.xlsx"),
+        sheet_name="",
+        header_row=0,
+        data_start_row=1,
+        config_path=Path("templates/Ginger_Lots/Ginger_Lots.config.json"),
+    )
+    paste_config = PasteParseConfig(
+        determiner="tab",
+        field_rules={
+            "YY": [PasteParseRule(filed="YY", index=0)],
+            "MM": [PasteParseRule(filed="MM", index=0)],
+        },
+    )
+    sheet_cache = {
+        "a1": {"ID": "a1", "YY": "24", "MM": "06"},
+        "a2": {"ID": "a2", "YY": "25", "MM": "07"},
+    }
+    selection_state = {"ids": ["a1", "a2"], "index": 0}
+
+    with patch(
+        "app.components.gradio_template_form.load_paste_parse_config",
+        return_value=paste_config,
+    ), patch(
+        "app.components.gradio_template_form.get_form_field_headers",
+        return_value=["YY", "MM"],
+    ):
+        advance = advance_to_next_area(
+            template,
+            "List",
+            [],
+            "Row 1",
+            selection_state,
+            sheet_cache,
+            True,
+            ENTRY_MODE_ID_AUTO,
+            {"dirty": False, "snapshot": None, "pending": None, "dialog_step": ""},
+            [],
+        )
+
+    assert advance[3]["index"] == 1
+    assert advance[1].get("value") == "Row 2"
+    field_updates = advance[5:]
+    visible = [update for update in field_updates if update.get("visible")]
+    assert visible[0].get("value") == "25"
+
+    print("[PASS] advance_to_next_area() cycles import preview selections")
 
 
 def test_template_headers_without_paste_config():
@@ -954,6 +1464,287 @@ def test_import_history_restore():
             history_path.unlink()
 
 
+def test_build_row_brief_excludes_static_template_values():
+    """Brief labels should omit values matching template static cells."""
+    print("\n=== Test 12: Build Row Brief ===")
+
+    from app.components.gradio_template_form import build_row_brief, format_row_choice_label
+
+    headers = ["order", "YY", "MM", "DD", "P.O. No.", "Product Description"]
+    static = {
+        "order": "",
+        "YY": "26",
+        "MM": "",
+        "DD": "",
+        "P.O. No.": "",
+        "Product Description": "FRESH GINGER",
+    }
+    row_one = {
+        "order": "1",
+        "YY": "26",
+        "MM": "6",
+        "DD": "1",
+        "P.O. No.": "12345",
+        "Product Description": "FRESH GINGER",
+    }
+    row_two = dict(row_one)
+    row_two.update({"order": "2", "YY": "27", "MM": "7", "DD": "2", "P.O. No.": "12346"})
+
+    assert build_row_brief(row_one, static, headers) == "1 | 6 | 1 | 12345"
+    assert build_row_brief(row_two, static, headers) == "2 | 27 | 7 | 2 | 12346"
+    assert format_row_choice_label(1, "A2:L2", "1 | 6 | 1") == "A2:L2 — 1 | 6 | 1"
+    assert format_row_choice_label(2, "A3:L3", "") == "A3:L3"
+
+    print("[PASS] build_row_brief() excludes static template values")
+
+
+def test_detect_multi_areas_first_block_only():
+    """Only the first identical contiguous block should appear in the dropdown."""
+    print("\n=== Test 12b: First Block Area Detection ===")
+
+    from openpyxl import Workbook
+
+    from app.services.paste_parse_config import paste_config_path
+    from app.services.section_detector import SectionConfig, detect_multi_areas
+
+    template_id = "test_homogeneous_groups"
+    template_dir = Path("templates") / template_id
+    template_dir.mkdir(parents=True, exist_ok=True)
+    config_path = paste_config_path(template_id)
+    temp_path = template_dir / f"{template_id}.xlsx"
+    config_path.write_text(
+        (
+            'determiner: "tab"\n'
+            'worksheet: "List"\n'
+            "sections:\n"
+            '  - input_area: "A2:C2"\n'
+            '    move_to: "down"\n'
+            "    offset: 1\n"
+        ),
+        encoding="utf-8",
+    )
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "List"
+    sheet["A2"], sheet["B2"], sheet["C2"] = "26", "FRESH", "1"
+    sheet["A3"], sheet["B3"], sheet["C3"] = "26", "FRESH", "1"
+    sheet["A4"], sheet["B4"], sheet["C4"] = "26", "FRESH", "1"
+    sheet["A5"], sheet["B5"], sheet["C5"] = "27", "FRESH", "2"
+    sheet["A6"], sheet["B6"], sheet["C6"] = "27", "FRESH", "2"
+    workbook.save(temp_path)
+    workbook.close()
+
+    section = SectionConfig(input_area="A2:C2", move_to="down", offset=1)
+    areas = detect_multi_areas(temp_path, "List", section)
+    assert [area.area for area in areas] == ["A2:C2", "A3:C3", "A4:C4"]
+
+    try:
+        config_path.unlink(missing_ok=True)
+        temp_path.unlink(missing_ok=True)
+        template_dir.rmdir()
+    except OSError:
+        pass
+
+    print("[PASS] detect_multi_areas() returns first identical block only")
+
+
+def test_resolve_row_index_with_brief_labels():
+    """Row selector values with brief suffixes should resolve correctly."""
+    print("\n=== Test 12c: Resolve Row Index With Brief ===")
+
+    from app.components.gradio_template_form import _resolve_row_index
+
+    assert _resolve_row_index("Row 3 — 27 | 7 | 2", 5) == 2
+    assert _resolve_row_index("A5:L5 — 27 | FRESH", 5) == 0
+
+    print("[PASS] _resolve_row_index() parses brief row labels")
+
+
+def test_form_session_revert_restores_history():
+    """Discarding unsaved edits should restore import history snapshot."""
+    print("\n=== Test 12d: Form Session Revert ===")
+
+    from app.components.gradio_template_form import (
+        _capture_form_snapshot,
+        _empty_form_session,
+        _restore_form_snapshot,
+    )
+    from app.services.import_history import load_import_history, mark_as_processed
+
+    template_id = "Ginger_Lots"
+    mark_as_processed(template_id, ["session-revert-test-id"])
+    snapshot = _capture_form_snapshot(
+        template_id,
+        [{"order": "99"}],
+        {"ids": [], "index": 0},
+        False,
+        {},
+        "unprocessed",
+        None,
+    )
+    session = _empty_form_session()
+    session["snapshot"] = snapshot
+    session["dirty"] = True
+
+    mark_as_processed(template_id, ["another-session-id"])
+    history = load_import_history(template_id)
+    assert "another-session-id" in history.processed_ids
+
+    _restore_form_snapshot(template_id, snapshot)
+    restored = load_import_history(template_id)
+    assert "another-session-id" not in restored.processed_ids
+    assert "session-revert-test-id" in restored.processed_ids
+
+    from app.services.import_history import unmark_ids
+
+    unmark_ids(template_id, ["session-revert-test-id"])
+
+    print("[PASS] _restore_form_snapshot() restores import history")
+
+
+def test_try_sheet_select_blocks_when_dirty():
+    """Dirty form session should block worksheet navigation."""
+    print("\n=== Test 12e: Sheet Select Guard ===")
+
+    from app.components.gradio_template_form import _empty_form_session, try_sheet_select
+    from app.services.registry import TemplateConfig
+    from openpyxl import Workbook
+
+    temp_path = Path("tests/_tmp_sheet_guard.xlsx")
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "List"
+    sheet["A1"] = "Name"
+    workbook.save(temp_path)
+    workbook.close()
+
+    template = TemplateConfig(
+        id="test_sheet_guard",
+        display_name="Sheet Guard",
+        description="",
+        file_path=temp_path,
+        sheet_name="",
+        header_row=0,
+        data_start_row=1,
+        config_path=Path("templates/test_sheet_guard.config.json"),
+    )
+    dirty_session = _empty_form_session()
+    dirty_session["dirty"] = True
+
+    blocked = try_sheet_select(
+        "Other",
+        "List",
+        template,
+        [{"Name": "edited"}],
+        [],
+        "ID Auto",
+        dirty_session,
+        {"ids": [], "index": 0},
+        False,
+        {},
+        "unprocessed",
+        None,
+    )
+    assert blocked[0] == "List"
+    assert blocked[1].get("pending") == {"type": "sheet", "target": "Other"}
+
+    try:
+        temp_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+    print("[PASS] try_sheet_select() blocks navigation when dirty")
+
+
+def test_load_templates_skips_excel_lock_files():
+    """Excel lock files (~$*.xlsx) must not appear in template listing."""
+    print("\n=== Test: Skip Excel Lock Files ===")
+
+    import tempfile
+    from unittest.mock import patch
+
+    from openpyxl import Workbook
+
+    from app.services.registry import load_templates
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        real_path = tmp_path / "Real_Template.xlsx"
+        workbook = Workbook()
+        workbook.save(real_path)
+        workbook.close()
+        (tmp_path / "Real_Template.config.json").write_text(
+            '{"display_name": "Real"}',
+            encoding="utf-8",
+        )
+        (tmp_path / "~$Ginger_Lots.xlsx").write_bytes(b"fake lock")
+        (tmp_path / "~$Ginger_Lots.config.json").write_text(
+            '{"display_name": "Lock"}',
+            encoding="utf-8",
+        )
+        with patch("app.services.registry.TEMPLATES_DIR", tmp_path):
+            templates = load_templates()
+        ids = [item.id for item in templates]
+        assert ids == ["Real_Template"], f"Expected only Real_Template, got {ids}"
+
+    print("[PASS] load_templates() skips Excel lock files")
+
+
+def test_unsaved_switch_no_keeps_form_data():
+    """No on the switch prompt should cancel navigation without reverting edits."""
+    print("\n=== Test 12f: Unsaved Switch No Keeps Data ===")
+
+    from app.components.gradio_template_form import (
+        _empty_form_session,
+        handle_unsaved_switch_no,
+    )
+    from app.services.registry import TemplateConfig
+    from openpyxl import Workbook
+
+    temp_path = Path("tests/_tmp_switch_no_keep.xlsx")
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "List"
+    sheet["A1"] = "Name"
+    workbook.save(temp_path)
+    workbook.close()
+
+    template = TemplateConfig(
+        id="test_switch_no_keep",
+        display_name="Switch No Keep",
+        description="",
+        file_path=temp_path,
+        sheet_name="",
+        header_row=0,
+        data_start_row=1,
+        config_path=Path("templates/test_switch_no_keep.config.json"),
+    )
+    edited = [{"Name": "user-edited"}]
+    session = _empty_form_session()
+    session["dirty"] = True
+    session["pending"] = {"type": "sheet", "target": "Other"}
+
+    result = handle_unsaved_switch_no(
+        session,
+        template,
+        "List",
+        edited,
+        [],
+    )
+    assert result[0] == "List"
+    assert result[1].get("pending") is None
+    assert result[1].get("dirty") is True
+    assert result[6] == edited
+
+    try:
+        temp_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+    print("[PASS] handle_unsaved_switch_no() cancels switch and keeps form data")
+
+
 def run_all_tests():
     """Run all tests"""
     print("=" * 60)
@@ -969,15 +1760,29 @@ def run_all_tests():
         ("Sections Top-Level After Order", test_sections_top_level_after_order),
         ("Form Field Loading Helpers", test_form_field_loading_helpers),
         ("Refresh Data Entry Form", test_refresh_data_entry_form_uses_configured_area),
+        ("Multi-Area Refresh", test_refresh_detects_multiple_areas),
+        ("Advance To Next Area", test_advance_to_next_area),
+        ("Headers Respect Selected Sheet", test_get_form_field_headers_respects_selected_sheet),
+        ("Template Change Ensures Paste Config", test_on_template_change_ensures_paste_config),
         ("ID Lookup Preserves Template Values", test_id_lookup_preserves_unmapped_template_values),
         ("Refresh Output Alignment", test_refresh_output_count_stable_with_custom_fields_per_row),
         ("YAML Auto-Generation from Sections", test_yaml_auto_generation_from_sections),
         ("fields_per_row Config", test_fields_per_row_config),
         ("Unmapped Field Defaults", test_unmapped_field_defaults),
         ("Import Without LLM Matcher", test_import_without_llm_matcher),
+        ("Import Preview Selection Uses Cache", test_import_preview_selection_uses_cache),
+        ("ID Lookup Skipped During Import Preview", test_id_lookup_skipped_during_import_preview),
+        ("Advance Next Import Selection", test_advance_next_import_selection),
         ("Template Headers Without Paste Config", test_template_headers_without_paste_config),
         ("LLM Test Filtered Column Indices", test_llm_test_filtered_column_indices),
         ("Import History Restore", test_import_history_restore),
+        ("Build Row Brief", test_build_row_brief_excludes_static_template_values),
+        ("First Block Area Detection", test_detect_multi_areas_first_block_only),
+        ("Resolve Row Index With Brief", test_resolve_row_index_with_brief_labels),
+        ("Form Session Revert", test_form_session_revert_restores_history),
+        ("Sheet Select Guard", test_try_sheet_select_blocks_when_dirty),
+        ("Unsaved Switch No Keeps Data", test_unsaved_switch_no_keeps_form_data),
+        ("Skip Excel Lock Files", test_load_templates_skips_excel_lock_files),
     ]
     
     passed = 0

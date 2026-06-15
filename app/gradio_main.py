@@ -24,8 +24,10 @@ from app.components.gradio_template_form import (
     build_form_tab,
     refresh_data_entry_form,
     resolve_default_sheet_name,
+    try_template_select,
 )
 from app.services.excel_parser import list_sheet_names
+from app.services.paste_parse_config import ensure_config_exists
 from app.services.registry import load_templates, TemplateConfig
 
 logger = logging.getLogger(__name__)
@@ -279,18 +281,26 @@ APP_CSS = """
         }
         
         .app-header-row .app-title {
-            flex: 1 1 auto !important;
+            flex: 1 1 0% !important;
             min-width: 0 !important;
             margin: 0 !important;
         }
         
-        .app-header-row .app-title p {
+        .app-header-row .app-title p,
+        .app-header-row .app-title h1 {
             margin: 0 !important;
+        }
+        
+        .app-header-row .app-title [data-testid="markdown-wrapper"],
+        .app-header-row .app-title .prose {
+            width: 100% !important;
         }
         
         .app-header-row .app-header-actions {
             display: flex !important;
             flex: 0 0 auto !important;
+            width: fit-content !important;
+            max-width: fit-content !important;
             align-items: center !important;
             gap: 8px !important;
             margin: 0 !important;
@@ -317,6 +327,12 @@ APP_CSS = """
             background: #dc2626 !important;
             color: #ffffff !important;
             box-shadow: 0 2px 6px rgba(220, 38, 38, 0.35) !important;
+        }
+        
+        /* Data entry form: next-area button aligned bottom-right */
+        .form-next-row {
+            justify-content: flex-end !important;
+            margin-top: 8px !important;
         }
         
         /* Suppress Gradio default full-screen status tracker overlay */
@@ -398,7 +414,8 @@ def build_app() -> gr.Blocks:
                             current_template,
                             credentials_state,
                             form_data_state,
-                            detected_areas_state
+                            detected_areas_state,
+                            template_selector,
                         )
                     
                     # Tab 2: Data Source
@@ -426,12 +443,17 @@ def build_app() -> gr.Blocks:
                 current_template,
                 form_data_state,
                 form_components["entry_mode_state"],
+                form_components["committed_template_name_state"],
+                detected_areas_state,
+                form_components["form_session_state"],
+                form_components["committed_sheet_state"],
+                form_components["import_selection_state"],
+                form_components["import_preview_active_state"],
+                form_components["import_sheet_cache_state"],
+                form_components["import_view_state"],
+                form_components["import_preview"],
             ],
-            outputs=[
-                current_template,
-                form_components["sheet_selector"],
-                *form_components["form_refresh_outputs"],
-            ],
+            outputs=form_components["guarded_template_outputs"],
             show_progress="hidden",
         )
         
@@ -443,12 +465,17 @@ def build_app() -> gr.Blocks:
                 current_template,
                 form_data_state,
                 form_components["entry_mode_state"],
+                form_components["committed_template_name_state"],
+                detected_areas_state,
+                form_components["form_session_state"],
+                form_components["committed_sheet_state"],
+                form_components["import_selection_state"],
+                form_components["import_preview_active_state"],
+                form_components["import_sheet_cache_state"],
+                form_components["import_view_state"],
+                form_components["import_preview"],
             ],
-            outputs=[
-                current_template,
-                form_components["sheet_selector"],
-                *form_components["form_refresh_outputs"],
-            ],
+            outputs=form_components["guarded_template_outputs"],
             show_progress="hidden",
         )
 
@@ -621,6 +648,7 @@ def on_template_change(
 
         new_template = template_dict[template_name]
         logger.info(f"Switched to template: {new_template.id}")
+        ensure_config_exists(new_template.id, Path(new_template.file_path))
 
         try:
             sheet_names = list_sheet_names(Path(new_template.file_path))
@@ -650,11 +678,30 @@ def apply_template_and_refresh_form(
     template_name: str | None,
     current_template: TemplateConfig | None,
     form_data: list[dict[str, str]],
-    entry_mode: str = "ID Auto",
+    entry_mode: str,
+    committed_template_name: str | None,
+    detected_areas: list,
+    session: dict,
+    committed_sheet: str | None,
+    import_selection: dict,
+    import_preview_active: bool,
+    sheet_cache: dict,
+    import_view: str,
+    import_preview: Any,
 ) -> tuple:
-    """Select template, resolve default sheet, and refresh the data entry form in one step."""
-    new_template, sheet_update, default_sheet = on_template_change(
-        template_name, current_template
+    """Select template with unsaved-change guard and refresh the data entry form."""
+    return try_template_select(
+        template_name,
+        current_template,
+        committed_template_name,
+        form_data,
+        detected_areas,
+        entry_mode,
+        session,
+        committed_sheet,
+        import_selection,
+        import_preview_active,
+        sheet_cache,
+        import_view,
+        import_preview,
     )
-    refresh = refresh_data_entry_form(new_template, default_sheet, form_data, entry_mode)
-    return (new_template, sheet_update, *refresh)

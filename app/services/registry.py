@@ -97,12 +97,19 @@ def _template_path_from_id(template_id: str) -> Path | None:
     return None
 
 
+def _is_excel_lock_name(name: str) -> bool:
+    # Excel 打开工作簿时会创建 ~$*.xlsx 临时锁文件
+    return name.startswith("~")
+
+
 def load_templates() -> list[TemplateConfig]:
     # 扫描 templates/ 下的全部 xlsx
     if not TEMPLATES_DIR.exists():
         return []
     templates: list[TemplateConfig] = []
     for template_path in sorted(TEMPLATES_DIR.glob("*.xlsx")):
+        if _is_excel_lock_name(template_path.name):
+            continue
         config_path, payload = _ensure_template_config(template_path)
         template_id = template_path.stem
         display_name = str(payload.get("display_name") or _derive_display_name(template_id))
