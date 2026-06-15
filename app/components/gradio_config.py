@@ -19,6 +19,7 @@ from app.services.paste_parse_config import (
     _default_order_entry,
     _default_unmapped_rule,
     _order_entry_to_dict,
+    build_order_entries_from_mappings,
     config_to_yaml,
     config_from_dict,
     create_default_config_from_template,
@@ -837,18 +838,17 @@ def _apply_column_mapping_to_config(
         if new_rules:
             new_field_rules[field_name] = new_rules
 
-    new_order: list[dict[str, Any]] = []
-    seen_order_columns: set[str] = set()
+    mapped_columns: set[str] = set()
     for field_name in paste_config.field_rules:
         mapping_entry = column_map.get(field_name)
         matched_col = _resolve_column_map_entry(mapping_entry, col_index)
-        if not matched_col or matched_col in seen_order_columns:
-            continue
-        idx = col_index[matched_col]
-        new_order.append(_order_entry_to_dict({"filed": matched_col, "index": idx}))
-        seen_order_columns.add(matched_col)
-    if not new_order and include_unmapped:
-        new_order = [_default_order_entry()]
+        if matched_col:
+            mapped_columns.add(matched_col)
+    new_order = build_order_entries_from_mappings(
+        sheet_columns,
+        mapped_columns,
+        include_unmapped=include_unmapped,
+    )
 
     return PasteParseConfig(
         determiner=paste_config.determiner,
@@ -1422,9 +1422,29 @@ def run_llm_test_generation(
             return
 
         filtered_rows: list[dict[str, str]] = prepared_state.get("filtered_rows") or []
+        transform_prompts: list[str] = []
+        prompt_with_transforms = prompt_text
         if filtered_rows and mappings:
             progress(0.78, desc="⏳ 检测格式不匹配并推断转换…")
-            yield _tick(prompt_text, response_text + "\n\n--- 转换推断中… ---")
+            mismatches = matcher.detect_format_mismatches(mappings, filtered_rows)
+            for source_column, target_fields in mismatches.items():
+                sample_values = [
+                    str(row.get(source_column, "") or "") for row in filtered_rows[:5]
+                ]
+                transform_prompts.append(
+                    matcher._build_transformation_inference_prompt(
+                        source_column,
+                        sample_values,
+                        target_fields,
+                    )
+                )
+            prompt_with_transforms = prompt_text
+            if transform_prompts:
+                prompt_with_transforms += (
+                    "\n\n--- Transformation pass prompts ---\n\n"
+                    + "\n\n---\n\n".join(transform_prompts)
+                )
+            yield _tick(prompt_with_transforms, response_text + "\n\n--- 转换推断中… ---")
             transform_result: dict[str, Any] = {}
             transform_error: list[Exception] = []
 
@@ -1443,9 +1463,9 @@ def run_llm_test_generation(
             transform_thread.start()
             while transform_thread.is_alive():
                 if _is_llm_test_cancelled(cancel_state):
-                    yield _tick_stopped(prompt_text, response_text)
+                    yield _tick_stopped(prompt_with_transforms, response_text)
                     return
-                yield _tick(prompt_text, response_text + "\n\n--- 转换推断中… ---")
+                yield _tick(prompt_with_transforms, response_text + "\n\n--- 转换推断中… ---")
                 transform_thread.join(timeout=LLM_TEST_TICK_INTERVAL_S)
             if transform_error:
                 logger.warning("Transformation pass failed: %s", transform_error[0])
@@ -1459,7 +1479,7 @@ def run_llm_test_generation(
             return
 
         progress(0.85, desc="⏳ 生成 YAML 结果…")
-        yield _tick(prompt_text, response_text)
+        yield _tick(prompt_with_transforms if transform_prompts else prompt_text, response_text)
 
         from app.services.data_source import load_template_data_source
 

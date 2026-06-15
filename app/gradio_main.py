@@ -367,25 +367,30 @@ def build_app() -> gr.Blocks:
                             credentials_state
                         )
         
-        # Event: Load templates on startup
+        # Event: Load templates on startup, then select default template and refresh form
         app.load(
             fn=load_template_list,
-            outputs=[template_selector]
+            outputs=[template_selector],
+        ).then(
+            fn=apply_template_and_refresh_form,
+            inputs=[template_selector, current_template, form_data_state],
+            outputs=[
+                current_template,
+                form_components["sheet_selector"],
+                *form_components["form_refresh_outputs"],
+            ],
+            show_progress="hidden",
         )
         
         # Event: Template selection changed
         template_selector.change(
-            fn=on_template_change,
-            inputs=[template_selector, current_template],
-            outputs=[current_template, form_components["sheet_selector"]],
-        ).then(
-            fn=refresh_data_entry_form,
-            inputs=[
+            fn=apply_template_and_refresh_form,
+            inputs=[template_selector, current_template, form_data_state],
+            outputs=[
                 current_template,
                 form_components["sheet_selector"],
-                form_data_state,
+                *form_components["form_refresh_outputs"],
             ],
-            outputs=form_components["form_refresh_outputs"],
             show_progress="hidden",
         )
 
@@ -526,15 +531,15 @@ def handle_shutdown():
 
 def on_template_change(
     template_name: str | None,
-    current_template: TemplateConfig | None
-) -> tuple[Any, Any]:
+    current_template: TemplateConfig | None,
+) -> tuple[TemplateConfig | None, Any, str | None]:
     """
     Handle template selection change
 
-    Returns: (current_template, sheet_selector)
+    Returns: (current_template, sheet_selector, default_sheet_name)
     """
     if not template_name:
-        return None, gr.update(choices=[], value=None)
+        return None, gr.update(choices=[], value=None), None
 
     try:
         templates = load_templates()
@@ -542,7 +547,7 @@ def on_template_change(
 
         if template_name not in template_dict:
             gr.Warning(f"模板 '{template_name}' 未找到")
-            return None, gr.update(choices=[], value=None)
+            return None, gr.update(choices=[], value=None), None
 
         new_template = template_dict[template_name]
         logger.info(f"Switched to template: {new_template.id}")
@@ -562,9 +567,23 @@ def on_template_change(
         return (
             new_template,
             gr.update(choices=sheet_names, value=default_sheet),
+            default_sheet,
         )
 
     except Exception as e:
         logger.error(f"Failed to change template: {e}")
         gr.Warning(f"切换模板失败：{str(e)}")
-        return None, gr.update(choices=[], value=None)
+        return None, gr.update(choices=[], value=None), None
+
+
+def apply_template_and_refresh_form(
+    template_name: str | None,
+    current_template: TemplateConfig | None,
+    form_data: list[dict[str, str]],
+) -> tuple:
+    """Select template, resolve default sheet, and refresh the data entry form in one step."""
+    new_template, sheet_update, default_sheet = on_template_change(
+        template_name, current_template
+    )
+    refresh = refresh_data_entry_form(new_template, default_sheet, form_data)
+    return (new_template, sheet_update, *refresh)

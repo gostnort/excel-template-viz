@@ -765,26 +765,41 @@ body {
         const graphData = {
   "nodes": [
     {
+      "id": "download_gemma4_model.py",
+      "type": "module",
+      "collapsed": false,
+      "fullPath": "app\\download_gemma4_model.py",
+      "lines": 56
+    },
+    {
+      "id": "download_gemma4_model.py:main",
+      "label": "main",
+      "type": "entity",
+      "parent": "download_gemma4_model.py",
+      "lines": 56,
+      "entityType": "function"
+    },
+    {
+      "id": "download_gemma4_model.py:_",
+      "label": "_",
+      "type": "entity",
+      "parent": "download_gemma4_model.py",
+      "lines": 0,
+      "entityType": "function"
+    },
+    {
       "id": "gradio_main.py",
       "type": "module",
       "collapsed": false,
       "fullPath": "app\\gradio_main.py",
-      "lines": 278
+      "lines": 291
     },
     {
       "id": "gradio_main.py:build_app",
       "label": "build_app",
       "type": "entity",
       "parent": "gradio_main.py",
-      "lines": 179,
-      "entityType": "function"
-    },
-    {
-      "id": "gradio_main.py:on_template_change",
-      "label": "on_template_change",
-      "type": "entity",
-      "parent": "gradio_main.py",
-      "lines": 48,
+      "lines": 194,
       "entityType": "function"
     },
     {
@@ -793,6 +808,14 @@ body {
       "type": "entity",
       "parent": "gradio_main.py",
       "lines": 20,
+      "entityType": "function"
+    },
+    {
+      "id": "gradio_main.py:on_template_change",
+      "label": "on_template_change",
+      "type": "entity",
+      "parent": "gradio_main.py",
+      "lines": 47,
       "entityType": "function"
     },
     {
@@ -816,7 +839,15 @@ body {
       "label": "handle_shutdown",
       "type": "entity",
       "parent": "gradio_main.py",
-      "lines": 27,
+      "lines": 21,
+      "entityType": "function"
+    },
+    {
+      "id": "gradio_main.py:apply_template_and_refresh_form",
+      "label": "apply_template_and_refresh_form",
+      "type": "entity",
+      "parent": "gradio_main.py",
+      "lines": 5,
       "entityType": "function"
     },
     {
@@ -831,39 +862,7 @@ body {
       "type": "module",
       "collapsed": false,
       "fullPath": "app\\components\\gradio_config.py",
-      "lines": 1202
-    },
-    {
-      "id": "gradio_config.py:update_llm_test_columns",
-      "label": "update_llm_test_columns",
-      "type": "entity",
-      "parent": "gradio_config.py",
-      "lines": 65,
-      "entityType": "function"
-    },
-    {
-      "id": "gradio_config.py:_fetch_sheet_columns_and_samples",
-      "label": "_fetch_sheet_columns_and_samples",
-      "type": "entity",
-      "parent": "gradio_config.py",
-      "lines": 38,
-      "entityType": "function"
-    },
-    {
-      "id": "gradio_config.py:handle_yaml_auto_config",
-      "label": "handle_yaml_auto_config",
-      "type": "entity",
-      "parent": "gradio_config.py",
-      "lines": 187,
-      "entityType": "function"
-    },
-    {
-      "id": "gradio_config.py:run_llm_test_generation",
-      "label": "run_llm_test_generation",
-      "type": "entity",
-      "parent": "gradio_config.py",
-      "lines": 208,
-      "entityType": "function"
+      "lines": 1316
     },
     {
       "id": "gradio_config.py:on_template_change_load_config",
@@ -882,11 +881,27 @@ body {
       "entityType": "function"
     },
     {
+      "id": "gradio_config.py:handle_yaml_auto_config",
+      "label": "handle_yaml_auto_config",
+      "type": "entity",
+      "parent": "gradio_config.py",
+      "lines": 198,
+      "entityType": "function"
+    },
+    {
       "id": "gradio_config.py:prepare_llm_test_prompt",
       "label": "prepare_llm_test_prompt",
       "type": "entity",
       "parent": "gradio_config.py",
-      "lines": 88,
+      "lines": 83,
+      "entityType": "function"
+    },
+    {
+      "id": "gradio_config.py:run_llm_test_generation",
+      "label": "run_llm_test_generation",
+      "type": "entity",
+      "parent": "gradio_config.py",
+      "lines": 230,
       "entityType": "function"
     },
     {
@@ -918,7 +933,39 @@ body {
       "label": "_apply_column_mapping_to_config",
       "type": "entity",
       "parent": "gradio_config.py",
-      "lines": 54,
+      "lines": 49,
+      "entityType": "function"
+    },
+    {
+      "id": "gradio_config.py:load_llm_test_worksheets",
+      "label": "load_llm_test_worksheets",
+      "type": "entity",
+      "parent": "gradio_config.py",
+      "lines": 65,
+      "entityType": "function"
+    },
+    {
+      "id": "gradio_config.py:fetch_llm_test_columns",
+      "label": "fetch_llm_test_columns",
+      "type": "entity",
+      "parent": "gradio_config.py",
+      "lines": 81,
+      "entityType": "function"
+    },
+    {
+      "id": "gradio_config.py:_fetch_sheet_columns_and_samples",
+      "label": "_fetch_sheet_columns_and_samples",
+      "type": "entity",
+      "parent": "gradio_config.py",
+      "lines": 43,
+      "entityType": "function"
+    },
+    {
+      "id": "gradio_config.py:refresh_llm_test_from_datasource_worksheet",
+      "label": "refresh_llm_test_from_datasource_worksheet",
+      "type": "entity",
+      "parent": "gradio_config.py",
+      "lines": 18,
       "entityType": "function"
     },
     {
@@ -934,7 +981,7 @@ body {
       "label": "_gather_llm_test_sheet_data",
       "type": "entity",
       "parent": "gradio_config.py",
-      "lines": 17,
+      "lines": 22,
       "entityType": "function"
     },
     {
@@ -954,19 +1001,19 @@ body {
       "entityType": "function"
     },
     {
-      "id": "gradio_config.py:FieldMatchResult",
-      "label": "FieldMatchResult",
+      "id": "gradio_config.py:_disable_llm_test_columns",
+      "label": "_disable_llm_test_columns",
       "type": "entity",
       "parent": "gradio_config.py",
-      "lines": 9,
-      "entityType": "class"
+      "lines": 3,
+      "entityType": "function"
     },
     {
       "id": "gradio_config.py:build_config_tab",
       "label": "build_config_tab",
       "type": "entity",
       "parent": "gradio_config.py",
-      "lines": 163,
+      "lines": 164,
       "entityType": "function"
     },
     {
@@ -986,11 +1033,11 @@ body {
       "entityType": "function"
     },
     {
-      "id": "gradio_config.py:_format_llm_test_json",
-      "label": "_format_llm_test_json",
+      "id": "gradio_config.py:_resolve_column_map_entry",
+      "label": "_resolve_column_map_entry",
       "type": "entity",
       "parent": "gradio_config.py",
-      "lines": 46,
+      "lines": 16,
       "entityType": "function"
     },
     {
@@ -1039,6 +1086,14 @@ body {
       "type": "entity",
       "parent": "gradio_config.py",
       "lines": 2,
+      "entityType": "function"
+    },
+    {
+      "id": "gradio_config.py:_format_transformation_summary",
+      "label": "_format_transformation_summary",
+      "type": "entity",
+      "parent": "gradio_config.py",
+      "lines": 17,
       "entityType": "function"
     },
     {
@@ -1149,15 +1204,7 @@ body {
       "type": "module",
       "collapsed": false,
       "fullPath": "app\\components\\gradio_template_form.py",
-      "lines": 1023
-    },
-    {
-      "id": "gradio_template_form.py:handle_import_selected",
-      "label": "handle_import_selected",
-      "type": "entity",
-      "parent": "gradio_template_form.py",
-      "lines": 137,
-      "entityType": "function"
+      "lines": 1109
     },
     {
       "id": "gradio_template_form.py:handle_refresh_unrecorded",
@@ -1165,6 +1212,14 @@ body {
       "type": "entity",
       "parent": "gradio_template_form.py",
       "lines": 133,
+      "entityType": "function"
+    },
+    {
+      "id": "gradio_template_form.py:handle_import_selected",
+      "label": "handle_import_selected",
+      "type": "entity",
+      "parent": "gradio_template_form.py",
+      "lines": 137,
       "entityType": "function"
     },
     {
@@ -1204,7 +1259,7 @@ body {
       "label": "get_form_field_headers",
       "type": "entity",
       "parent": "gradio_template_form.py",
-      "lines": 26,
+      "lines": 9,
       "entityType": "function"
     },
     {
@@ -1213,6 +1268,14 @@ body {
       "type": "entity",
       "parent": "gradio_template_form.py",
       "lines": 53,
+      "entityType": "function"
+    },
+    {
+      "id": "gradio_template_form.py:apply_pasted_form_data",
+      "label": "apply_pasted_form_data",
+      "type": "entity",
+      "parent": "gradio_template_form.py",
+      "lines": 50,
       "entityType": "function"
     },
     {
@@ -1260,7 +1323,7 @@ body {
       "label": "read_area_form_values",
       "type": "entity",
       "parent": "gradio_template_form.py",
-      "lines": 40,
+      "lines": 42,
       "entityType": "function"
     },
     {
@@ -1276,7 +1339,15 @@ body {
       "label": "_build_field_updates",
       "type": "entity",
       "parent": "gradio_template_form.py",
-      "lines": 21,
+      "lines": 5,
+      "entityType": "function"
+    },
+    {
+      "id": "gradio_template_form.py:sync_form_fields_to_row",
+      "label": "sync_form_fields_to_row",
+      "type": "entity",
+      "parent": "gradio_template_form.py",
+      "lines": 16,
       "entityType": "function"
     },
     {
@@ -1376,6 +1447,54 @@ body {
       "entityType": "function"
     },
     {
+      "id": "gradio_template_form.py:_resolve_row_index",
+      "label": "_resolve_row_index",
+      "type": "entity",
+      "parent": "gradio_template_form.py",
+      "lines": 9,
+      "entityType": "function"
+    },
+    {
+      "id": "gradio_template_form.py:_row_values_for_headers",
+      "label": "_row_values_for_headers",
+      "type": "entity",
+      "parent": "gradio_template_form.py",
+      "lines": 2,
+      "entityType": "function"
+    },
+    {
+      "id": "gradio_template_form.py:_field_updates_for_row",
+      "label": "_field_updates_for_row",
+      "type": "entity",
+      "parent": "gradio_template_form.py",
+      "lines": 16,
+      "entityType": "function"
+    },
+    {
+      "id": "gradio_template_form.py:_paste_input_update",
+      "label": "_paste_input_update",
+      "type": "entity",
+      "parent": "gradio_template_form.py",
+      "lines": 6,
+      "entityType": "function"
+    },
+    {
+      "id": "gradio_template_form.py:_should_parse_paste",
+      "label": "_should_parse_paste",
+      "type": "entity",
+      "parent": "gradio_template_form.py",
+      "lines": 5,
+      "entityType": "function"
+    },
+    {
+      "id": "gradio_template_form.py:_begin_paste_parse",
+      "label": "_begin_paste_parse",
+      "type": "entity",
+      "parent": "gradio_template_form.py",
+      "lines": 2,
+      "entityType": "function"
+    },
+    {
       "id": "gradio_template_form.py:_begin_bulk_refresh",
       "label": "_begin_bulk_refresh",
       "type": "entity",
@@ -1404,7 +1523,7 @@ body {
       "label": "build_form_tab",
       "type": "entity",
       "parent": "gradio_template_form.py",
-      "lines": 144,
+      "lines": 155,
       "entityType": "function"
     },
     {
@@ -1413,6 +1532,93 @@ body {
       "type": "entity",
       "parent": "gradio_template_form.py",
       "lines": 18,
+      "entityType": "function"
+    },
+    {
+      "id": "cpu_features.py",
+      "type": "module",
+      "collapsed": false,
+      "fullPath": "app\\services\\cpu_features.py",
+      "lines": 168
+    },
+    {
+      "id": "cpu_features.py:_init_cpuid_leaf_fn",
+      "label": "_init_cpuid_leaf_fn",
+      "type": "entity",
+      "parent": "cpu_features.py",
+      "lines": 13,
+      "entityType": "function"
+    },
+    {
+      "id": "cpu_features.py:detect_simd_features",
+      "label": "detect_simd_features",
+      "type": "entity",
+      "parent": "cpu_features.py",
+      "lines": 41,
+      "entityType": "function"
+    },
+    {
+      "id": "cpu_features.py:cpuid_leaf",
+      "label": "cpuid_leaf",
+      "type": "entity",
+      "parent": "cpu_features.py",
+      "lines": 6,
+      "entityType": "function"
+    },
+    {
+      "id": "cpu_features.py:_flags_from_cpuid",
+      "label": "_flags_from_cpuid",
+      "type": "entity",
+      "parent": "cpu_features.py",
+      "lines": 19,
+      "entityType": "function"
+    },
+    {
+      "id": "cpu_features.py:recommended_llama_cpp_version",
+      "label": "recommended_llama_cpp_version",
+      "type": "entity",
+      "parent": "cpu_features.py",
+      "lines": 6,
+      "entityType": "function"
+    },
+    {
+      "id": "cpu_features.py:llama_cpp_install_command",
+      "label": "llama_cpp_install_command",
+      "type": "entity",
+      "parent": "cpu_features.py",
+      "lines": 11,
+      "entityType": "function"
+    },
+    {
+      "id": "cpu_features.py:_is_x86",
+      "label": "_is_x86",
+      "type": "entity",
+      "parent": "cpu_features.py",
+      "lines": 4,
+      "entityType": "function"
+    },
+    {
+      "id": "cpu_features.py:_cpuid_leaf_windows",
+      "label": "_cpuid_leaf_windows",
+      "type": "entity",
+      "parent": "cpu_features.py",
+      "lines": 40,
+      "entityType": "function"
+    },
+    {
+      "id": "cpu_features.py:_flags_from_windows_kernel",
+      "label": "_flags_from_windows_kernel",
+      "type": "entity",
+      "parent": "cpu_features.py",
+      "lines": 14,
+      "entityType": "function"
+    },
+    {
+      "id": "cpu_features.py:_flags_from_proc_cpuinfo",
+      "label": "_flags_from_proc_cpuinfo",
+      "type": "entity",
+      "parent": "cpu_features.py",
+      "lines": 14,
       "entityType": "function"
     },
     {
@@ -1736,30 +1942,14 @@ body {
       "type": "module",
       "collapsed": false,
       "fullPath": "app\\services\\gemma4_field_matcher.py",
-      "lines": 992
+      "lines": 1170
     },
     {
-      "id": "gemma4_field_matcher.py:get_available_memory_gb",
-      "label": "get_available_memory_gb",
+      "id": "gemma4_field_matcher.py:_llama_cpp_install_cmd",
+      "label": "_llama_cpp_install_cmd",
       "type": "entity",
       "parent": "gemma4_field_matcher.py",
-      "lines": 13,
-      "entityType": "function"
-    },
-    {
-      "id": "gemma4_field_matcher.py:_check_llm_dependencies",
-      "label": "_check_llm_dependencies",
-      "type": "entity",
-      "parent": "gemma4_field_matcher.py",
-      "lines": 28,
-      "entityType": "function"
-    },
-    {
-      "id": "gemma4_field_matcher.py:_format_model_load_error",
-      "label": "_format_model_load_error",
-      "type": "entity",
-      "parent": "gemma4_field_matcher.py",
-      "lines": 14,
+      "lines": 3,
       "entityType": "function"
     },
     {
@@ -1768,6 +1958,46 @@ body {
       "type": "entity",
       "parent": "gemma4_field_matcher.py",
       "lines": 0,
+      "entityType": "function"
+    },
+    {
+      "id": "gemma4_field_matcher.py:_illegal_instruction_hint",
+      "label": "_illegal_instruction_hint",
+      "type": "entity",
+      "parent": "gemma4_field_matcher.py",
+      "lines": 16,
+      "entityType": "function"
+    },
+    {
+      "id": "gemma4_field_matcher.py:_warn_llama_cpp_version_mismatch",
+      "label": "_warn_llama_cpp_version_mismatch",
+      "type": "entity",
+      "parent": "gemma4_field_matcher.py",
+      "lines": 12,
+      "entityType": "function"
+    },
+    {
+      "id": "gemma4_field_matcher.py:_format_model_load_error",
+      "label": "_format_model_load_error",
+      "type": "entity",
+      "parent": "gemma4_field_matcher.py",
+      "lines": 32,
+      "entityType": "function"
+    },
+    {
+      "id": "gemma4_field_matcher.py:_probe_llama_cpp",
+      "label": "_probe_llama_cpp",
+      "type": "entity",
+      "parent": "gemma4_field_matcher.py",
+      "lines": 42,
+      "entityType": "function"
+    },
+    {
+      "id": "gemma4_field_matcher.py:get_available_memory_gb",
+      "label": "get_available_memory_gb",
+      "type": "entity",
+      "parent": "gemma4_field_matcher.py",
+      "lines": 13,
       "entityType": "function"
     },
     {
@@ -1783,7 +2013,7 @@ body {
       "label": "ensure_model_downloaded",
       "type": "entity",
       "parent": "gemma4_field_matcher.py",
-      "lines": 812,
+      "lines": 970,
       "entityType": "function"
     },
     {
@@ -1791,15 +2021,7 @@ body {
       "label": "_resolve_model_dir",
       "type": "entity",
       "parent": "gemma4_field_matcher.py",
-      "lines": 19,
-      "entityType": "function"
-    },
-    {
-      "id": "gemma4_field_matcher.py:get_or_create_field_matcher",
-      "label": "get_or_create_field_matcher",
-      "type": "entity",
-      "parent": "gemma4_field_matcher.py",
-      "lines": 26,
+      "lines": 17,
       "entityType": "function"
     },
     {
@@ -1880,14 +2102,6 @@ body {
       "type": "entity",
       "parent": "gemma4_field_matcher.py",
       "lines": 7,
-      "entityType": "function"
-    },
-    {
-      "id": "gemma4_field_matcher.py:create_field_matcher",
-      "label": "create_field_matcher",
-      "type": "entity",
-      "parent": "gemma4_field_matcher.py",
-      "lines": 15,
       "entityType": "function"
     },
     {
@@ -2101,7 +2315,7 @@ body {
       "type": "module",
       "collapsed": false,
       "fullPath": "app\\services\\paste_parse_config.py",
-      "lines": 631
+      "lines": 711
     },
     {
       "id": "paste_parse_config.py:PasteParseConfig",
@@ -2116,15 +2330,31 @@ body {
       "label": "build_empty_mapping_yaml",
       "type": "entity",
       "parent": "paste_parse_config.py",
-      "lines": 10,
+      "lines": 13,
       "entityType": "function"
     },
     {
-      "id": "paste_parse_config.py:_rule_to_dict",
-      "label": "_rule_to_dict",
+      "id": "paste_parse_config.py:build_order_entries_from_mappings",
+      "label": "build_order_entries_from_mappings",
       "type": "entity",
       "parent": "paste_parse_config.py",
-      "lines": 10,
+      "lines": 21,
+      "entityType": "function"
+    },
+    {
+      "id": "paste_parse_config.py:create_default_config_from_template",
+      "label": "create_default_config_from_template",
+      "type": "entity",
+      "parent": "paste_parse_config.py",
+      "lines": 118,
+      "entityType": "function"
+    },
+    {
+      "id": "paste_parse_config.py:structural_order_col_offset",
+      "label": "structural_order_col_offset",
+      "type": "entity",
+      "parent": "paste_parse_config.py",
+      "lines": 12,
       "entityType": "function"
     },
     {
@@ -2144,11 +2374,27 @@ body {
       "entityType": "function"
     },
     {
-      "id": "paste_parse_config.py:create_default_config_from_template",
-      "label": "create_default_config_from_template",
+      "id": "paste_parse_config.py:_rule_to_dict",
+      "label": "_rule_to_dict",
       "type": "entity",
       "parent": "paste_parse_config.py",
-      "lines": 128,
+      "lines": 10,
+      "entityType": "function"
+    },
+    {
+      "id": "paste_parse_config.py:_meaningful_order_entries",
+      "label": "_meaningful_order_entries",
+      "type": "entity",
+      "parent": "paste_parse_config.py",
+      "lines": 12,
+      "entityType": "function"
+    },
+    {
+      "id": "paste_parse_config.py:config_to_yaml",
+      "label": "config_to_yaml",
+      "type": "entity",
+      "parent": "paste_parse_config.py",
+      "lines": 39,
       "entityType": "function"
     },
     {
@@ -2208,19 +2454,27 @@ body {
       "entityType": "function"
     },
     {
-      "id": "paste_parse_config.py:config_to_yaml",
-      "label": "config_to_yaml",
-      "type": "entity",
-      "parent": "paste_parse_config.py",
-      "lines": 36,
-      "entityType": "function"
-    },
-    {
       "id": "paste_parse_config.py:_format_rule_lines",
       "label": "_format_rule_lines",
       "type": "entity",
       "parent": "paste_parse_config.py",
       "lines": 13,
+      "entityType": "function"
+    },
+    {
+      "id": "paste_parse_config.py:_format_section_lines",
+      "label": "_format_section_lines",
+      "type": "entity",
+      "parent": "paste_parse_config.py",
+      "lines": 9,
+      "entityType": "function"
+    },
+    {
+      "id": "paste_parse_config.py:_normalize_field_rule_lists",
+      "label": "_normalize_field_rule_lists",
+      "type": "entity",
+      "parent": "paste_parse_config.py",
+      "lines": 19,
       "entityType": "function"
     },
     {
@@ -2312,6 +2566,14 @@ body {
       "entityType": "function"
     },
     {
+      "id": "paste_parse_config.py:is_structural_order_column",
+      "label": "is_structural_order_column",
+      "type": "entity",
+      "parent": "paste_parse_config.py",
+      "lines": 3,
+      "entityType": "function"
+    },
+    {
       "id": "paste_parse_config.py:_default_order_entry",
       "label": "_default_order_entry",
       "type": "entity",
@@ -2328,11 +2590,11 @@ body {
       "entityType": "function"
     },
     {
-      "id": "paste_parse_config.py:_normalize_field_rule_lists",
-      "label": "_normalize_field_rule_lists",
+      "id": "paste_parse_config.py:_hoist_sections_from_order",
+      "label": "_hoist_sections_from_order",
       "type": "entity",
       "parent": "paste_parse_config.py",
-      "lines": 19,
+      "lines": 27,
       "entityType": "function"
     },
     {
@@ -2626,14 +2888,34 @@ body {
   ],
   "links": [
     {
-      "source": "gradio_main.py",
-      "target": "gradio_main.py:build_app",
+      "source": "download_gemma4_model.py",
+      "target": "download_gemma4_model.py:main",
       "type": "module-entity"
     },
     {
-      "source": "gradio_main.py:build_app",
-      "target": "gradio_template_form.py:build_form_tab",
+      "source": "download_gemma4_model.py:main",
+      "target": "gemma4_field_matcher.py:find_model_file",
       "type": "dependency"
+    },
+    {
+      "source": "download_gemma4_model.py:main",
+      "target": "gemma4_field_matcher.py:ensure_model_downloaded",
+      "type": "dependency"
+    },
+    {
+      "source": "download_gemma4_model.py:main",
+      "target": "download_gemma4_model.py:main",
+      "type": "dependency"
+    },
+    {
+      "source": "download_gemma4_model.py",
+      "target": "download_gemma4_model.py:_",
+      "type": "module-entity"
+    },
+    {
+      "source": "gradio_main.py",
+      "target": "gradio_main.py:build_app",
+      "type": "module-entity"
     },
     {
       "source": "gradio_main.py:build_app",
@@ -2642,27 +2924,12 @@ body {
     },
     {
       "source": "gradio_main.py:build_app",
+      "target": "gradio_template_form.py:build_form_tab",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_main.py:build_app",
       "target": "gradio_data_source_settings.py:build_datasource_tab",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_main.py",
-      "target": "gradio_main.py:on_template_change",
-      "type": "module-entity"
-    },
-    {
-      "source": "gradio_main.py:on_template_change",
-      "target": "gradio_template_form.py:resolve_default_sheet_name",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_main.py:on_template_change",
-      "target": "registry.py:load_templates",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_main.py:on_template_change",
-      "target": "excel_parser.py:list_sheet_names",
       "type": "dependency"
     },
     {
@@ -2677,8 +2944,38 @@ body {
     },
     {
       "source": "gradio_main.py",
+      "target": "gradio_main.py:on_template_change",
+      "type": "module-entity"
+    },
+    {
+      "source": "gradio_main.py:on_template_change",
+      "target": "registry.py:load_templates",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_main.py:on_template_change",
+      "target": "gradio_template_form.py:resolve_default_sheet_name",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_main.py:on_template_change",
+      "target": "excel_parser.py:list_sheet_names",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_main.py",
       "target": "gradio_main.py:_",
       "type": "module-entity"
+    },
+    {
+      "source": "gradio_main.py:_",
+      "target": "gradio_template_form.py:refresh_data_entry_form",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_main.py:_",
+      "target": "gradio_main.py:on_template_change",
+      "type": "dependency"
     },
     {
       "source": "gradio_main.py",
@@ -2691,209 +2988,9 @@ body {
       "type": "module-entity"
     },
     {
-      "source": "gradio_config.py",
-      "target": "gradio_config.py:update_llm_test_columns",
+      "source": "gradio_main.py",
+      "target": "gradio_main.py:apply_template_and_refresh_form",
       "type": "module-entity"
-    },
-    {
-      "source": "gradio_config.py:update_llm_test_columns",
-      "target": "data_source.py:load_template_data_source",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py",
-      "target": "gradio_config.py:_fetch_sheet_columns_and_samples",
-      "type": "module-entity"
-    },
-    {
-      "source": "gradio_config.py:_fetch_sheet_columns_and_samples",
-      "target": "data_source.py:load_template_data_source",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py",
-      "target": "gradio_config.py:handle_yaml_auto_config",
-      "type": "module-entity"
-    },
-    {
-      "source": "gradio_config.py:handle_yaml_auto_config",
-      "target": "data_source.py:load_template_data_source",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:handle_yaml_auto_config",
-      "target": "gemma4_field_matcher.py:find_model_file",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:handle_yaml_auto_config",
-      "target": "gemma4_field_matcher.py:ensure_model_downloaded",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:handle_yaml_auto_config",
-      "target": "gemma4_field_matcher.py:create_field_matcher",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:handle_yaml_auto_config",
-      "target": "gemma4_field_matcher.py:get_or_create_field_matcher",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:handle_yaml_auto_config",
-      "target": "gemma4_field_matcher.py:get_last_load_error",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:handle_yaml_auto_config",
-      "target": "paste_parse_config.py:load_paste_parse_config",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:handle_yaml_auto_config",
-      "target": "paste_parse_config.py:config_to_yaml",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:handle_yaml_auto_config",
-      "target": "gradio_config.py:_apply_column_mapping_to_config",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:handle_yaml_auto_config",
-      "target": "gradio_config.py:_fetch_sheet_columns_and_samples",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:handle_yaml_auto_config",
-      "target": "gradio_config.py:_exact_match_columns",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py",
-      "target": "gradio_config.py:run_llm_test_generation",
-      "type": "module-entity"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "data_source.py:load_template_data_source",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gemma4_field_matcher.py:find_model_file",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gemma4_field_matcher.py:ensure_model_downloaded",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gemma4_field_matcher.py:create_field_matcher",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gemma4_field_matcher.py:get_or_create_field_matcher",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gemma4_field_matcher.py:get_last_load_error",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "paste_parse_config.py:load_paste_parse_config",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gradio_config.py:_format_elapsed_seconds",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gradio_config.py:_running_elapsed_label",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gradio_config.py:_final_elapsed_label",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gradio_config.py:_format_llm_test_json",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gradio_config.py:_format_llm_test_json",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gradio_config.py:_format_llm_test_json",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gradio_config.py:_format_llm_test_json",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gradio_config.py:_format_llm_test_json",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gradio_config.py:_format_llm_test_json",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gradio_config.py:_is_llm_test_cancelled",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gradio_config.py:_is_llm_test_cancelled",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gradio_config.py:_is_llm_test_cancelled",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gradio_config.py:_is_llm_test_cancelled",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gradio_config.py:_is_llm_test_cancelled",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gradio_config.py:_is_llm_test_cancelled",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gradio_config.py:FieldMatchResult",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_config.py:run_llm_test_generation",
-      "target": "gradio_config.py:_build_llm_test_yaml_from_mappings",
-      "type": "dependency"
     },
     {
       "source": "gradio_config.py",
@@ -2932,6 +3029,56 @@ body {
     },
     {
       "source": "gradio_config.py",
+      "target": "gradio_config.py:handle_yaml_auto_config",
+      "type": "module-entity"
+    },
+    {
+      "source": "gradio_config.py:handle_yaml_auto_config",
+      "target": "paste_parse_config.py:load_paste_parse_config",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:handle_yaml_auto_config",
+      "target": "paste_parse_config.py:config_to_yaml",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:handle_yaml_auto_config",
+      "target": "data_source.py:load_template_data_source",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:handle_yaml_auto_config",
+      "target": "gemma4_field_matcher.py:find_model_file",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:handle_yaml_auto_config",
+      "target": "gemma4_field_matcher.py:ensure_model_downloaded",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:handle_yaml_auto_config",
+      "target": "gemma4_field_matcher.py:get_last_load_error",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:handle_yaml_auto_config",
+      "target": "gradio_config.py:_apply_column_mapping_to_config",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:handle_yaml_auto_config",
+      "target": "gradio_config.py:_fetch_sheet_columns_and_samples",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:handle_yaml_auto_config",
+      "target": "gradio_config.py:_exact_match_columns",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py",
       "target": "gradio_config.py:prepare_llm_test_prompt",
       "type": "module-entity"
     },
@@ -2956,8 +3103,98 @@ body {
       "type": "dependency"
     },
     {
-      "source": "gradio_config.py:prepare_llm_test_prompt",
-      "target": "gradio_config.py:_format_llm_test_json",
+      "source": "gradio_config.py",
+      "target": "gradio_config.py:run_llm_test_generation",
+      "type": "module-entity"
+    },
+    {
+      "source": "gradio_config.py:run_llm_test_generation",
+      "target": "paste_parse_config.py:load_paste_parse_config",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:run_llm_test_generation",
+      "target": "data_source.py:load_template_data_source",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:run_llm_test_generation",
+      "target": "gemma4_field_matcher.py:find_model_file",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:run_llm_test_generation",
+      "target": "gemma4_field_matcher.py:ensure_model_downloaded",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:run_llm_test_generation",
+      "target": "gemma4_field_matcher.py:get_last_load_error",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:run_llm_test_generation",
+      "target": "gradio_config.py:_format_elapsed_seconds",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:run_llm_test_generation",
+      "target": "gradio_config.py:_running_elapsed_label",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:run_llm_test_generation",
+      "target": "gradio_config.py:_final_elapsed_label",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:run_llm_test_generation",
+      "target": "gradio_config.py:_is_llm_test_cancelled",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:run_llm_test_generation",
+      "target": "gradio_config.py:_is_llm_test_cancelled",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:run_llm_test_generation",
+      "target": "gradio_config.py:_is_llm_test_cancelled",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:run_llm_test_generation",
+      "target": "gradio_config.py:_is_llm_test_cancelled",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:run_llm_test_generation",
+      "target": "gradio_config.py:_is_llm_test_cancelled",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:run_llm_test_generation",
+      "target": "gradio_config.py:_is_llm_test_cancelled",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:run_llm_test_generation",
+      "target": "gradio_config.py:_is_llm_test_cancelled",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:run_llm_test_generation",
+      "target": "gradio_config.py:_is_llm_test_cancelled",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:run_llm_test_generation",
+      "target": "gradio_config.py:_format_transformation_summary",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:run_llm_test_generation",
+      "target": "gradio_config.py:_build_llm_test_yaml_from_mappings",
       "type": "dependency"
     },
     {
@@ -2993,6 +3230,11 @@ body {
     {
       "source": "gradio_config.py:_",
       "target": "paste_parse_config.py:config_to_yaml",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:_",
+      "target": "paste_parse_config.py:PasteParseConfig",
       "type": "dependency"
     },
     {
@@ -3042,22 +3284,62 @@ body {
     },
     {
       "source": "gradio_config.py:_apply_column_mapping_to_config",
-      "target": "paste_parse_config.py:_default_order_entry",
+      "target": "paste_parse_config.py:build_order_entries_from_mappings",
       "type": "dependency"
     },
     {
       "source": "gradio_config.py:_apply_column_mapping_to_config",
-      "target": "paste_parse_config.py:_default_order_entry",
+      "target": "gradio_config.py:_resolve_column_map_entry",
       "type": "dependency"
     },
     {
       "source": "gradio_config.py:_apply_column_mapping_to_config",
-      "target": "paste_parse_config.py:_order_entry_to_dict",
+      "target": "gradio_config.py:_resolve_column_map_entry",
       "type": "dependency"
     },
     {
-      "source": "gradio_config.py:_apply_column_mapping_to_config",
-      "target": "paste_parse_config.py:PasteParseConfig",
+      "source": "gradio_config.py",
+      "target": "gradio_config.py:load_llm_test_worksheets",
+      "type": "module-entity"
+    },
+    {
+      "source": "gradio_config.py:load_llm_test_worksheets",
+      "target": "data_source.py:load_template_data_source",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py",
+      "target": "gradio_config.py:fetch_llm_test_columns",
+      "type": "module-entity"
+    },
+    {
+      "source": "gradio_config.py:fetch_llm_test_columns",
+      "target": "data_source.py:load_template_data_source",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py",
+      "target": "gradio_config.py:_fetch_sheet_columns_and_samples",
+      "type": "module-entity"
+    },
+    {
+      "source": "gradio_config.py:_fetch_sheet_columns_and_samples",
+      "target": "data_source.py:load_template_data_source",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py",
+      "target": "gradio_config.py:refresh_llm_test_from_datasource_worksheet",
+      "type": "module-entity"
+    },
+    {
+      "source": "gradio_config.py:refresh_llm_test_from_datasource_worksheet",
+      "target": "gradio_config.py:load_llm_test_worksheets",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_config.py:refresh_llm_test_from_datasource_worksheet",
+      "target": "gradio_config.py:fetch_llm_test_columns",
       "type": "dependency"
     },
     {
@@ -3102,7 +3384,7 @@ body {
     },
     {
       "source": "gradio_config.py",
-      "target": "gradio_config.py:FieldMatchResult",
+      "target": "gradio_config.py:_disable_llm_test_columns",
       "type": "module-entity"
     },
     {
@@ -3122,7 +3404,7 @@ body {
     },
     {
       "source": "gradio_config.py",
-      "target": "gradio_config.py:_format_llm_test_json",
+      "target": "gradio_config.py:_resolve_column_map_entry",
       "type": "module-entity"
     },
     {
@@ -3153,6 +3435,11 @@ body {
     {
       "source": "gradio_config.py",
       "target": "gradio_config.py:_is_llm_test_cancelled",
+      "type": "module-entity"
+    },
+    {
+      "source": "gradio_config.py",
+      "target": "gradio_config.py:_format_transformation_summary",
       "type": "module-entity"
     },
     {
@@ -3247,13 +3534,68 @@ body {
     },
     {
       "source": "gradio_template_form.py",
-      "target": "gradio_template_form.py:handle_import_selected",
+      "target": "gradio_template_form.py:handle_refresh_unrecorded",
       "type": "module-entity"
     },
     {
-      "source": "gradio_template_form.py:handle_import_selected",
-      "target": "gemma4_field_matcher.py:create_field_matcher",
+      "source": "gradio_template_form.py:handle_refresh_unrecorded",
+      "target": "data_source.py:load_template_data_source",
       "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:handle_refresh_unrecorded",
+      "target": "import_history.py:load_import_history",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:handle_refresh_unrecorded",
+      "target": "gradio_template_form.py:update_import_stats",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:handle_refresh_unrecorded",
+      "target": "gradio_template_form.py:update_import_stats",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:handle_refresh_unrecorded",
+      "target": "gradio_template_form.py:update_import_stats",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:handle_refresh_unrecorded",
+      "target": "gradio_template_form.py:update_import_stats",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:handle_refresh_unrecorded",
+      "target": "gradio_template_form.py:update_import_stats",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:handle_refresh_unrecorded",
+      "target": "gradio_template_form.py:update_import_stats",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:handle_refresh_unrecorded",
+      "target": "gradio_template_form.py:update_import_stats",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:handle_refresh_unrecorded",
+      "target": "gradio_template_form.py:_load_template_sheet_df",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:handle_refresh_unrecorded",
+      "target": "gradio_template_form.py:_build_import_preview_rows",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py",
+      "target": "gradio_template_form.py:handle_import_selected",
+      "type": "module-entity"
     },
     {
       "source": "gradio_template_form.py:handle_import_selected",
@@ -3318,66 +3660,6 @@ body {
     {
       "source": "gradio_template_form.py:handle_import_selected",
       "target": "gradio_template_form.py:_is_row_selected",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_template_form.py",
-      "target": "gradio_template_form.py:handle_refresh_unrecorded",
-      "type": "module-entity"
-    },
-    {
-      "source": "gradio_template_form.py:handle_refresh_unrecorded",
-      "target": "data_source.py:load_template_data_source",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_template_form.py:handle_refresh_unrecorded",
-      "target": "import_history.py:load_import_history",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_template_form.py:handle_refresh_unrecorded",
-      "target": "gradio_template_form.py:update_import_stats",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_template_form.py:handle_refresh_unrecorded",
-      "target": "gradio_template_form.py:update_import_stats",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_template_form.py:handle_refresh_unrecorded",
-      "target": "gradio_template_form.py:update_import_stats",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_template_form.py:handle_refresh_unrecorded",
-      "target": "gradio_template_form.py:update_import_stats",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_template_form.py:handle_refresh_unrecorded",
-      "target": "gradio_template_form.py:update_import_stats",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_template_form.py:handle_refresh_unrecorded",
-      "target": "gradio_template_form.py:update_import_stats",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_template_form.py:handle_refresh_unrecorded",
-      "target": "gradio_template_form.py:update_import_stats",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_template_form.py:handle_refresh_unrecorded",
-      "target": "gradio_template_form.py:_load_template_sheet_df",
-      "type": "dependency"
-    },
-    {
-      "source": "gradio_template_form.py:handle_refresh_unrecorded",
-      "target": "gradio_template_form.py:_build_import_preview_rows",
       "type": "dependency"
     },
     {
@@ -3462,7 +3744,7 @@ body {
     },
     {
       "source": "gradio_template_form.py:get_form_field_headers",
-      "target": "gradio_template_form.py:_resolve_field_header_name",
+      "target": "paste_parse_config.py:structural_order_col_offset",
       "type": "dependency"
     },
     {
@@ -3498,6 +3780,46 @@ body {
     {
       "source": "gradio_template_form.py:refresh_data_entry_form",
       "target": "gradio_template_form.py:_build_field_updates",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py",
+      "target": "gradio_template_form.py:apply_pasted_form_data",
+      "type": "module-entity"
+    },
+    {
+      "source": "gradio_template_form.py:apply_pasted_form_data",
+      "target": "paste_parse_config.py:load_paste_parse_config",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:apply_pasted_form_data",
+      "target": "paste_parse_config.py:parse_text_with_config",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:apply_pasted_form_data",
+      "target": "gradio_template_form.py:_field_updates_for_row",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:apply_pasted_form_data",
+      "target": "gradio_template_form.py:get_form_field_headers",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:apply_pasted_form_data",
+      "target": "gradio_template_form.py:_should_parse_paste",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:apply_pasted_form_data",
+      "target": "gradio_template_form.py:_resolve_row_index",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:apply_pasted_form_data",
+      "target": "gradio_template_form.py:_row_values_for_headers",
       "type": "dependency"
     },
     {
@@ -3686,13 +4008,63 @@ body {
       "type": "dependency"
     },
     {
+      "source": "gradio_template_form.py:_",
+      "target": "gradio_template_form.py:_build_row_updates",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:_",
+      "target": "gradio_template_form.py:_paste_input_update",
+      "type": "dependency"
+    },
+    {
       "source": "gradio_template_form.py",
       "target": "gradio_template_form.py:_build_field_updates",
       "type": "module-entity"
     },
     {
       "source": "gradio_template_form.py:_build_field_updates",
-      "target": "gradio_template_form.py:_build_row_updates",
+      "target": "gradio_template_form.py:_field_updates_for_row",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py",
+      "target": "gradio_template_form.py:sync_form_fields_to_row",
+      "type": "module-entity"
+    },
+    {
+      "source": "gradio_template_form.py:sync_form_fields_to_row",
+      "target": "gradio_template_form.py:_field_updates_for_row",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:sync_form_fields_to_row",
+      "target": "gradio_template_form.py:_field_updates_for_row",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:sync_form_fields_to_row",
+      "target": "gradio_template_form.py:_empty_field_updates",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:sync_form_fields_to_row",
+      "target": "gradio_template_form.py:_empty_field_updates",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:sync_form_fields_to_row",
+      "target": "gradio_template_form.py:get_form_field_headers",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:sync_form_fields_to_row",
+      "target": "gradio_template_form.py:_resolve_row_index",
+      "type": "dependency"
+    },
+    {
+      "source": "gradio_template_form.py:sync_form_fields_to_row",
+      "target": "gradio_template_form.py:_row_values_for_headers",
       "type": "dependency"
     },
     {
@@ -3772,6 +4144,36 @@ body {
     },
     {
       "source": "gradio_template_form.py",
+      "target": "gradio_template_form.py:_resolve_row_index",
+      "type": "module-entity"
+    },
+    {
+      "source": "gradio_template_form.py",
+      "target": "gradio_template_form.py:_row_values_for_headers",
+      "type": "module-entity"
+    },
+    {
+      "source": "gradio_template_form.py",
+      "target": "gradio_template_form.py:_field_updates_for_row",
+      "type": "module-entity"
+    },
+    {
+      "source": "gradio_template_form.py",
+      "target": "gradio_template_form.py:_paste_input_update",
+      "type": "module-entity"
+    },
+    {
+      "source": "gradio_template_form.py",
+      "target": "gradio_template_form.py:_should_parse_paste",
+      "type": "module-entity"
+    },
+    {
+      "source": "gradio_template_form.py",
+      "target": "gradio_template_form.py:_begin_paste_parse",
+      "type": "module-entity"
+    },
+    {
+      "source": "gradio_template_form.py",
       "target": "gradio_template_form.py:_begin_bulk_refresh",
       "type": "module-entity"
     },
@@ -3793,6 +4195,116 @@ body {
     {
       "source": "gradio_template_form.py",
       "target": "gradio_template_form.py:handle_export",
+      "type": "module-entity"
+    },
+    {
+      "source": "cpu_features.py",
+      "target": "cpu_features.py:_init_cpuid_leaf_fn",
+      "type": "module-entity"
+    },
+    {
+      "source": "cpu_features.py:_init_cpuid_leaf_fn",
+      "target": "cpu_features.py:_is_x86",
+      "type": "dependency"
+    },
+    {
+      "source": "cpu_features.py",
+      "target": "cpu_features.py:detect_simd_features",
+      "type": "module-entity"
+    },
+    {
+      "source": "cpu_features.py:detect_simd_features",
+      "target": "cpu_features.py:_is_x86",
+      "type": "dependency"
+    },
+    {
+      "source": "cpu_features.py:detect_simd_features",
+      "target": "cpu_features.py:_flags_from_proc_cpuinfo",
+      "type": "dependency"
+    },
+    {
+      "source": "cpu_features.py:detect_simd_features",
+      "target": "cpu_features.py:_flags_from_windows_kernel",
+      "type": "dependency"
+    },
+    {
+      "source": "cpu_features.py:detect_simd_features",
+      "target": "cpu_features.py:_flags_from_cpuid",
+      "type": "dependency"
+    },
+    {
+      "source": "cpu_features.py:detect_simd_features",
+      "target": "cpu_features.py:_flags_from_cpuid",
+      "type": "dependency"
+    },
+    {
+      "source": "cpu_features.py",
+      "target": "cpu_features.py:cpuid_leaf",
+      "type": "module-entity"
+    },
+    {
+      "source": "cpu_features.py:cpuid_leaf",
+      "target": "cpu_features.py:_init_cpuid_leaf_fn",
+      "type": "dependency"
+    },
+    {
+      "source": "cpu_features.py",
+      "target": "cpu_features.py:_flags_from_cpuid",
+      "type": "module-entity"
+    },
+    {
+      "source": "cpu_features.py:_flags_from_cpuid",
+      "target": "cpu_features.py:cpuid_leaf",
+      "type": "dependency"
+    },
+    {
+      "source": "cpu_features.py:_flags_from_cpuid",
+      "target": "cpu_features.py:cpuid_leaf",
+      "type": "dependency"
+    },
+    {
+      "source": "cpu_features.py:_flags_from_cpuid",
+      "target": "cpu_features.py:cpuid_leaf",
+      "type": "dependency"
+    },
+    {
+      "source": "cpu_features.py",
+      "target": "cpu_features.py:recommended_llama_cpp_version",
+      "type": "module-entity"
+    },
+    {
+      "source": "cpu_features.py:recommended_llama_cpp_version",
+      "target": "cpu_features.py:detect_simd_features",
+      "type": "dependency"
+    },
+    {
+      "source": "cpu_features.py",
+      "target": "cpu_features.py:llama_cpp_install_command",
+      "type": "module-entity"
+    },
+    {
+      "source": "cpu_features.py:llama_cpp_install_command",
+      "target": "cpu_features.py:recommended_llama_cpp_version",
+      "type": "dependency"
+    },
+    {
+      "source": "cpu_features.py",
+      "target": "cpu_features.py:_is_x86",
+      "type": "module-entity"
+    },
+    {
+      "source": "cpu_features.py",
+      "target": "cpu_features.py:_cpuid_leaf_windows",
+      "type": "module-entity"
+    },
+    {
+      "source": "cpu_features.py",
+      "target": "cpu_features.py:_flags_from_windows_kernel",
+      "type": "module-entity"
+    },
+    {
+      "source": "cpu_features.py",
+      "target": "cpu_features.py:_flags_from_proc_cpuinfo",
       "type": "module-entity"
     },
     {
@@ -4152,37 +4664,12 @@ body {
     },
     {
       "source": "gemma4_field_matcher.py",
-      "target": "gemma4_field_matcher.py:get_available_memory_gb",
+      "target": "gemma4_field_matcher.py:_llama_cpp_install_cmd",
       "type": "module-entity"
     },
     {
-      "source": "gemma4_field_matcher.py:get_available_memory_gb",
-      "target": "gemma4_field_matcher.py:_pip_install_hint",
-      "type": "dependency"
-    },
-    {
-      "source": "gemma4_field_matcher.py",
-      "target": "gemma4_field_matcher.py:_check_llm_dependencies",
-      "type": "module-entity"
-    },
-    {
-      "source": "gemma4_field_matcher.py:_check_llm_dependencies",
-      "target": "gemma4_field_matcher.py:_pip_install_hint",
-      "type": "dependency"
-    },
-    {
-      "source": "gemma4_field_matcher.py",
-      "target": "gemma4_field_matcher.py:_format_model_load_error",
-      "type": "module-entity"
-    },
-    {
-      "source": "gemma4_field_matcher.py:_format_model_load_error",
-      "target": "gemma4_field_matcher.py:_pip_install_hint",
-      "type": "dependency"
-    },
-    {
-      "source": "gemma4_field_matcher.py:_format_model_load_error",
-      "target": "gemma4_field_matcher.py:_root_exception",
+      "source": "gemma4_field_matcher.py:_llama_cpp_install_cmd",
+      "target": "cpu_features.py:llama_cpp_install_command",
       "type": "dependency"
     },
     {
@@ -4192,6 +4679,116 @@ body {
     },
     {
       "source": "gemma4_field_matcher.py:_",
+      "target": "cpu_features.py:llama_cpp_install_command",
+      "type": "dependency"
+    },
+    {
+      "source": "gemma4_field_matcher.py:_",
+      "target": "gemma4_field_matcher.py:_pip_install_hint",
+      "type": "dependency"
+    },
+    {
+      "source": "gemma4_field_matcher.py:_",
+      "target": "gemma4_field_matcher.py:_llama_cpp_install_cmd",
+      "type": "dependency"
+    },
+    {
+      "source": "gemma4_field_matcher.py:_",
+      "target": "gemma4_field_matcher.py:_llama_cpp_install_cmd",
+      "type": "dependency"
+    },
+    {
+      "source": "gemma4_field_matcher.py",
+      "target": "gemma4_field_matcher.py:_illegal_instruction_hint",
+      "type": "module-entity"
+    },
+    {
+      "source": "gemma4_field_matcher.py:_illegal_instruction_hint",
+      "target": "cpu_features.py:detect_simd_features",
+      "type": "dependency"
+    },
+    {
+      "source": "gemma4_field_matcher.py",
+      "target": "gemma4_field_matcher.py:_warn_llama_cpp_version_mismatch",
+      "type": "module-entity"
+    },
+    {
+      "source": "gemma4_field_matcher.py:_warn_llama_cpp_version_mismatch",
+      "target": "cpu_features.py:detect_simd_features",
+      "type": "dependency"
+    },
+    {
+      "source": "gemma4_field_matcher.py:_warn_llama_cpp_version_mismatch",
+      "target": "cpu_features.py:recommended_llama_cpp_version",
+      "type": "dependency"
+    },
+    {
+      "source": "gemma4_field_matcher.py",
+      "target": "gemma4_field_matcher.py:_format_model_load_error",
+      "type": "module-entity"
+    },
+    {
+      "source": "gemma4_field_matcher.py:_format_model_load_error",
+      "target": "cpu_features.py:detect_simd_features",
+      "type": "dependency"
+    },
+    {
+      "source": "gemma4_field_matcher.py:_format_model_load_error",
+      "target": "gemma4_field_matcher.py:_pip_install_hint",
+      "type": "dependency"
+    },
+    {
+      "source": "gemma4_field_matcher.py:_format_model_load_error",
+      "target": "gemma4_field_matcher.py:_llama_cpp_install_cmd",
+      "type": "dependency"
+    },
+    {
+      "source": "gemma4_field_matcher.py:_format_model_load_error",
+      "target": "gemma4_field_matcher.py:_root_exception",
+      "type": "dependency"
+    },
+    {
+      "source": "gemma4_field_matcher.py",
+      "target": "gemma4_field_matcher.py:_probe_llama_cpp",
+      "type": "module-entity"
+    },
+    {
+      "source": "gemma4_field_matcher.py:_probe_llama_cpp",
+      "target": "cpu_features.py:recommended_llama_cpp_version",
+      "type": "dependency"
+    },
+    {
+      "source": "gemma4_field_matcher.py:_probe_llama_cpp",
+      "target": "gemma4_field_matcher.py:_pip_install_hint",
+      "type": "dependency"
+    },
+    {
+      "source": "gemma4_field_matcher.py:_probe_llama_cpp",
+      "target": "gemma4_field_matcher.py:_llama_cpp_install_cmd",
+      "type": "dependency"
+    },
+    {
+      "source": "gemma4_field_matcher.py:_probe_llama_cpp",
+      "target": "gemma4_field_matcher.py:_illegal_instruction_hint",
+      "type": "dependency"
+    },
+    {
+      "source": "gemma4_field_matcher.py:_probe_llama_cpp",
+      "target": "gemma4_field_matcher.py:_probe_llama_cpp",
+      "type": "dependency"
+    },
+    {
+      "source": "gemma4_field_matcher.py:_probe_llama_cpp",
+      "target": "gemma4_field_matcher.py:_warn_llama_cpp_version_mismatch",
+      "type": "dependency"
+    },
+    {
+      "source": "gemma4_field_matcher.py",
+      "target": "gemma4_field_matcher.py:get_available_memory_gb",
+      "type": "module-entity"
+    },
+    {
+      "source": "gemma4_field_matcher.py:get_available_memory_gb",
       "target": "gemma4_field_matcher.py:_pip_install_hint",
       "type": "dependency"
     },
@@ -4237,11 +4834,6 @@ body {
     },
     {
       "source": "gemma4_field_matcher.py:ensure_model_downloaded",
-      "target": "gemma4_field_matcher.py:_check_llm_dependencies",
-      "type": "dependency"
-    },
-    {
-      "source": "gemma4_field_matcher.py:ensure_model_downloaded",
       "target": "gemma4_field_matcher.py:get_available_memory_gb",
       "type": "dependency"
     },
@@ -4273,16 +4865,6 @@ body {
     {
       "source": "gemma4_field_matcher.py:_resolve_model_dir",
       "target": "gemma4_field_matcher.py:find_model_file",
-      "type": "dependency"
-    },
-    {
-      "source": "gemma4_field_matcher.py",
-      "target": "gemma4_field_matcher.py:get_or_create_field_matcher",
-      "type": "module-entity"
-    },
-    {
-      "source": "gemma4_field_matcher.py:get_or_create_field_matcher",
-      "target": "gemma4_field_matcher.py:create_field_matcher",
       "type": "dependency"
     },
     {
@@ -4363,11 +4945,6 @@ body {
     {
       "source": "gemma4_field_matcher.py",
       "target": "gemma4_field_matcher.py:find_model_file",
-      "type": "module-entity"
-    },
-    {
-      "source": "gemma4_field_matcher.py",
-      "target": "gemma4_field_matcher.py:create_field_matcher",
       "type": "module-entity"
     },
     {
@@ -4737,6 +5314,16 @@ body {
     },
     {
       "source": "paste_parse_config.py:build_empty_mapping_yaml",
+      "target": "paste_parse_config.py:_order_entry_to_dict",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py:build_empty_mapping_yaml",
+      "target": "paste_parse_config.py:is_structural_order_column",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py:build_empty_mapping_yaml",
       "target": "paste_parse_config.py:_default_order_entry",
       "type": "dependency"
     },
@@ -4752,63 +5339,38 @@ body {
     },
     {
       "source": "paste_parse_config.py",
-      "target": "paste_parse_config.py:_rule_to_dict",
+      "target": "paste_parse_config.py:build_order_entries_from_mappings",
       "type": "module-entity"
     },
     {
-      "source": "paste_parse_config.py:_rule_to_dict",
-      "target": "paste_parse_config.py:_is_unmapped",
-      "type": "dependency"
-    },
-    {
-      "source": "paste_parse_config.py",
+      "source": "paste_parse_config.py:build_order_entries_from_mappings",
       "target": "paste_parse_config.py:_order_entry_to_dict",
-      "type": "module-entity"
-    },
-    {
-      "source": "paste_parse_config.py:_order_entry_to_dict",
-      "target": "paste_parse_config.py:_is_unmapped",
       "type": "dependency"
     },
     {
-      "source": "paste_parse_config.py:_order_entry_to_dict",
+      "source": "paste_parse_config.py:build_order_entries_from_mappings",
+      "target": "paste_parse_config.py:is_structural_order_column",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py:build_order_entries_from_mappings",
       "target": "paste_parse_config.py:_default_order_entry",
-      "type": "dependency"
-    },
-    {
-      "source": "paste_parse_config.py:_order_entry_to_dict",
-      "target": "paste_parse_config.py:_normalize_regex_value",
-      "type": "dependency"
-    },
-    {
-      "source": "paste_parse_config.py",
-      "target": "paste_parse_config.py:_normalize_rule_dict",
-      "type": "module-entity"
-    },
-    {
-      "source": "paste_parse_config.py:_normalize_rule_dict",
-      "target": "paste_parse_config.py:_is_unmapped",
-      "type": "dependency"
-    },
-    {
-      "source": "paste_parse_config.py:_normalize_rule_dict",
-      "target": "paste_parse_config.py:_default_order_entry",
-      "type": "dependency"
-    },
-    {
-      "source": "paste_parse_config.py:_normalize_rule_dict",
-      "target": "paste_parse_config.py:_default_order_entry",
-      "type": "dependency"
-    },
-    {
-      "source": "paste_parse_config.py:_normalize_rule_dict",
-      "target": "paste_parse_config.py:_normalize_regex_value",
       "type": "dependency"
     },
     {
       "source": "paste_parse_config.py",
       "target": "paste_parse_config.py:create_default_config_from_template",
       "type": "module-entity"
+    },
+    {
+      "source": "paste_parse_config.py:create_default_config_from_template",
+      "target": "paste_parse_config.py:_order_entry_to_dict",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py:create_default_config_from_template",
+      "target": "paste_parse_config.py:is_structural_order_column",
+      "type": "dependency"
     },
     {
       "source": "paste_parse_config.py:create_default_config_from_template",
@@ -4838,6 +5400,126 @@ body {
     {
       "source": "paste_parse_config.py:create_default_config_from_template",
       "target": "paste_parse_config.py:create_default_config_from_template",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py",
+      "target": "paste_parse_config.py:structural_order_col_offset",
+      "type": "module-entity"
+    },
+    {
+      "source": "paste_parse_config.py:structural_order_col_offset",
+      "target": "paste_parse_config.py:is_structural_order_column",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py",
+      "target": "paste_parse_config.py:_order_entry_to_dict",
+      "type": "module-entity"
+    },
+    {
+      "source": "paste_parse_config.py:_order_entry_to_dict",
+      "target": "paste_parse_config.py:_default_order_entry",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py:_order_entry_to_dict",
+      "target": "paste_parse_config.py:_is_unmapped",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py:_order_entry_to_dict",
+      "target": "paste_parse_config.py:_normalize_regex_value",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py",
+      "target": "paste_parse_config.py:_normalize_rule_dict",
+      "type": "module-entity"
+    },
+    {
+      "source": "paste_parse_config.py:_normalize_rule_dict",
+      "target": "paste_parse_config.py:_default_order_entry",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py:_normalize_rule_dict",
+      "target": "paste_parse_config.py:_default_order_entry",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py:_normalize_rule_dict",
+      "target": "paste_parse_config.py:_is_unmapped",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py:_normalize_rule_dict",
+      "target": "paste_parse_config.py:_normalize_regex_value",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py",
+      "target": "paste_parse_config.py:_rule_to_dict",
+      "type": "module-entity"
+    },
+    {
+      "source": "paste_parse_config.py:_rule_to_dict",
+      "target": "paste_parse_config.py:_is_unmapped",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py",
+      "target": "paste_parse_config.py:_meaningful_order_entries",
+      "type": "module-entity"
+    },
+    {
+      "source": "paste_parse_config.py:_meaningful_order_entries",
+      "target": "paste_parse_config.py:_is_unmapped",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py",
+      "target": "paste_parse_config.py:config_to_yaml",
+      "type": "module-entity"
+    },
+    {
+      "source": "paste_parse_config.py:config_to_yaml",
+      "target": "paste_parse_config.py:_is_unmapped",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py:config_to_yaml",
+      "target": "paste_parse_config.py:_normalize_field_rule_lists",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py:config_to_yaml",
+      "target": "paste_parse_config.py:_yaml_scalar",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py:config_to_yaml",
+      "target": "paste_parse_config.py:_yaml_scalar",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py:config_to_yaml",
+      "target": "paste_parse_config.py:_meaningful_order_entries",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py:config_to_yaml",
+      "target": "paste_parse_config.py:_format_rule_lines",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py:config_to_yaml",
+      "target": "paste_parse_config.py:_format_rule_lines",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py:config_to_yaml",
+      "target": "paste_parse_config.py:_format_section_lines",
       "type": "dependency"
     },
     {
@@ -4997,46 +5679,6 @@ body {
     },
     {
       "source": "paste_parse_config.py",
-      "target": "paste_parse_config.py:config_to_yaml",
-      "type": "module-entity"
-    },
-    {
-      "source": "paste_parse_config.py:config_to_yaml",
-      "target": "paste_parse_config.py:_normalize_field_rule_lists",
-      "type": "dependency"
-    },
-    {
-      "source": "paste_parse_config.py:config_to_yaml",
-      "target": "paste_parse_config.py:_yaml_scalar",
-      "type": "dependency"
-    },
-    {
-      "source": "paste_parse_config.py:config_to_yaml",
-      "target": "paste_parse_config.py:_yaml_scalar",
-      "type": "dependency"
-    },
-    {
-      "source": "paste_parse_config.py:config_to_yaml",
-      "target": "paste_parse_config.py:_yaml_scalar",
-      "type": "dependency"
-    },
-    {
-      "source": "paste_parse_config.py:config_to_yaml",
-      "target": "paste_parse_config.py:_yaml_scalar",
-      "type": "dependency"
-    },
-    {
-      "source": "paste_parse_config.py:config_to_yaml",
-      "target": "paste_parse_config.py:_format_rule_lines",
-      "type": "dependency"
-    },
-    {
-      "source": "paste_parse_config.py:config_to_yaml",
-      "target": "paste_parse_config.py:_format_rule_lines",
-      "type": "dependency"
-    },
-    {
-      "source": "paste_parse_config.py",
       "target": "paste_parse_config.py:_format_rule_lines",
       "type": "module-entity"
     },
@@ -5053,6 +5695,31 @@ body {
     {
       "source": "paste_parse_config.py:_format_rule_lines",
       "target": "paste_parse_config.py:_yaml_scalar",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py",
+      "target": "paste_parse_config.py:_format_section_lines",
+      "type": "module-entity"
+    },
+    {
+      "source": "paste_parse_config.py:_format_section_lines",
+      "target": "paste_parse_config.py:_yaml_scalar",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py:_format_section_lines",
+      "target": "paste_parse_config.py:_yaml_scalar",
+      "type": "dependency"
+    },
+    {
+      "source": "paste_parse_config.py",
+      "target": "paste_parse_config.py:_normalize_field_rule_lists",
+      "type": "module-entity"
+    },
+    {
+      "source": "paste_parse_config.py:_normalize_field_rule_lists",
+      "target": "paste_parse_config.py:_hoist_sections_from_order",
       "type": "dependency"
     },
     {
@@ -5147,6 +5814,11 @@ body {
     },
     {
       "source": "paste_parse_config.py",
+      "target": "paste_parse_config.py:is_structural_order_column",
+      "type": "module-entity"
+    },
+    {
+      "source": "paste_parse_config.py",
       "target": "paste_parse_config.py:_default_order_entry",
       "type": "module-entity"
     },
@@ -5157,7 +5829,7 @@ body {
     },
     {
       "source": "paste_parse_config.py",
-      "target": "paste_parse_config.py:_normalize_field_rule_lists",
+      "target": "paste_parse_config.py:_hoist_sections_from_order",
       "type": "module-entity"
     },
     {
@@ -5517,47 +6189,7 @@ body {
     },
     {
       "source": "gradio_template_form.py",
-      "target": "registry.py",
-      "type": "module-module"
-    },
-    {
-      "source": "paste_parse_config.py",
-      "target": "data_source.py",
-      "type": "module-module"
-    },
-    {
-      "source": "google_sheets.py",
-      "target": "excel_parser.py",
-      "type": "module-module"
-    },
-    {
-      "source": "gradio_data_source_settings.py",
-      "target": "registry.py",
-      "type": "module-module"
-    },
-    {
-      "source": "paste_parse_config.py",
-      "target": "registry.py",
-      "type": "module-module"
-    },
-    {
-      "source": "gradio_config.py",
       "target": "paste_parse_config.py",
-      "type": "module-module"
-    },
-    {
-      "source": "excel_print.py",
-      "target": "registry.py",
-      "type": "module-module"
-    },
-    {
-      "source": "gradio_config.py",
-      "target": "gemma4_field_matcher.py",
-      "type": "module-module"
-    },
-    {
-      "source": "gradio_config.py",
-      "target": "google_sheets.py",
       "type": "module-module"
     },
     {
@@ -5566,33 +6198,8 @@ body {
       "type": "module-module"
     },
     {
-      "source": "gradio_main.py",
-      "target": "excel_parser.py",
-      "type": "module-module"
-    },
-    {
-      "source": "gradio_template_form.py",
+      "source": "gemma4_field_matcher.py",
       "target": "paste_parse_config.py",
-      "type": "module-module"
-    },
-    {
-      "source": "gradio_template_form.py",
-      "target": "gemma4_field_matcher.py",
-      "type": "module-module"
-    },
-    {
-      "source": "gradio_main.py",
-      "target": "gradio_config.py",
-      "type": "module-module"
-    },
-    {
-      "source": "gradio_config.py",
-      "target": "data_source.py",
-      "type": "module-module"
-    },
-    {
-      "source": "gradio_template_form.py",
-      "target": "google_sheets.py",
       "type": "module-module"
     },
     {
@@ -5601,17 +6208,17 @@ body {
       "type": "module-module"
     },
     {
-      "source": "gradio_template_form.py",
-      "target": "import_history.py",
+      "source": "paste_parse_config.py",
+      "target": "data_source.py",
       "type": "module-module"
     },
     {
-      "source": "gradio_main.py",
+      "source": "gradio_config.py",
       "target": "registry.py",
       "type": "module-module"
     },
     {
-      "source": "gradio_data_source_settings.py",
+      "source": "gradio_config.py",
       "target": "google_sheets.py",
       "type": "module-module"
     },
@@ -5621,13 +6228,93 @@ body {
       "type": "module-module"
     },
     {
-      "source": "gradio_main.py",
-      "target": "gradio_template_form.py",
+      "source": "gradio_data_source_settings.py",
+      "target": "registry.py",
+      "type": "module-module"
+    },
+    {
+      "source": "gradio_data_source_settings.py",
+      "target": "google_sheets.py",
       "type": "module-module"
     },
     {
       "source": "gradio_config.py",
+      "target": "paste_parse_config.py",
+      "type": "module-module"
+    },
+    {
+      "source": "gradio_template_form.py",
+      "target": "import_history.py",
+      "type": "module-module"
+    },
+    {
+      "source": "gradio_config.py",
+      "target": "data_source.py",
+      "type": "module-module"
+    },
+    {
+      "source": "gradio_main.py",
       "target": "registry.py",
+      "type": "module-module"
+    },
+    {
+      "source": "gradio_template_form.py",
+      "target": "gemma4_field_matcher.py",
+      "type": "module-module"
+    },
+    {
+      "source": "gradio_data_source_settings.py",
+      "target": "data_source.py",
+      "type": "module-module"
+    },
+    {
+      "source": "gemma4_field_matcher.py",
+      "target": "cpu_features.py",
+      "type": "module-module"
+    },
+    {
+      "source": "paste_parse_config.py",
+      "target": "registry.py",
+      "type": "module-module"
+    },
+    {
+      "source": "gradio_main.py",
+      "target": "excel_parser.py",
+      "type": "module-module"
+    },
+    {
+      "source": "gradio_template_form.py",
+      "target": "registry.py",
+      "type": "module-module"
+    },
+    {
+      "source": "excel_print.py",
+      "target": "registry.py",
+      "type": "module-module"
+    },
+    {
+      "source": "gradio_main.py",
+      "target": "gradio_config.py",
+      "type": "module-module"
+    },
+    {
+      "source": "download_gemma4_model.py",
+      "target": "gemma4_field_matcher.py",
+      "type": "module-module"
+    },
+    {
+      "source": "gradio_template_form.py",
+      "target": "google_sheets.py",
+      "type": "module-module"
+    },
+    {
+      "source": "google_sheets.py",
+      "target": "excel_parser.py",
+      "type": "module-module"
+    },
+    {
+      "source": "gradio_main.py",
+      "target": "gradio_template_form.py",
       "type": "module-module"
     },
     {
@@ -5636,8 +6323,8 @@ body {
       "type": "module-module"
     },
     {
-      "source": "gradio_data_source_settings.py",
-      "target": "data_source.py",
+      "source": "gradio_config.py",
+      "target": "gemma4_field_matcher.py",
       "type": "module-module"
     }
   ],

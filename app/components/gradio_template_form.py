@@ -14,6 +14,8 @@ from app.services.excel_parser import list_sheet_names, read_template_sheet
 from app.services.paste_parse_config import (
     load_paste_parse_config,
     map_sheet_row_from_paste_config,
+    parse_text_with_config,
+    structural_order_col_offset,
     DEFAULT_FIELDS_PER_ROW,
 )
 from app.services.google_sheets import (
@@ -112,6 +114,7 @@ def _field_row_count(fields_per_row: int = DEFAULT_FIELDS_PER_ROW) -> int:
 # UI row layout is fixed at build time; row updates must use the same grouping.
 FORM_LAYOUT_FIELDS_PER_ROW = DEFAULT_FIELDS_PER_ROW
 FORM_ROW_COUNT = _field_row_count(FORM_LAYOUT_FIELDS_PER_ROW)
+_NO_CHANGE_FIELD_UPDATES = tuple(gr.update() for _ in range(MAX_FORM_FIELDS))
 
 
 def form_refresh_output_count() -> int:
@@ -166,31 +169,14 @@ def _resolve_field_header_name(
 
 
 def get_form_field_headers(template_id: str) -> list[str]:
-    """Load editable field names from paste parse config."""
+    """Load form field names from paste parse config, including structural ``order`` when configured."""
     paste_config = load_paste_parse_config(template_id)
     if not paste_config:
         return []
-
-    field_rules = paste_config.field_rules
-    default_headers = list(field_rules.keys())
-
-    if paste_config.order:
-        ordered: list[str] = []
-        seen: set[str] = set()
-        for item in paste_config.order:
-            if not isinstance(item, dict):
-                continue
-            filed = str(item.get("filed", "")).strip()
-            header = _resolve_field_header_name(filed, field_rules)
-            if header and header not in seen:
-                ordered.append(header)
-                seen.add(header)
-        for header in default_headers:
-            if header not in seen:
-                ordered.append(header)
-                seen.add(header)
-        return ordered
-    return default_headers
+    headers = list(paste_config.field_rules.keys())
+    if structural_order_col_offset(paste_config.order) == 1:
+        return ["order", *headers]
+    return headers
 
 
 def read_area_form_values(
@@ -198,6 +184,8 @@ def read_area_form_values(
     sheet_name: str,
     area_range: str,
     headers: list[str],
+    *,
+    col_offset: int = 0,
 ) -> dict[str, str]:
     """Read one template row from an Excel area and map values to field headers."""
     from openpyxl import load_workbook
@@ -216,7 +204,7 @@ def read_area_form_values(
 
         if len(headers) <= area_cols and area_rows == 1:
             for index, header in enumerate(headers):
-                cell = ws.cell(coords.start_row, coords.start_col + index)
+                cell = ws.cell(coords.start_row, coords.start_col + col_offset + index)
                 values[header] = format_cell_display(cell.value)
             return values
 
@@ -252,10 +240,22 @@ def _build_row_updates(headers: list[str]) -> list[gr.update]:
     return updates
 
 
-def _build_field_updates(
-    headers: list[str],
-    row_values: dict[str, str],
-) -> tuple[list[gr.update], list[gr.update], gr.update]:
+def _resolve_row_index(row_selector_value: str | None, form_data_len: int) -> int:
+    if form_data_len <= 0:
+        return 0
+    if row_selector_value and row_selector_value.startswith("Row "):
+        try:
+            return max(0, min(form_data_len - 1, int(row_selector_value[4:].strip()) - 1))
+        except ValueError:
+            pass
+    return 0
+
+
+def _row_values_for_headers(headers: list[str], row_dict: dict[str, str]) -> dict[str, str]:
+    return {header: row_dict.get(header, "") for header in headers}
+
+
+def _field_updates_for_row(headers: list[str], row_values: dict[str, str]) -> list[gr.update]:
     updates: list[gr.update] = []
     for index in range(MAX_FORM_FIELDS):
         if index < len(headers):
@@ -270,12 +270,38 @@ def _build_field_updates(
             )
         else:
             updates.append(gr.update(visible=False))
-    row_updates = _build_row_updates(headers)
-    status = gr.update(
-        value=f"已加载 {len(headers)} 个字段",
-        visible=len(headers) > 0,
+    return updates
+
+
+def _paste_input_update(headers: list[str], *, interactive: bool = True) -> gr.update:
+    count = len(headers)
+    placeholder = "粘贴 Tab 分隔的一行（可从 Excel 复制）"
+    if count:
+        placeholder += "；填入「选择行」当前行，未选则第 1 行"
+    return gr.update(
+        value="",
+        visible=count > 0,
+        interactive=interactive,
+        placeholder=placeholder,
+        label=f"粘贴数据（已配置 {count} 个字段）" if count else "粘贴数据",
     )
-    return updates, row_updates, status
+
+
+def _should_parse_paste(paste_text: str) -> bool:
+    stripped = (paste_text or "").strip()
+    if not stripped:
+        return False
+    return "\t" in stripped or "\n" in stripped
+
+
+def _build_field_updates(
+    headers: list[str],
+    row_values: dict[str, str],
+) -> tuple[list[gr.update], list[gr.update], gr.update]:
+    updates = _field_updates_for_row(headers, row_values)
+    row_updates = _build_row_updates(headers)
+    paste_update = _paste_input_update(headers)
+    return updates, row_updates, paste_update
 
 
 def _inactive_form_refresh(form_data: list[dict[str, str]]) -> tuple:
@@ -286,7 +312,7 @@ def _inactive_form_refresh(form_data: list[dict[str, str]]) -> tuple:
         [],
         form_data,
         gr.update(choices=[], value=None),
-        gr.update(value="请先选择模板和工作表", visible=True),
+        gr.update(value="", visible=False, interactive=True),
         gr.update(visible=False),
         *row_updates,
         *field_updates,
@@ -303,7 +329,7 @@ def refresh_data_entry_form(
 
     Returns updates for:
     form_container, detected_areas_state, form_data_state,
-    row_selector, fields_status, fields_container, *field_rows, *form_field_boxes
+    row_selector, paste_input, fields_container, *field_rows, *form_field_boxes
     """
     if not template or not sheet_name:
         return _inactive_form_refresh(form_data)
@@ -317,7 +343,7 @@ def refresh_data_entry_form(
             inactive[1],
             inactive[2],
             inactive[3],
-            gr.update(value="未找到字段配置，请先在「参数配置」中保存配置", visible=True),
+            gr.update(value="", visible=False, interactive=True),
             gr.update(visible=False),
             *inactive[6:],
         )
@@ -355,6 +381,85 @@ def refresh_data_entry_form(
         *row_updates,
         *field_updates,
     )
+
+
+def _begin_paste_parse() -> gr.update:
+    return gr.update(interactive=False)
+
+
+def apply_pasted_form_data(
+    template: TemplateConfig | None,
+    paste_text: str,
+    form_data: list[dict[str, str]],
+    row_selector_value: str | None,
+) -> tuple:
+    """Parse tab-separated paste text and fill form rows using paste YAML index rules."""
+    headers = get_form_field_headers(template.id) if template else []
+    if not template:
+        gr.Warning("请先选择模板")
+        return form_data, gr.update(), gr.update(interactive=True), *_NO_CHANGE_FIELD_UPDATES
+    if not headers:
+        gr.Warning("未找到字段配置")
+        return form_data, gr.update(), gr.update(interactive=True), *_NO_CHANGE_FIELD_UPDATES
+    if not _should_parse_paste(paste_text):
+        return form_data, gr.update(), gr.update(interactive=True), *_NO_CHANGE_FIELD_UPDATES
+    paste_config = load_paste_parse_config(template.id)
+    if not paste_config:
+        gr.Warning("模板粘贴配置加载失败")
+        return form_data, gr.update(), gr.update(interactive=True), *_NO_CHANGE_FIELD_UPDATES
+    try:
+        parsed_rows = parse_text_with_config(paste_text.strip(), paste_config)
+    except ValueError as exc:
+        gr.Warning(f"解析失败：{exc}")
+        return form_data, gr.update(), gr.update(interactive=True), *_NO_CHANGE_FIELD_UPDATES
+    if not parsed_rows:
+        gr.Warning("未能解析粘贴数据")
+        return form_data, gr.update(), gr.update(interactive=True), *_NO_CHANGE_FIELD_UPDATES
+    has_values = any(
+        value
+        for row in parsed_rows
+        for key, value in row.items()
+        if key != "order" and str(value).strip()
+    )
+    if not has_values:
+        gr.Warning("粘贴数据未匹配任何字段，请检查 YAML index 配置")
+        return form_data, gr.update(), gr.update(interactive=True), *_NO_CHANGE_FIELD_UPDATES
+    if not form_data:
+        form_data = [{header: "" for header in headers}]
+    target_idx = _resolve_row_index(row_selector_value, len(form_data))
+    for offset, parsed in enumerate(parsed_rows):
+        row_idx = target_idx + offset
+        while len(form_data) <= row_idx:
+            form_data.append({header: "" for header in headers})
+        form_data[row_idx] = _row_values_for_headers(headers, parsed)
+    row_choices = [f"Row {index + 1}" for index in range(len(form_data))]
+    selected_row = f"Row {target_idx + 1}"
+    field_updates = _field_updates_for_row(headers, form_data[target_idx])
+    gr.Info(f"已填充 {len(parsed_rows)} 行数据到表单")
+    return (
+        form_data,
+        gr.update(choices=row_choices, value=selected_row),
+        gr.update(value="", interactive=True),
+        *field_updates,
+    )
+
+
+def sync_form_fields_to_row(
+    template: TemplateConfig | None,
+    row_selector_value: str | None,
+    form_data: list[dict[str, str]],
+) -> tuple:
+    """Show the selected form row in field textboxes."""
+    if not template:
+        return _empty_field_updates()
+    headers = get_form_field_headers(template.id)
+    if not headers:
+        return _empty_field_updates()
+    if not form_data:
+        return tuple(_field_updates_for_row(headers, {header: "" for header in headers}))
+    target_idx = _resolve_row_index(row_selector_value, len(form_data))
+    row_values = _row_values_for_headers(headers, form_data[target_idx])
+    return tuple(_field_updates_for_row(headers, row_values))
 
 
 def update_import_stats(template: TemplateConfig | dict[str, Any] | None) -> str:
@@ -497,11 +602,19 @@ def build_form_tab(
             )
             components["row_selector"] = row_selector
             
-            fields_status = gr.Markdown("字段加载中...", visible=True)
-            components["fields_status"] = fields_status
+            paste_input = gr.Textbox(
+                label="粘贴数据",
+                placeholder="粘贴 Tab 分隔的一行（可从 Excel 复制）；填入「选择行」当前行，未选则第 1 行",
+                lines=2,
+                max_lines=6,
+                visible=False,
+                interactive=True,
+            )
+            components["paste_input"] = paste_input
 
             form_field_boxes: list[gr.Textbox] = []
             field_rows: list[gr.Row] = []
+            # Row/column shells stay visible; only textbox slots toggle via refresh updates.
             with gr.Column(visible=True) as fields_container:
                 for row_start in range(0, MAX_FORM_FIELDS, FORM_LAYOUT_FIELDS_PER_ROW):
                     with gr.Row(visible=True) as field_row:
@@ -531,50 +644,49 @@ def build_form_tab(
         components["export_btn"] = export_btn
         components["print_btn"] = print_btn
         
-        # Bulk import section (always visible)
-        with gr.Group():
-            gr.Markdown("## 批量导入")
-            with gr.Row():
-                import_stats = gr.Markdown("📊 导入统计：加载中...")
-            
-            with gr.Row():
-                refresh_btn = gr.Button("🔄 刷新未处理数据")
-                show_processed_btn = gr.Button("📝 查看已处理", variant="secondary")
-                show_trash_btn = gr.Button("🗑️ 查看垃圾数据", variant="secondary")
-            
-            import_preview = gr.Dataframe(
-                headers=["选择", "ID", "状态", "数据预览"],
-                datatype=["bool", "str", "str", "str"],
-                interactive=True,
-                wrap=True,
+        # Bulk import section (always visible; no gr.Group — avoids Gradio panel background)
+        gr.Markdown("## 批量导入")
+        with gr.Row():
+            import_stats = gr.Markdown("📊 导入统计：加载中...")
+        
+        with gr.Row():
+            refresh_btn = gr.Button("🔄 刷新未处理数据")
+            show_processed_btn = gr.Button("📝 查看已处理", variant="secondary")
+            show_trash_btn = gr.Button("🗑️ 查看垃圾数据", variant="secondary")
+        
+        import_preview = gr.Dataframe(
+            headers=["选择", "ID", "状态", "数据预览"],
+            datatype=["bool", "str", "str", "str"],
+            interactive=True,
+            wrap=True,
+            visible=False
+        )
+        
+        with gr.Row():
+            import_btn = gr.Button(
+                "✅ 导入选中行",
+                variant="primary",
                 visible=False
             )
             
-            with gr.Row():
-                import_btn = gr.Button(
-                    "✅ 导入选中行",
-                    variant="primary",
-                    visible=False
-                )
-                
-                mark_trash_btn = gr.Button(
-                    "🗑️ 标记为垃圾",
-                    variant="secondary",
-                    visible=False
-                )
-                
-                restore_btn = gr.Button(
-                    "↩️ 恢复为未处理",
-                    variant="secondary",
-                    visible=False,
-                )
-                
-                clear_history_btn = gr.Button(
-                    "🧹 清空历史",
-                    variant="stop",
-                    visible=False,
-                    size="sm"
-                )
+            mark_trash_btn = gr.Button(
+                "🗑️ 标记为垃圾",
+                variant="secondary",
+                visible=False
+            )
+            
+            restore_btn = gr.Button(
+                "↩️ 恢复为未处理",
+                variant="secondary",
+                visible=False,
+            )
+            
+            clear_history_btn = gr.Button(
+                "🧹 清空历史",
+                variant="stop",
+                visible=False,
+                size="sm"
+            )
         
         components["import_stats"] = import_stats
         components["refresh_btn"] = refresh_btn
@@ -601,7 +713,7 @@ def build_form_tab(
         detected_areas_state,
         form_data_state,
         row_selector,
-        fields_status,
+        paste_input,
         fields_container,
         *field_rows,
         *form_field_boxes,
@@ -611,6 +723,37 @@ def build_form_tab(
         fn=refresh_data_entry_form,
         inputs=[current_template, sheet_selector, form_data_state],
         outputs=form_refresh_outputs,
+        **HIDE_PROGRESS,
+    )
+
+    paste_apply_outputs = [form_data_state, row_selector, paste_input, *form_field_boxes]
+
+    row_selector.change(
+        fn=sync_form_fields_to_row,
+        inputs=[current_template, row_selector, form_data_state],
+        outputs=form_field_boxes,
+        **HIDE_PROGRESS,
+    )
+
+    paste_input.submit(
+        fn=_begin_paste_parse,
+        outputs=[paste_input],
+        **HIDE_PROGRESS,
+    ).then(
+        fn=apply_pasted_form_data,
+        inputs=[current_template, paste_input, form_data_state, row_selector],
+        outputs=paste_apply_outputs,
+        **HIDE_PROGRESS,
+    )
+
+    paste_input.change(
+        fn=_begin_paste_parse,
+        outputs=[paste_input],
+        **HIDE_PROGRESS,
+    ).then(
+        fn=apply_pasted_form_data,
+        inputs=[current_template, paste_input, form_data_state, row_selector],
+        outputs=paste_apply_outputs,
         **HIDE_PROGRESS,
     )
     

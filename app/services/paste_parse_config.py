@@ -11,6 +11,7 @@ PASTE_CONFIG_SUFFIX = ".paste.yaml"
 DEFAULT_FIELDS_PER_ROW = 7
 UNMAPPED_FILED = "?"
 UNMAPPED_INDEX = -1
+STRUCTURAL_ORDER_COLUMN = "order"
 RESERVED_TOP_KEYS = frozenset({"determiner", "order", "worksheet", "sections", "fields_per_row"})
 
 
@@ -96,6 +97,48 @@ def _normalize_regex_value(raw: Any) -> str | None:
 
 def _is_unmapped(filed: str, index: int) -> bool:
     return (not filed or filed == UNMAPPED_FILED) or index == UNMAPPED_INDEX
+
+
+def is_structural_order_column(name: str) -> bool:
+    """True when a sheet/template header is the reserved paste column ``order``."""
+    return name.strip().lower() == STRUCTURAL_ORDER_COLUMN
+
+
+def structural_order_col_offset(order: list[dict[str, Any]] | None) -> int:
+    """Return 1 when paste order reserves column A for structural ``order``."""
+    if not order:
+        return 0
+    for item in order:
+        if not isinstance(item, dict):
+            continue
+        filed = str(item.get("filed", "")).strip()
+        index = int(item.get("index", UNMAPPED_INDEX))
+        if index == 0 and is_structural_order_column(filed):
+            return 1
+    return 0
+
+
+def build_order_entries_from_mappings(
+    sheet_columns: list[str],
+    mapped_columns: set[str],
+    *,
+    include_unmapped: bool = True,
+) -> list[dict[str, Any]]:
+    """Build paste order list: index-0 ``order`` column plus matched sheet columns by index."""
+    new_order: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for idx, col_name in enumerate(sheet_columns):
+        col_stripped = col_name.strip()
+        if not col_stripped:
+            continue
+        is_structural = idx == 0 and is_structural_order_column(col_stripped)
+        if is_structural or col_stripped in mapped_columns:
+            if col_stripped not in seen:
+                new_order.append(_order_entry_to_dict({"filed": col_stripped, "index": idx}))
+                seen.add(col_stripped)
+    if not new_order and include_unmapped:
+        new_order = [_default_order_entry()]
+    return new_order
 
 
 def _rule_to_dict(rule: PasteParseRule) -> dict[str, Any]:
@@ -287,11 +330,40 @@ def _format_rule_lines(rule: dict[str, Any], indent: int) -> list[str]:
     return lines
 
 
+def _hoist_sections_from_order(raw: dict[str, Any]) -> dict[str, Any]:
+    """Move ``sections`` out of ``order`` mappings to the document root."""
+    normalized = dict(raw)
+    order = normalized.get("order")
+    if order is None:
+        return normalized
+    if isinstance(order, dict):
+        order_dict = dict(order)
+        nested_sections = order_dict.pop("sections", None)
+        if nested_sections is not None and normalized.get("sections") is None:
+            normalized["sections"] = nested_sections
+        normalized["order"] = [order_dict]
+        order = normalized["order"]
+    if not isinstance(order, list):
+        return normalized
+    clean_order: list[Any] = []
+    for item in order:
+        if not isinstance(item, dict):
+            clean_order.append(item)
+            continue
+        item_copy = dict(item)
+        nested_sections = item_copy.pop("sections", None)
+        if nested_sections is not None and normalized.get("sections") is None:
+            normalized["sections"] = nested_sections
+        clean_order.append(item_copy)
+    normalized["order"] = clean_order
+    return normalized
+
+
 def _normalize_field_rule_lists(raw: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(raw)
     for key, value in raw.items():
         if key in RESERVED_TOP_KEYS:
-            if key == "order" and value is not None and not isinstance(value, list):
+            if key == "order" and value is not None and not isinstance(value, (list, dict)):
                 raise ValueError(f"'{key}' must be a YAML list; each entry must start with '-'")
             continue
         if isinstance(value, dict):
@@ -305,7 +377,7 @@ def _normalize_field_rule_lists(raw: dict[str, Any]) -> dict[str, Any]:
         for item in value:
             if not isinstance(item, dict):
                 raise ValueError(f"Field {key!r}: each '-' item must be a mapping with filed/index")
-    return normalized
+    return _hoist_sections_from_order(normalized)
 
 
 def _meaningful_order_entries(order: list[Any]) -> list[dict[str, Any]]:
@@ -320,6 +392,17 @@ def _meaningful_order_entries(order: list[Any]) -> list[dict[str, Any]]:
             continue
         meaningful.append(item)
     return meaningful
+
+
+def _format_section_lines(sections: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = ["sections:"]
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        lines.append("  - input_area: " + _yaml_scalar(str(section.get("input_area", ""))))
+        lines.append("    move_to: " + _yaml_scalar(str(section.get("move_to", ""))))
+        lines.append("    offset: " + str(section.get("offset", 0)))
+    return lines
 
 
 def config_to_yaml(config: dict[str, Any], *, omit_unmapped_fields: bool = False) -> str:
@@ -339,17 +422,9 @@ def config_to_yaml(config: dict[str, Any], *, omit_unmapped_fields: bool = False
             lines.append("order:")
             for item in meaningful_order:
                 lines.extend(_format_rule_lines(item, indent=2))
-    
-    # Handle sections configuration
     sections = config.get("sections")
     if isinstance(sections, list) and sections:
-        lines.append("sections:")
-        for section in sections:
-            if isinstance(section, dict):
-                lines.append("  - input_area: " + _yaml_scalar(str(section.get("input_area", ""))))
-                lines.append("    move_to: " + _yaml_scalar(str(section.get("move_to", ""))))
-                lines.append("    offset: " + str(section.get("offset", 0)))
-    
+        lines.extend(_format_section_lines(sections))
     for key, value in config.items():
         if key in RESERVED_TOP_KEYS or key == "determiner" or key == "fields_per_row":
             continue
@@ -372,14 +447,17 @@ def config_to_yaml(config: dict[str, Any], *, omit_unmapped_fields: bool = False
 
 
 def build_empty_mapping_yaml(template_headers: list[str]) -> str:
-    skip_fields = frozenset({"order"})
     config: dict[str, Any] = {"determiner": "tab"}
-    for header in template_headers:
+    order_entries: list[dict[str, Any]] = [_default_order_entry()]
+    for col_idx, header in enumerate(template_headers):
         header_stripped = header.strip()
-        if header_stripped in skip_fields:
+        if not header_stripped:
             continue
-        config[header] = [_rule_to_dict(_default_unmapped_rule())]
-    config["order"] = [_default_order_entry()]
+        if is_structural_order_column(header_stripped):
+            order_entries = [_order_entry_to_dict({"filed": header_stripped, "index": col_idx})]
+            continue
+        config[header_stripped] = [_rule_to_dict(_default_unmapped_rule())]
+    config["order"] = order_entries
     return config_to_yaml(config)
 
 
@@ -673,38 +751,28 @@ def create_default_config_from_template(template_path: Path, worksheet_name: str
         if ws is None:
             raise ValueError("No worksheet found in template")
         
-        # Read first row as field names
-        first_row = []
+        # Read first row as field names (0-based column index for paste YAML)
+        header_cells: list[tuple[int, str]] = []
         last_col_with_data = 0
-        
-        for col_idx, cell in enumerate(ws[1], start=1):
+        for col_idx, cell in enumerate(ws[1]):
             value = cell.value
             if value is not None and str(value).strip():
-                first_row.append(str(value).strip())
-                last_col_with_data = col_idx
-            elif last_col_with_data > 0:
-                # Keep empty columns between filled columns
-                first_row.append("")
-        
-        if not first_row:
+                header_cells.append((col_idx, str(value).strip()))
+                last_col_with_data = col_idx + 1
+        if not header_cells:
             raise ValueError("Template first row has no field names")
-        
-        # Remove trailing empty columns
-        first_row = first_row[:last_col_with_data]
-        
         # Create field rules with unmapped defaults (filed="?", index=-1)
         field_rules: dict[str, list[PasteParseRule]] = {}
         order_entries: list[dict[str, Any]] = [_default_order_entry()]
-
-        for field_name in first_row:
-            if not field_name:  # Skip empty columns
+        for col_idx, field_name in header_cells:
+            if is_structural_order_column(field_name):
+                order_entries = [_order_entry_to_dict({"filed": field_name, "index": col_idx})]
                 continue
-
             field_rules[field_name] = [_default_unmapped_rule()]
         
         # Create sections configuration if there are multiple columns
         sections = None
-        if len(first_row) > 1:
+        if len(header_cells) > 1:
             # Detect data area from row 2, column 1 to last column with data
             from openpyxl.utils import get_column_letter
             

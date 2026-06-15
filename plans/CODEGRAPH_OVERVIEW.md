@@ -246,7 +246,7 @@ Receiving Date:
 | 指标 | 数值 |
 |------|------|
 | Python 源文件 | 22（`app/` 18 + `gradio_app.py` + `tests/` 3） |
-| CodeGraph CLI 实体 | 235（`plans/codegraph.csv`，2026-06-14 GGUF 清理后） |
+| CodeGraph CLI 实体 | 268（`plans/codegraph.csv`，2026-06-14 GGUF 清理后） |
 | 活跃 Speckit 计划 | `gradio_ui_migration`、`llm_field_matching_optimization`、`batch_llm_matching` |
 | LLM | Gemma 4 E4B Q4_0 GGUF（Transformers 5.x），CPU |
 | 外部依赖 | gradio, pandas, polars, openpyxl, gspread, PyYAML, torch, transformers>=5.0, huggingface-hub, psutil |
