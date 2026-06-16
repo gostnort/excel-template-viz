@@ -1,168 +1,287 @@
 import json
-from dataclasses import dataclass
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
-CONFIG_SUFFIXES = [".config.json", ".json"]
-DEFAULT_SHEET_NAME = ""
-DEFAULT_HEADER_ROW = 0
-DEFAULT_DATA_START_ROW = 1
 
 
-@dataclass(frozen=True)
-class TemplateConfig:
-    id: str
-    display_name: str
-    description: str
-    file_path: Path
-    sheet_name: str
-    header_row: int
-    data_start_row: int
-    config_path: Path
+class SortTemplates:
+    """
+    json文件用于模版的显示名称，并根据使用的顺序展示在导航栏上。
+    文件不存在时，按文件创建时间降序作为默认时间线。
+    文件存在时，按最新打开的模版降序作为时间线。
+    json应该包含所有模版的文件。
+    """
 
+    JSON_FILE_NAME: str = "sort_templates.json"
 
-def _derive_display_name(template_id: str) -> str:
-    # 由文件名生成默认显示名称
-    return template_id.replace("_", " ").replace("-", " ").title()
+    @property
+    def LastUseTemplate(self) -> Path | None:
+        """
+        调用范例：
+        registry.last_use_template = Path("templates/foo.xlsx")
+        """
+        return self._last_use_template
 
-
-def _config_candidates(template_path: Path) -> list[Path]:
-    # 生成配置文件候选路径
-    return [template_path.with_suffix(suffix) for suffix in CONFIG_SUFFIXES]
-
-
-def _find_existing_config_path(template_path: Path) -> Path | None:
-    # 查找已存在的配置文件
-    for candidate in _config_candidates(template_path):
-        if candidate.exists():
-            return candidate
-    return None
-
-
-def _default_config_path(template_path: Path) -> Path:
-    # 默认使用 .config.json
-    return template_path.with_suffix(CONFIG_SUFFIXES[0])
-
-
-def _read_config_payload(config_path: Path) -> dict:
-    # 读取配置文件原始数据
-    if not config_path.exists():
-        return {}
-    try:
-        return json.loads(config_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
-
-
-def _write_config_payload(config_path: Path, payload: dict) -> None:
-    # 写回模板配置文件
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def _build_default_payload(template_path: Path) -> dict:
-    # 构建默认配置内容
-    template_id = template_path.stem
-    return {
-        "display_name": _derive_display_name(template_id),
-        "description": "",
-        "sheet_name": DEFAULT_SHEET_NAME,
-        "header_row": DEFAULT_HEADER_ROW,
-        "data_start_row": DEFAULT_DATA_START_ROW,
-    }
-
-
-def _ensure_template_config(template_path: Path) -> tuple[Path, dict]:
-    # 确保模板配置存在
-    config_path = _find_existing_config_path(template_path)
-    if config_path is None:
-        config_path = _default_config_path(template_path)
-        payload = _build_default_payload(template_path)
-        _write_config_payload(config_path, payload)
-        return config_path, payload
-    payload = _read_config_payload(config_path)
-    if not payload:
-        payload = _build_default_payload(template_path)
-        _write_config_payload(config_path, payload)
-    return config_path, payload
-
-
-def _template_path_from_id(template_id: str) -> Path | None:
-    # 由模板 id 解析文件路径
-    candidate = TEMPLATES_DIR / f"{template_id}.xlsx"
-    if candidate.exists():
-        return candidate
-    return None
-
-
-def _is_excel_lock_name(name: str) -> bool:
-    # Excel 打开工作簿时会创建 ~$*.xlsx 临时锁文件
-    return name.startswith("~")
-
-
-def load_templates() -> list[TemplateConfig]:
-    # 扫描 templates/ 下的全部 xlsx
-    if not TEMPLATES_DIR.exists():
-        return []
-    templates: list[TemplateConfig] = []
-    for template_path in sorted(TEMPLATES_DIR.glob("*.xlsx")):
-        if _is_excel_lock_name(template_path.name):
-            continue
-        config_path, payload = _ensure_template_config(template_path)
-        template_id = template_path.stem
-        display_name = str(payload.get("display_name") or _derive_display_name(template_id))
-        description = str(payload.get("description") or "")
-        sheet_name = str(payload.get("sheet_name") or DEFAULT_SHEET_NAME)
-        header_row = int(payload.get("header_row", DEFAULT_HEADER_ROW))
-        data_start_row = int(payload.get("data_start_row", DEFAULT_DATA_START_ROW))
-        templates.append(
-            TemplateConfig(
-                id=template_id,
-                display_name=display_name,
-                description=description,
-                file_path=template_path,
-                sheet_name=sheet_name,
-                header_row=header_row,
-                data_start_row=data_start_row,
-                config_path=config_path,
+    @LastUseTemplate.setter
+    def LastUseTemplate(self, value: Path | None) -> None:
+        if value is None:
+            self._last_use_template = None
+            return
+        # 检查 value 是否是 templates 文件夹下存在的 .xlsx 文件
+        if not (
+            isinstance(value, Path)
+            and value.suffix == ".xlsx"
+            and value.parent == TEMPLATES_DIR
+            and value.exists()
+        ):
+            raise ValueError(
+                "last_use_template 必须是 templates 文件夹内存在的 xlsx 文件"
             )
+        if value == self._last_use_template:
+            return  # 相同值可跳过，避免重复写盘
+        self._last_use_template = value
+        self._modify_json(last_use_template=value)
+
+    def __init__(self):
+        self.JSON_PATH = TEMPLATES_DIR / self.JSON_FILE_NAME
+        self._last_use_template = None
+        self.SortTemplatesJsonPayload = {}
+        self.UpdateJson()
+        """
+        API还包括：
+        LastUseTemplate变量
+        """
+
+    def _is_excel_lock_name(self, name: str) -> bool:
+        """
+        Excel 打开工作簿时会创建 ~$*.xlsx 临时锁文件
+        return: 是否是临时锁文件
+        example:
+            name: "~$template1.xlsx"
+              - return: True
+            name: "template1.xlsx"
+              - return: False
+        """
+        return name.startswith("~")
+
+    def _iter_templates(self) -> list[Path]:
+        """
+        扫描 templates/*.xlsx，跳过 Excel 锁文件 ~$*.xlsx
+        return: 模板文件路径列表
+        example:
+        [
+            Path("templates/template1.xlsx"),
+            Path("templates/template2.xlsx"),
+            Path("templates/template3.xlsx"),
+        ]
+        """
+        if not TEMPLATES_DIR.exists():
+            return []
+        return [
+            template_path
+            for template_path in TEMPLATES_DIR.glob("*.xlsx")
+            if not self._is_excel_lock_name(template_path.name)
+        ]
+
+    def _derive_display_name(self, template_file_path: Path) -> str:
+        """
+        生成导航栏显示名称;
+        template_file_path: 模板文件路径
+        return: 导航栏显示名称。首字母大写，下划线代替空格和“-”。
+        示例：
+        template_file_path: Path("template-file name.xlsx")
+        return: "Template_File_Name"
+        """
+        no_extension_name = template_file_path.stem
+        no_extension_name = no_extension_name.replace("-", "_").replace("_", " ")
+        no_extension_name = no_extension_name.title()
+        no_extension_name = " ".join(no_extension_name.split())
+        return no_extension_name.replace(" ", "_")
+
+    def _generate_json(self) -> dict:
+        """生成 JSON 数据，用于JSON文件不存在的时候生成默认数据。
+        根据文件的创建时间生成默认的排序。文件名使用UI显示名称。
+        return: JSON格式如下：
+        {
+            sort_templates_timeline:[
+                template_file_most_recent_open,template_file_second_most_recent_open,template_file_third_most_recent_open, ...
+            ]}
+        """
+        template_paths = self._iter_templates()
+        # 无 JSON 时尚无打开记录，按文件创建时间降序作为默认时间线
+        ordered_paths = sorted(
+            template_paths,
+            key=lambda path: getattr(path.stat(), "st_birthtime", path.stat().st_ctime),
+            reverse=True,
         )
-    return templates
+        timeline = [self._derive_display_name(path) for path in ordered_paths]
+        payload = {"sort_templates_timeline": timeline}
+        self.JSON_PATH.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        self._generate_json_template_section()
+        return self.JSON_PATH.read_text(encoding="utf-8")
 
+    def _modify_json(
+        self, JSON_PATH: Path = None, last_use_template: Path = None
+    ) -> None:
+        """
+        修改 JSON 数据。最近打开的模版将会移动到时间线的最前面。
+        JSON_PATH: JSON 文件路径
+        last_use_template: 最近打开的模板路径
+        return: None
+        """
+        # 如果没有提供 JSON 文件路径，则调用_generate_json生成默认数据。
+        if not JSON_PATH.exists() or JSON_PATH is None:
+            self._generate_json()
+        # 根据last_use_template，将最近打开的模板移动到时间线的最前面。
+        if last_use_template is not None:
+            display_name = self._derive_display_name(last_use_template)
+            # 加载已有的 JSON 数据
+            json_data = json.loads(JSON_PATH.read_text(encoding="utf-8"))
+            timeline = json_data.get("sort_templates_timeline", [])
+            # 删除已存在的同名 display_name
+            timeline = [name for name in timeline if name != display_name]
+            # 添加到最前面
+            timeline.insert(0, display_name)
+            json_data["sort_templates_timeline"] = timeline
+            # 保存回文件
+            with open(JSON_PATH, "w", encoding="utf-8") as f:
+                json.dump(json_data, f, ensure_ascii=False, indent=2)
+        return
 
-def get_template(template_id: str) -> TemplateConfig | None:
-    # 按 id 查找单个模板
-    for item in load_templates():
-        if item.id == template_id:
-            return item
-    return None
+    def UpdateJson(self) -> None:
+        """
+        更新 JSON 数据。
+        确保启动时 sort_templates.json 存在，包含所有当前模板，
+        移除已删除模板，同步 id / file_name / display_name，并核对时间线。
+        template.id 写入内存（self.template_ids）。
+        return: None
+        """
+        # 1. 获取当前所有 templates
+        template_paths = self._iter_templates()
+        # 2. 生成 templates 的 IDs
+        id_by_path = {path: self._assign_ID(path) for path in template_paths}
+        # 3. 获得所有 templates 的 display_name
+        display_by_id: dict[str, str] = {}
+        file_name_by_id: dict[str, str] = {}
+        for path in template_paths:
+            template_id = id_by_path[path]
+            display_by_id[template_id] = self._derive_display_name(path)
+            file_name_by_id[template_id] = path.name
+        valid_display_names = set(display_by_id.values())
+        current_ids = set(display_by_id.keys())
+        # 4. 核对 sort_templates.json 中的 templates（id / file_name / display_name）
+        if not self.JSON_PATH.exists():
+            self._generate_json()
+        payload = json.loads(self.JSON_PATH.read_text(encoding="utf-8"))
+        raw_templates = payload.get("templates")
+        #  核对 templates[]：字段不存在时由 _generate_json_template_section 整段创建
+        if raw_templates is None or not isinstance(raw_templates, list):
+            self._generate_json_template_section()
+            payload = json.loads(self.JSON_PATH.read_text(encoding="utf-8"))
+            raw_templates = payload.get("templates", [])
+        templates_list: list[dict[str, str]] = []
+        seen_ids: set[str] = set()
+        for entry in raw_templates:
+            if not isinstance(entry, dict):
+                continue
+            entry_id = str(entry.get("id", "")).strip()
+            if entry_id not in current_ids:
+                continue  # 磁盘已删，从列表移除
+            seen_ids.add(entry_id)
+            templates_list.append({
+                "id": entry_id,
+                "file_name": file_name_by_id[entry_id],
+                "display_name": display_by_id[entry_id],
+            })
+        # 已有 templates 时：仅把磁盘上新出现的 id 追加到列表末尾（不重复 _generate_json_template_section）
+        new_ids = sorted(current_ids - seen_ids)
+        for template_id in new_ids:
+            templates_list.append({
+                "id": template_id,
+                "file_name": file_name_by_id[template_id],
+                "display_name": display_by_id[template_id],
+            })
+        # 5. 核对 sort_templates_timeline：去掉已删项，新模板 display_name 追加到时间线末尾
+        timeline = payload.get("sort_templates_timeline", [])
+        if not isinstance(timeline, list):
+            timeline = []
+        timeline = [name for name in timeline if name in valid_display_names]
+        known_displays = set(timeline)
+        for entry in templates_list:
+            display_name = entry["display_name"]
+            if display_name not in known_displays:
+                timeline.append(display_name)
+                known_displays.add(display_name)
+        payload["templates"] = templates_list
+        payload["sort_templates_timeline"] = timeline
+        self.JSON_PATH.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        # 6. SortTemplatesJsonPayload 常驻内存（与磁盘 sort_templates.json 一致）
+        self.SortTemplatesJsonPayload = payload
+        self.TemplateIDs = {
+            entry["id"]: TEMPLATES_DIR / entry["file_name"]
+            for entry in payload.get("templates", [])
+            if isinstance(entry, dict) and entry.get("id") and entry.get("file_name")
+        }
+        self.template_display_names = {
+            entry["id"]: entry["display_name"]
+            for entry in payload.get("templates", [])
+            if isinstance(entry, dict) and entry.get("id")
+        }
+        self.sort_templates_timeline = list(payload.get("sort_templates_timeline", []))
 
+    def _assign_ID(self, template_file_path: Path) -> str:
+        """
+        为模板文件赋予稳定 ID，例如 templates/{id}/{id}.paste.yaml。
+        规则：ID是全小写，只用下划线，且去掉扩展名
+        input: template_file_path: templates/sales-order template.xlsx
+        output: ID: "sales_order_template"
+        """
+        id = template_file_path.stem.lower().replace("-", " ")
+        id = " ".join(id.split())
+        id = id.replace(" ", "_")
+        return id
 
-def load_template_payload(template_id: str) -> dict | None:
-    # 加载指定模板配置
-    template_path = _template_path_from_id(template_id)
-    if template_path is None:
-        return None
-    _, payload = _ensure_template_config(template_path)
-    return payload
-
-
-def save_template_payload(template_id: str, payload: dict) -> None:
-    # 保存模板配置
-    template_path = _template_path_from_id(template_id)
-    if template_path is None:
-        raise ValueError(f"模板 {template_id!r} 不存在")
-    config_path, _ = _ensure_template_config(template_path)
-    _write_config_payload(config_path, payload)
-
-
-def update_template_sheet_name(template_id: str, sheet_name: str) -> TemplateConfig | None:
-    # 更新模板默认工作表并落盘
-    payload = load_template_payload(template_id)
-    if payload is None:
-        return None
-    payload["sheet_name"] = sheet_name
-    save_template_payload(template_id, payload)
-    return get_template(template_id)
+    def _generate_json_template_section(self) -> dict:
+        """
+        用于生成sort_templates.json如下片段templates[] 每项字段：
+        "templates": [
+            {
+            "id": "sales_order",
+            "file_name": "sales_order.xlsx",
+            "display_name": "Sales_Order"
+            }
+        ]
+        """
+        if self.JSON_PATH.exists():
+            payload = json.loads(self.JSON_PATH.read_text(encoding="utf-8"))
+        # 如果template字段不存在：
+        if payload.get("templates") is None:
+            # 1. 获取所有模版
+            template_paths = self._iter_templates()
+            # 2. 获取所有模版ID，显示名，文件名
+            templates_list: list[dict[str, str]] = []
+            for path in template_paths:
+                template_id = self._assign_ID(path)
+                templates_list.append(
+                    {
+                        "id": template_id,
+                        "file_name": path.name,
+                        "display_name": self._derive_display_name(path),
+                    }
+                )
+            templates_list.sort(key=lambda entry: entry["id"])
+            # 3. 生成templates[] 每项字段
+            payload["templates"] = templates_list
+            # 4. 写入json文件
+            self.JSON_PATH.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        return {"templates": payload.get("templates", [])}
