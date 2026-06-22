@@ -14,6 +14,8 @@ google-auth-oauthlib>=1.2
 
 PyYAML>=6.0
 
+tomlkit>=0.13
+
 Pillow>=10.0
 
 # LLM dependencies - llama.cpp for GGUF inference (CPU wheel)

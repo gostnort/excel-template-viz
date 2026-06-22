@@ -40,12 +40,10 @@ class PasteParseConfig:
             Dict representation of the config with field rules converted to dict format
         """
         result: dict[str, Any] = {}
-        
-        # Convert field_rules to dict format
+        # convert field rules using helper
         for field_name, rules in self.field_rules.items():
             result[field_name] = [_rule_to_dict(rule) for rule in rules]
-        
-        # Add optional fields if present
+        # include optional top level keys when set
         if self.order:
             result["order"] = [
                 _order_entry_to_dict(item) if isinstance(item, dict) else item
@@ -55,10 +53,8 @@ class PasteParseConfig:
             result["worksheet"] = self.worksheet
         if self.sections:
             result["sections"] = self.sections
-        
         result["determiner"] = self.determiner
         result["fields_per_row"] = self.fields_per_row
-        
         return result
 
 
@@ -144,6 +140,7 @@ def default_input_area_for_template(
         if ws is None:
             return None
         last_col = 0
+        # find rightmost non-empty header in row 1
         for col_idx, cell in enumerate(ws[1], start=1):
             if cell.value is not None and str(cell.value).strip():
                 last_col = col_idx
@@ -193,7 +190,7 @@ def read_input_area_headers(
                 text = str(cell_value).strip()
                 if text:
                     headers.append(text)
-            # Skip blank header cells so wide input areas do not add placeholder columns.
+        # drop trailing placeholder columns
         while headers and headers[-1].startswith("col_"):
             headers.pop()
         seen: set[str] = set()
@@ -285,6 +282,7 @@ def build_order_entries_from_mappings(
         if structural_order_col_offset([seeded]) == 1:
             new_order.append(seeded)
             seen.add(str(seeded.get("filed", "")).strip())
+    # include structural order at 0 and any mapped columns
     for idx, col_name in enumerate(sheet_columns):
         col_stripped = col_name.strip()
         if not col_stripped:
@@ -383,20 +381,16 @@ def config_from_dict(raw: dict[str, Any]) -> PasteParseConfig | None:
     order = raw.get("order")
     if order is not None and not isinstance(order, list):
         order = None
-    
     worksheet = raw.get("worksheet")
     if worksheet is not None:
         worksheet = str(worksheet).strip()
-    
-    # Parse sections configuration
+    # keep sections only if list
     sections = raw.get("sections")
     if sections is not None and not isinstance(sections, list):
         sections = None
-
     fields_per_row = raw.get("fields_per_row", DEFAULT_FIELDS_PER_ROW)
     if not isinstance(fields_per_row, int) or fields_per_row < 1:
         fields_per_row = DEFAULT_FIELDS_PER_ROW
-    
     return PasteParseConfig(
         determiner=_normalize_determiner(str(raw.get("determiner", "tab"))),
         field_rules=field_rules,
@@ -588,6 +582,7 @@ def config_to_yaml(config: dict[str, Any], *, omit_unmapped_fields: bool = False
     sections = config.get("sections")
     if isinstance(sections, list) and sections:
         lines.extend(_format_section_lines(sections))
+    # emit remaining field mappings after top level keys
     for key, value in config.items():
         if key in RESERVED_TOP_KEYS or key == "determiner" or key == "fields_per_row":
             continue
@@ -932,22 +927,17 @@ def create_default_config_from_template(template_path: Path, worksheet_name: str
                 order_entries = [_order_entry_to_dict({"filed": field_name, "index": col_idx})]
                 continue
             field_rules[field_name] = [_default_unmapped_rule()]
-        
         # Create sections configuration if there are multiple columns
         sections = None
         if len(header_cells) > 1:
-            # Detect data area from row 2, column 1 to last column with data
             from openpyxl.utils import get_column_letter
-            
             start_col = get_column_letter(1)
             end_col = get_column_letter(last_col_with_data)
-            
             sections = [{
-                "input_area": f"{start_col}2:{end_col}2",  # Second row as input area
-                "move_to": "down",  # Move down by default
-                "offset": 1  # Offset by 1 row
+                "input_area": f"{start_col}2:{end_col}2",
+                "move_to": "down",
+                "offset": 1
             }]
-        
         wb.close()
         
         return PasteParseConfig(
@@ -981,13 +971,12 @@ def ensure_config_exists(template_id: str, template_path: Path) -> bool:
     
     if config_path.exists():
         return True
-
+    # migrate legacy flat config if present
     legacy_path = TEMPLATES_DIR / f"{template_id}{PASTE_CONFIG_SUFFIX}"
     if legacy_path.exists():
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(legacy_path.read_text(encoding="utf-8"), encoding="utf-8")
         return True
-    
     try:
         default_config = create_default_config_from_template(template_path)
         config_dict = default_config.to_dict()

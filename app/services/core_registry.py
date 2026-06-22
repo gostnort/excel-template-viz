@@ -96,8 +96,8 @@ class SortTemplates:
         """
         no_extension_name = template_file_path.stem
         no_extension_name = no_extension_name.replace("-", "_").replace("_", " ")
-        no_extension_name = no_extension_name.title()
         no_extension_name = " ".join(no_extension_name.split())
+        no_extension_name = no_extension_name.title()
         return no_extension_name.replace(" ", "_")
 
     def _generate_json(self) -> dict:
@@ -134,7 +134,7 @@ class SortTemplates:
         return: None
         """
         # 如果没有提供 JSON 文件路径，则调用_generate_json生成默认数据。
-        if not JSON_PATH.exists() or JSON_PATH is None:
+        if not JSON_PATH.exists():
             self._generate_json()
         # 根据last_use_template，将最近打开的模板移动到时间线的最前面。
         if last_use_template is not None:
@@ -192,19 +192,23 @@ class SortTemplates:
             if entry_id not in current_ids:
                 continue  # 磁盘已删，从列表移除
             seen_ids.add(entry_id)
-            templates_list.append({
-                "id": entry_id,
-                "file_name": file_name_by_id[entry_id],
-                "display_name": display_by_id[entry_id],
-            })
+            templates_list.append(
+                {
+                    "id": entry_id,
+                    "file_name": file_name_by_id[entry_id],
+                    "display_name": display_by_id[entry_id],
+                }
+            )
         # 已有 templates 时：仅把磁盘上新出现的 id 追加到列表末尾（不重复 _generate_json_template_section）
         new_ids = sorted(current_ids - seen_ids)
         for template_id in new_ids:
-            templates_list.append({
-                "id": template_id,
-                "file_name": file_name_by_id[template_id],
-                "display_name": display_by_id[template_id],
-            })
+            templates_list.append(
+                {
+                    "id": template_id,
+                    "file_name": file_name_by_id[template_id],
+                    "display_name": display_by_id[template_id],
+                }
+            )
         # 5. 核对 sort_templates_timeline：去掉已删项，新模板 display_name 追加到时间线末尾
         timeline = payload.get("sort_templates_timeline", [])
         if not isinstance(timeline, list):
@@ -285,3 +289,8 @@ class SortTemplates:
                 encoding="utf-8",
             )
         return {"templates": payload.get("templates", [])}
+
+
+class ArrageInputView:
+    def __init__(self):
+        pass
