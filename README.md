@@ -196,6 +196,7 @@ FieldName:
 - **配置示例** / Configuration Examples: [templates/examples/](templates/examples/)
 - **快速开始** / Quickstart: [QUICKSTART.md](QUICKSTART.md)
 - **Speckit 规划** / Speckit Plans: [plans/gradio_ui_migration/](plans/gradio_ui_migration/)
+- **数据流核心（Data Sheet Core）** / Data Sheet Core: [plans/data_sheet_core/](plans/data_sheet_core/)（蓝本：[docs/data_flow_design.md](docs/data_flow_design.md)）
 - **数据录入 Tab 控件说明** / Data Entry Tab (UI controls, Chinese): [plans/data-input-tab/spec.md](plans/data-input-tab/spec.md)
 - **项目概览** / Project Overview: [plans/CODEGRAPH_OVERVIEW.md](plans/CODEGRAPH_OVERVIEW.md)
 

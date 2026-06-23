@@ -13,8 +13,7 @@ alwaysApply: true
 
 ### Comments
 
-- Add comments for any contiguous code block longer than **20 lines**.
-- Do **not** add section headers, file-length markers, or other decorative comments just because a file is long.
+- Consider to add comments for any contiguous code block longer than **20 lines**.
 - **Inline** comments (same line as code): explain parameter or argument usage.
 - **Trailing** comments (line after code): explain the logic of that statement or small step.
 
@@ -30,8 +29,9 @@ alwaysApply: true
 
 ### Project layout
 
-- Production and install-time logic belongs under `app/` (e.g. `app/services/cpu_features.py`).
+- Production and install-time logic belongs under `app/` (e.g. `app/services/core_services.py`).
 - `tests/` is gitignored and never shipped; keep only pytest regressions there, importing from `app/`.
+- `plans` is put the temparay plans for engineering implementation
 
 ### General
 

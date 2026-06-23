@@ -104,6 +104,11 @@ if errorlevel 1 (
 )
 
 echo.
+echo Creating project directories...
+if not exist temp mkdir temp
+if not exist exports mkdir exports
+
+echo.
 echo ========================================
 echo Installation completed successfully!
 echo ========================================
