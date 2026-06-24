@@ -560,15 +560,11 @@ def _demo_main() -> None:
     parser.add_argument("--excel", type=Path, default=default_excel, help="Input_sheet template xlsx")
     parser.add_argument("--textbox", type=str, default=default_textbox, help="path A: tab-separated string")
     parser.add_argument("--source-id", type=str, default=default_source_id, help="path B: external row ID")
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=PROJECT_ROOT / "temp" / "sample_template_demo_out.xlsx",
-        help="write-back output xlsx",
-    )
+    parser.add_argument("--output", type=Path, default=None, help="write-back xlsx; default exports/{template_id}/sample_template_demo_out.xlsx")
     args = parser.parse_args()
     toml_path = Path(args.toml)
     excel_path = Path(args.excel)
+    out_path = args.output or (PROJECT_ROOT / "exports" / args.template_id / "sample_template_demo_out.xlsx")
     if not toml_path.is_file():
         raise SystemExit(f"TOML not found: {toml_path}")
     if not excel_path.is_file():
@@ -600,14 +596,10 @@ def _demo_main() -> None:
         "source_xlsx": str(t2db.resolve_source_path("source1") or ""),
     }
     try:
-        # 路径 A：textbox → determiner 拆分 → DB
+        # 路径 A：textbox 拆分（仅 section 1 展示；落库由下方 incoming 一次覆盖）
         read_payload["textbox_raw"] = args.textbox
         read_payload["textbox_split"] = ui.split_by_determiner(args.textbox)
-        read_payload["textbox_record"] = ui.record_from_textbox(args.textbox)
-        db.insert_or_update(read_payload["textbox_record"])
-        # 路径 B：执法堂业绩.xlsx 按 ID 取行 → DB（与 A 同 id 时覆盖为数据源记录）
-        read_payload["source_record"] = t2db.fetch_row_by_id(args.source_id)
-        db.insert_or_update(read_payload["source_record"])
+        read_payload["textbox_incoming"] = ui.record_from_textbox(args.textbox)
         areas = writer.detect_areas(excel_path)
         read_payload["excel_areas"] = areas
         read_payload["excel_rows"] = [
@@ -617,12 +609,29 @@ def _demo_main() -> None:
             read_payload["print_areas"] = writer.get_print_areas(excel_path)
         except AttributeError as exc:
             read_payload["print_areas_error"] = str(exc)
-        write_records: list[dict[str, Any]] = [read_payload["source_record"]]
+        # 路径 B + Excel 行：拼成 incoming 后各写一次（TOML 覆盖，非 store merge）
+        source_primary = t2db.fetch_row_by_id(args.source_id)
+        read_payload["source_incoming_primary"] = source_primary
+        excel_row_primary = read_payload["excel_rows"][0][0] if read_payload["excel_rows"] and read_payload["excel_rows"][0] else {}
+        incoming_primary = {**source_primary, **excel_row_primary}
+        read_payload["persist_incoming_primary"] = incoming_primary
+        ui.persist_fields(incoming_primary)
+        write_records: list[dict[str, Any]] = []
+        row_primary = db.query_by_id(int(incoming_primary.get("ID#", args.source_id)))
+        if row_primary is not None:
+            write_records.append(row_primary)
         if len(areas) > 1:
-            read_payload["source_record_second"] = t2db.fetch_row_by_id(default_second_id)
-            write_records.append(read_payload["source_record_second"])
-            db.insert_or_update(read_payload["source_record_second"])
-        out_path = Path(args.output)
+            source_second = t2db.fetch_row_by_id(default_second_id)
+            read_payload["source_incoming_second"] = source_second
+            excel_row_second = read_payload["excel_rows"][1][0] if read_payload["excel_rows"][1] else {}
+            incoming_second = {**source_second, **excel_row_second}
+            read_payload["persist_incoming_second"] = incoming_second
+            ui.persist_fields(incoming_second)
+            row_second = db.query_by_id(int(incoming_second.get("ID#", default_second_id)))
+            if row_second is not None:
+                write_records.append(row_second)
+        out_path = Path(out_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         writer.write_back(excel_path, out_path, write_records)
         read_payload["output_excel"] = str(out_path)
         print("=== 1. 从 Excel / 数据源读取的数据 ===")

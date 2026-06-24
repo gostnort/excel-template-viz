@@ -61,7 +61,7 @@ regex = ""
 id = false
 
 [[fields]]
-Input_label = "date"
+Input_label = "Effective_Date"
 field = ""
 source_file = ""
 source_sheet = ""

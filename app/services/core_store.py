@@ -173,6 +173,74 @@ def _normalize_id(value: Any) -> int:
     return int(text)
 
 
+def _has_valid_id_value(value: Any) -> bool:
+    """业务 ID 列非空且非纯空白时视为有效。"""
+    if value is None:
+        return False
+    if isinstance(value, str) and value.strip() == "":
+        return False
+    return True
+
+
+def _id_input_label(cfg: GetTomlValues) -> str | None:
+    """返回 id=true 的 Input_label；无则 None。"""
+    for rule in cfg.field_rules:
+        if rule.id:
+            return rule.Input_label
+    return None
+
+
+def _build_payload_from_toml(cfg: GetTomlValues, incoming: dict[str, Any]) -> dict[str, Any]:
+    """
+    函数名: _build_payload_from_toml
+    作用: 按当前 TOML 全体 Input_label 生成落库 JSON；incoming 无则填空串
+    输入:
+        cfg (GetTomlValues) - 当前 TOML
+        incoming (dict[str, Any]) - 调用方传入的局部 Input_label 值（可含无关键，忽略）
+    输出:
+        dict[str, Any] - 完整 payload，键 = 全部 Input_label
+    """
+    payload: dict[str, Any] = {}
+    for rule in cfg.field_rules:
+        label = rule.Input_label
+        if label in incoming and _has_valid_id_value(incoming[label]):
+            payload[label] = _json_safe_value(incoming[label])
+        else:
+            payload[label] = ""
+    return payload
+
+
+def _resolve_records_id(cfg: GetTomlValues, incoming: dict[str, Any]) -> int:
+    """
+    函数名: _resolve_records_id
+    作用: 由 id=true 的 Input_label 在 incoming 中的值推导 records.id，否则自动生成
+    输入:
+        cfg (GetTomlValues) - TOML 配置
+        incoming (dict[str, Any]) - 本次写入的原始字段 dict
+    输出:
+        int - SQLite 行主键
+    """
+    label = _id_input_label(cfg)
+    if label is not None and label in incoming and _has_valid_id_value(incoming[label]):
+        return _normalize_id(incoming[label])
+    return uuid.uuid4().int >> 64
+
+
+def _json_safe_value(value: Any) -> Any:
+    """datetime 等类型转为可 JSON 序列化的值。"""
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
+
+
+def _row_from_db(row_id: int, data_text: str) -> dict[str, Any]:
+    """SQLite 行 → 对外 dict：顶层 id + data 内各 Input_label。"""
+    parsed = json.loads(data_text)
+    if not isinstance(parsed, dict):
+        parsed = {}
+    return {"id": row_id, **parsed}
+
+
 def _reject_forbidden_db_suffix(db_path: Path) -> None:
     """
     函数名: _reject_forbidden_db_suffix
@@ -191,7 +259,7 @@ def _reject_forbidden_db_suffix(db_path: Path) -> None:
 
 
 class SecureSQLite:
-    """非常规扩展名 SQLite；records 表以 JSON 存整条标准记录。"""
+    """非常规扩展名 SQLite；records.data 以 JSON 存各 Input_label 登记内容。"""
 
     def __init__(self, db_path: Path) -> None:
         """
@@ -228,43 +296,42 @@ class SecureSQLite:
         self.conn.commit()
 
 
-    def insert_or_update(self, record: dict[str, Any]) -> None:
+    def insert_or_update(self, incoming: dict[str, Any], cfg: GetTomlValues) -> int:
         """
         函数名: insert_or_update
-        作用: 按 record["id"] 插入或更新整条 JSON 记录
+        作用: 以 TOML 骨架覆盖 data JSON；不读、不合并旧 data
         输入:
-            record (dict[str, Any]) - 须含 id 键的标准记录
-        输出: 无
+            incoming (dict[str, Any]) - 本次登记值（可缺键）
+            cfg (GetTomlValues) - 当前 TOML 列定义
+        输出:
+            int - 写入后的 records.id
         """
-        if "id" not in record:
-            raise ValueError("record must contain id")
-        rid = _normalize_id(record["id"])
-        payload = json.dumps(record, ensure_ascii=False)
+        rid = _resolve_records_id(cfg, incoming)
+        payload = _build_payload_from_toml(cfg, incoming)
         cur = self.conn.cursor()
-        cur.execute("SELECT id FROM records WHERE id=?", (rid,))
-        exists = cur.fetchone()
-        if exists:
-            cur.execute("UPDATE records SET data=? WHERE id=?", (payload, rid))
-        else:
-            cur.execute("INSERT INTO records (id, data) VALUES (?, ?)", (rid, payload))
+        cur.execute(
+            "INSERT OR REPLACE INTO records (id, data) VALUES (?, ?)",
+            (rid, json.dumps(payload, ensure_ascii=False)),
+        )
         self.conn.commit()
+        return rid
 
 
     def query_by_id(self, rid: int) -> dict[str, Any] | None:
         """
         函数名: query_by_id
-        作用: 按主键读取一条记录
+        作用: 按主键读取一条记录（顶层 id + data 内 Input_label）
         输入:
             rid (int) - 记录主键
         输出:
-            dict[str, Any] | None - 解析后的记录或 None
+            dict[str, Any] | None - 当前落库记录或 None
         """
         cur = self.conn.cursor()
-        cur.execute("SELECT data FROM records WHERE id=?", (_normalize_id(rid),))
+        cur.execute("SELECT id, data FROM records WHERE id=?", (_normalize_id(rid),))
         row = cur.fetchone()
         if not row:
             return None
-        return json.loads(row[0])
+        return _row_from_db(row[0], row[1])
 
 
     def query_all(self) -> list[dict[str, Any]]:
@@ -273,11 +340,11 @@ class SecureSQLite:
         作用: 读取全部记录，供 UiProvider.get_data 使用
         输入: 无
         输出:
-            list[dict[str, Any]] - 按 id 排序的记录列表
+            list[dict[str, Any]] - 每行含 id 与各 Input_label
         """
         cur = self.conn.cursor()
-        cur.execute("SELECT data FROM records ORDER BY id")
-        return [json.loads(row[0]) for row in cur.fetchall()]
+        cur.execute("SELECT id, data FROM records ORDER BY id")
+        return [_row_from_db(row_id, data_text) for row_id, data_text in cur.fetchall()]
 
 
     def close(self) -> None:
@@ -321,12 +388,24 @@ class UiProvider:
     def get_data(self) -> list[dict[str, Any]]:
         """
         函数名: get_data
-        作用: 从 DB 读取全部行数据，不直读 Excel
+        作用: 从 DB 读取全部行（records.id + 各 Input_label）
         输入: 无
         输出:
             list[dict[str, Any]] - 与 query_all 一致
         """
         return self.db.query_all()
+
+
+    def persist_fields(self, incoming: dict[str, Any]) -> int:
+        """
+        函数名: persist_fields
+        作用: incoming 按 TOML 骨架覆盖写入 DB
+        输入:
+            incoming (dict[str, Any]) - 本次登记值（可缺键）
+        输出:
+            int - records.id
+        """
+        return self.db.insert_or_update(incoming, self.cfg)
 
 
     def split_by_determiner(self, raw: str) -> list[str]:
@@ -344,31 +423,22 @@ class UiProvider:
     def record_from_textbox(self, raw: str) -> dict[str, Any]:
         """
         函数名: record_from_textbox
-        作用: 路径 A：determiner 拆分后按 index 映射为标准记录
+        作用: 路径 A：determiner 拆分后按 index 映射为 dict[Input_label]
         输入:
             raw (str) - textbox 纯字符串
         输出:
-            dict[str, Any] - 含 id、field、Input_label 键的记录
+            dict[str, Any] - 仅含参与拆分的 Input_label 键
         """
         parts = self.split_by_determiner(raw)
-        record: dict[str, Any] = {}
-        has_id_field = False
+        fields: dict[str, Any] = {}
         max_index = max((rule.index for rule in self.cfg.field_rules if rule.index >= 0), default=-1)
         if max_index >= 0 and len(parts) <= max_index:
             raise ValueError(
                 f"textbox split into {len(parts)} part(s), need at least {max_index + 1}"
             )
-        # 仅 index>=0 的 rule 参与拆分；index=-1 仅 Input_sheet 或数据源路径
+        # 仅 index>=0 的 rule 参与拆分；index=-1 由其它路径补全
         for rule in self.cfg.field_rules:
             if rule.index < 0:
                 continue
-            segment = parts[rule.index]
-            if rule.field:
-                record[rule.field] = segment
-            record[rule.Input_label] = segment
-            if rule.id:
-                has_id_field = True
-                record["id"] = _normalize_id(segment)
-        if not has_id_field:
-            record["id"] = uuid.uuid4().int >> 64
-        return record
+            fields[rule.Input_label] = parts[rule.index]
+        return fields
