@@ -1,45 +1,16 @@
 """外部数据源与 Input_sheet 读写（路径 B）。见 docs/data_flow_design.md。"""
-
 from __future__ import annotations
-
 import argparse
 import json
 import logging
 import re
-import uuid
 from pathlib import Path
 from typing import Any
-
 from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter, range_boundaries
-
-from .core_toml import GetTomlValues, TomlDefault
+from .core_toml import GetTomlValues, TomlDefault, offset_cell
 
 
 logger = logging.getLogger(__name__)
-
-
-def _normalize_id(value: Any) -> int:
-    """
-    函数名: _normalize_id
-    作用: 将 ID 规范为整数主键
-    输入:
-        value (Any) - 原始 ID
-    输出:
-        int - 整数主键
-    """
-    if isinstance(value, bool):
-        raise ValueError("ID cannot be boolean")
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    text = str(value).strip()
-    if not text:
-        raise ValueError("ID cannot be empty")
-    if "." in text:
-        return int(float(text))
-    return int(text)
 
 
 def _cell_empty(value: Any) -> bool:
@@ -186,11 +157,6 @@ class Template2DB:
         return match.group(0)
 
 
-    def generate_auto_id(self) -> int:
-        """无 id=true 字段时生成整数主键。"""
-        return uuid.uuid4().int >> 64
-
-
     def _id_column_name(self) -> str | None:
         """优先取 id=true 且已映射 field 的列名作为查行键。"""
         for rule in self.cfg.field_rules:
@@ -205,15 +171,14 @@ class Template2DB:
     def fetch_row_by_id(self, id_value: Any) -> dict[str, Any]:
         """
         函数名: fetch_row_by_id
-        作用: 路径 B：按 ID 从各 source_sheet 取列并合并为一条记录
+        作用: 路径 B：按 ID 从各 source_sheet 取列产出 incoming（键为 Input_label）
         输入:
             id_value (Any) - 用户指定或 textbox 中的 ID
         输出:
-            dict[str, Any] - 标准记录（含 id、field、Input_label）
+            dict[str, Any] - incoming：键仅为 Input_label（不含 field 名 / 不含主键 id）
         """
         record: dict[str, Any] = {}
         id_column = self._id_column_name()
-        has_id = False
         sheet_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
         # 每个 rule 可能指向不同 source_file / source_sheet
         for rule in self.cfg.field_rules:
@@ -232,29 +197,20 @@ class Template2DB:
             if matched is None:
                 continue
             raw_value = _lookup_row_value(matched, rule)
-            mapped = self.apply_regex(raw_value, rule.regex)
-            if rule.field:
-                record[rule.field] = mapped
-            record[rule.Input_label] = mapped
-            if rule.id:
-                record["id"] = _normalize_id(mapped)
-                has_id = True
-        # 数据源未标 id 时沿用入参或自动生成
-        if not has_id:
-            if id_value is not None and str(id_value).strip() != "":
-                record["id"] = _normalize_id(id_value)
-            else:
-                record["id"] = self.generate_auto_id()
+            # 只写 Input_label 键；落库主键由 core_store 据 id=true 推导或自动生成
+            record[rule.Input_label] = self.apply_regex(raw_value, rule.regex)
         return record
 
 
 
 
 class ExcelWriter:
-    """Input_sheet 写回、区域检测、打印区域读取；列定位用 Input_label 不用 index。"""
+    """按 verify_toml 的 located + input_section k 组平移读写值格；定位用 Input_label 不用 index。"""
 
-    def __init__(self, cfg: GetTomlValues) -> None:
+    def __init__(self, cfg: GetTomlValues, located: dict[str, dict[str, int]] | None = None) -> None:
         self.cfg = cfg
+        # located: {Input_label: {label_row,label_col,value_row,value_col}}，来自 core_toml.verify_toml
+        self.located = dict(located) if located else {}
 
 
     def _worksheet_name(self, workbook_path: Path) -> str:
@@ -268,180 +224,83 @@ class ExcelWriter:
             wb.close()
 
 
-    def _parse_area_range(self, area_str: str) -> tuple[int, int, int, int]:
-        """解析 A1 区域为 (min_row, min_col, max_row, max_col)。"""
-        min_col, min_row, max_col, max_row = range_boundaries(area_str)
-        return min_row, min_col, max_row, max_col
-
-
-    def _calculate_next_area(self, input_area: str, move_to: str, offset: int) -> str:
+    def _value_cell(self, label: str, instance_k: int) -> tuple[int, int] | None:
         """
-        函数名: _calculate_next_area
-        作用: 按 sections.move_to / offset 计算下一 input_area
+        函数名: _value_cell
+        作用: 由 located 的 instance 0 值格，按 input_section 平移得第 k 组值格坐标
         输入:
-            input_area (str) - 当前区域如 A2:G2
-            move_to (str) - down/up/left/right
-            offset (int) - 偏移量
+            label (str) - Input_label
+            instance_k (int) - 组序（0 即 instance 0，不平移）
         输出:
-            str - 下一区域字符串
+            tuple[int, int] | None - (row, col)；label 不在 located 时 None
         """
-        min_row, min_col, max_row, max_col = self._parse_area_range(input_area)
-        row_span = max_row - min_row
-        col_span = max_col - min_col
-        direction = move_to.strip().lower()
-        if direction == "down":
-            min_row += offset
-            max_row = min_row + row_span
-        elif direction == "up":
-            min_row -= offset
-            max_row = min_row + row_span
-        elif direction == "right":
-            min_col += offset
-            max_col = min_col + col_span
-        elif direction == "left":
-            min_col -= offset
-            max_col = min_col + col_span
-        else:
-            raise ValueError(f"unsupported move_to: {move_to}")
-        return f"{get_column_letter(min_col)}{min_row}:{get_column_letter(max_col)}{max_row}"
+        coord = self.located.get(label)
+        if coord is None:
+            return None
+        value_row = coord["value_row"]
+        value_col = coord["value_col"]
+        if instance_k <= 0:
+            return value_row, value_col
+        section = self.cfg.input_section
+        # 同方向平移 offset*k；offset_cell 与 core_toml 共用语义
+        return offset_cell(value_row, value_col, section.move_to, section.offset * instance_k)
 
 
-    def _area_filled_positions(
-        self,
-        ws: Any,
-        min_row: int,
-        min_col: int,
-        max_row: int,
-        max_col: int,
-    ) -> frozenset[tuple[int, int]]:
-        """返回区域内非空单元格的相对坐标集合，用于多区域停止判断。"""
-        filled: set[tuple[int, int]] = set()
-        for row in range(min_row, max_row + 1):
-            for col in range(min_col, max_col + 1):
-                if not _cell_empty(ws.cell(row=row, column=col).value):
-                    filled.add((row - min_row, col - min_col))
-        return frozenset(filled)
+    def _read_instance(self, ws: Any, instance_k: int) -> dict[str, Any]:
+        """读取第 k 组全部 located 值格，键为 Input_label。"""
+        values: dict[str, Any] = {}
+        for label in self.located:
+            cell = self._value_cell(label, instance_k)
+            if cell is None:
+                continue
+            values[label] = ws.cell(row=cell[0], column=cell[1]).value
+        return values
 
 
-    def _area_is_empty(
-        self,
-        ws: Any,
-        min_row: int,
-        min_col: int,
-        max_row: int,
-        max_col: int,
-    ) -> bool:
-        """区域内无任何非空单元格。"""
-        return len(self._area_filled_positions(ws, min_row, min_col, max_row, max_col)) == 0
-
-
-    def detect_areas(self, excel_path: Path) -> list[dict[str, Any]]:
+    def read_values(self, excel_path: Path, instance_k: int = 0) -> dict[str, Any]:
         """
-        函数名: detect_areas
-        作用: 从 sections[0] 起循环检测重复 input_area
+        函数名: read_values
+        作用: 读取单个 instance 的填写值格（键为 Input_label）
         输入:
             excel_path (Path) - 模板 xlsx
+            instance_k (int) - 组序
         输出:
-            list[dict] - 各区域 index、area、起止行列
+            dict[str, Any] - {Input_label: 值}
         """
-        if not self.cfg.sections:
-            return []
-        section = self.cfg.sections[0]
-        input_area = str(section.get("input_area", "")).strip()
-        if not input_area:
-            return []
-        move_to = str(section.get("move_to", "down"))
-        offset_raw = section.get("offset", 1)
-        offset = int(offset_raw)
         sheet_name = self._worksheet_name(excel_path)
         wb = load_workbook(excel_path, read_only=True, data_only=True)
         try:
-            ws = wb[sheet_name]
-            areas: list[dict[str, Any]] = []
-            current = input_area
-            reference_pattern: frozenset[tuple[int, int]] | None = None
-            index = 1
-            while True:
-                min_row, min_col, max_row, max_col = self._parse_area_range(current)
-                if min_row < 1 or min_col < 1:
-                    break
-                pattern = self._area_filled_positions(ws, min_row, min_col, max_row, max_col)
-                if index > 1:
-                    # 停止：全空或与首区域填充模式不一致
-                    if self._area_is_empty(ws, min_row, min_col, max_row, max_col):
-                        break
-                    if reference_pattern is not None and pattern != reference_pattern:
-                        break
-                areas.append(
-                    {
-                        "index": index,
-                        "area": current,
-                        "start_row": min_row,
-                        "start_col": min_col,
-                        "end_row": max_row,
-                        "end_col": max_col,
-                    }
-                )
-                if reference_pattern is None and pattern:
-                    reference_pattern = pattern
-                current = self._calculate_next_area(current, move_to, offset)
-                index += 1
-                next_min_row, next_min_col, _, _ = self._parse_area_range(current)
-                if next_min_row < 1 or next_min_col < 1 or next_min_row > ws.max_row:
-                    break
-            return areas
+            return self._read_instance(wb[sheet_name], instance_k)
         finally:
             wb.close()
 
 
-    def _header_map(self, ws: Any, header_row: int, min_col: int, max_col: int) -> dict[str, int]:
-        """表头行 Input_label → 列号（1-based）。"""
-        mapping: dict[str, int] = {}
-        for col in range(min_col, max_col + 1):
-            value = ws.cell(row=header_row, column=col).value
-            if _cell_empty(value):
-                continue
-            mapping[str(value).strip()] = col
-        return mapping
-
-
-    def read_area_rows(self, excel_path: Path, area: str) -> list[dict[str, Any]]:
+    def read_instances(self, excel_path: Path, limit: int = 100) -> list[dict[str, Any]]:
         """
-        函数名: read_area_rows
-        作用: 读取区域内数据行，键为表头 Input_label
+        函数名: read_instances
+        作用: 从 instance 0 起逐组读取值格，遇全空组停止
         输入:
-            excel_path (Path) - xlsx
-            area (str) - 如 A2:G2
+            excel_path (Path) - 模板 xlsx
+            limit (int) - 最大扫描组数，防止无界循环
         输出:
-            list[dict[str, Any]] - 行列表
+            list[dict[str, Any]] - 每组一个 {Input_label: 值}
         """
-        min_row, min_col, max_row, max_col = self._parse_area_range(area)
-        header_row = min_row - 1 if min_row > 1 else min_row
+        if not self.located:
+            return []
         sheet_name = self._worksheet_name(excel_path)
         wb = load_workbook(excel_path, read_only=True, data_only=True)
         try:
             ws = wb[sheet_name]
-            headers = self._header_map(ws, header_row, min_col, max_col)
-            rows: list[dict[str, Any]] = []
-            for row_idx in range(min_row, max_row + 1):
-                if self._area_is_empty(ws, row_idx, min_col, row_idx, max_col):
-                    continue
-                row_dict: dict[str, Any] = {}
-                for label, col_idx in headers.items():
-                    row_dict[label] = ws.cell(row=row_idx, column=col_idx).value
-                rows.append(row_dict)
-            return rows
+            instances: list[dict[str, Any]] = []
+            for k in range(limit):
+                values = self._read_instance(ws, k)
+                # 全空视为区域结束
+                if all(_cell_empty(v) for v in values.values()):
+                    break
+                instances.append(values)
+            return instances
         finally:
             wb.close()
-
-
-    def _record_value_for_label(self, record: dict[str, Any], label: str, rule: TomlDefault | None) -> Any:
-        """写回时优先 record[Input_label]，其次 record[field]。"""
-        if label in record:
-            return record[label]
-        if rule and rule.field and rule.field in record:
-            return record[rule.field]
-        return None
 
 
     def write_back(
@@ -449,53 +308,42 @@ class ExcelWriter:
         excel_path: Path,
         output_path: Path,
         records: list[dict[str, Any]] | dict[str, Any],
-        areas: list[str] | None = None,
+        instance_k: int = 0,
     ) -> None:
         """
         函数名: write_back
-        作用: 按 Input_label 对表头列写回纯值并另存
+        作用: 把记录各 Input_label 值写入对应 located 值格（k 组平移）并另存
         输入:
             excel_path (Path) - 源模板
             output_path (Path) - 输出路径
-            records - 单条或多条记录
-            areas (list[str] | None) - 未传则 detect_areas
+            records - 单条 dict（写第 instance_k 组）或多条 list（从 instance_k 起依次写）
+            instance_k (int) - 起始组序
         输出: 无
         """
         if isinstance(records, dict):
             record_list = [records]
         else:
-            record_list = records
-        if areas is None:
-            detected = self.detect_areas(excel_path)
-            areas = [item["area"] for item in detected]
-        if not areas:
-            # 无检测结果时回退 sections[0].input_area
-            if self.cfg.sections:
-                first_area = str(self.cfg.sections[0].get("input_area", "")).strip()
-                if first_area:
-                    areas = [first_area]
-            if not areas:
-                raise ValueError("no input areas configured")
-        label_to_rule = {rule.Input_label: rule for rule in self.cfg.field_rules}
+            record_list = list(records)
+        if not self.located:
+            raise ValueError("located is empty; run verify_toml first")
         sheet_name = self._worksheet_name(excel_path)
         wb = load_workbook(excel_path)
         try:
             ws = wb[sheet_name]
-            # 每个 area 对应一条 record，按表头列号写入
-            for area, record in zip(areas, record_list):
-                min_row, min_col, max_row, max_col = self._parse_area_range(area)
-                header_row = min_row - 1 if min_row > 1 else min_row
-                headers = self._header_map(ws, header_row, min_col, max_col)
-                data_row = min_row if max_row >= min_row else min_row
-                for label, col_idx in headers.items():
-                    rule = label_to_rule.get(label)
-                    # index=-1 且无 field 的列仅展示，默认不写回
-                    if rule is not None and rule.index < 0 and not rule.field:
+            # 第 i 条记录写入第 instance_k+i 组值格
+            for offset_idx, record in enumerate(record_list):
+                k = instance_k + offset_idx
+                for label in self.located:
+                    if label not in record:
                         continue
-                    value = self._record_value_for_label(record, label, rule)
-                    if value is None:
+                    value = record[label]
+                    # 空值不覆盖模板既有内容
+                    if _cell_empty(value):
                         continue
-                    ws.cell(row=data_row, column=col_idx).value = value
+                    cell = self._value_cell(label, k)
+                    if cell is None:
+                        continue
+                    ws.cell(row=cell[0], column=cell[1]).value = value
             output_path.parent.mkdir(parents=True, exist_ok=True)
             wb.save(output_path)
         finally:
@@ -505,13 +353,14 @@ class ExcelWriter:
     def get_print_areas(self, excel_path: Path) -> dict[str, str | None]:
         """
         函数名: get_print_areas
-        作用: 读取各 sheet 的 print_area 元数据（只读，不做打印）
+        作用: 读取各 sheet 的 print_area 元数据（不在 TOML 定位模型内，仅读元数据）
         输入:
             excel_path (Path) - xlsx
         输出:
             dict[str, str | None] - 工作表名 → 区域字符串
         """
-        wb = load_workbook(excel_path, read_only=True)
+        # 非 read_only 打开：ReadOnlyWorksheet 无 print_area 属性
+        wb = load_workbook(excel_path)
         try:
             result: dict[str, str | None] = {}
             for name in wb.sheetnames:
@@ -531,7 +380,7 @@ class ExcelWriter:
 
 
 
-def _demo_main() -> None:
+def main() -> None:
     """
     函数名: _demo_main
     作用: 蓝本 Phase 6：用 docs 样本做全量三段验证（路径 A/B + ExcelWriter）
@@ -542,8 +391,8 @@ def _demo_main() -> None:
     import tomlkit
     from .core_registry import PROJECT_ROOT
     from .core_store import SecureSQLite, UiProvider, default_db_path
-    from .core_toml import _config_from_dict
-    docs_dir = PROJECT_ROOT / "docs"
+    from .core_toml import _config_from_dict, verify_toml
+    docs_dir = PROJECT_ROOT / "docs" / "sample"
     default_toml = docs_dir / "sample_template.toml"
     default_excel = docs_dir / "sample_template.xlsx"
     default_source_xlsx = docs_dir / "执法堂业绩.xlsx"
@@ -589,50 +438,53 @@ def _demo_main() -> None:
     db = SecureSQLite(default_db_path(args.template_id))
     ui = UiProvider(cfg, db)
     t2db = Template2DB(cfg)
-    writer = ExcelWriter(cfg)
+    # 唯一校验入口：得 located（标签→值格坐标），供 ExcelWriter 按值格读写
+    verify_report = verify_toml(excel_path, cfg)
+    located = verify_report.get("located", {})
+    writer = ExcelWriter(cfg, located=located)
     read_payload: dict[str, Any] = {
         "toml": str(toml_path),
         "excel": str(excel_path),
         "source_xlsx": str(t2db.resolve_source_path("source1") or ""),
+        "verify_toml": verify_report,
     }
     try:
-        # 路径 A：textbox 拆分（仅 section 1 展示；落库由下方 incoming 一次覆盖）
+        # 路径 A：textbox 按 determiner 拆分为局部 incoming（仅展示，落库见下方覆盖）
         read_payload["textbox_raw"] = args.textbox
         read_payload["textbox_split"] = ui.split_by_determiner(args.textbox)
         read_payload["textbox_incoming"] = ui.record_from_textbox(args.textbox)
-        areas = writer.detect_areas(excel_path)
-        read_payload["excel_areas"] = areas
-        read_payload["excel_rows"] = [
-            writer.read_area_rows(excel_path, item["area"]) for item in areas
-        ]
+        # Excel 读：按 located + input_section 平移逐组读填写值格
+        excel_instances = writer.read_instances(excel_path)
+        read_payload["excel_instances"] = excel_instances
         try:
             read_payload["print_areas"] = writer.get_print_areas(excel_path)
         except AttributeError as exc:
             read_payload["print_areas_error"] = str(exc)
-        # 路径 B + Excel 行：拼成 incoming 后各写一次（TOML 覆盖，非 store merge）
+        # 路径 B + Excel 组：拼成 incoming 后各写一次（store 按 TOML 覆盖，不 merge）
         source_primary = t2db.fetch_row_by_id(args.source_id)
         read_payload["source_incoming_primary"] = source_primary
-        excel_row_primary = read_payload["excel_rows"][0][0] if read_payload["excel_rows"] and read_payload["excel_rows"][0] else {}
+        excel_row_primary = excel_instances[0] if excel_instances else {}
         incoming_primary = {**source_primary, **excel_row_primary}
         read_payload["persist_incoming_primary"] = incoming_primary
-        ui.persist_fields(incoming_primary)
+        rid_primary = ui.persist_fields(incoming_primary)
         write_records: list[dict[str, Any]] = []
-        row_primary = db.query_by_id(int(incoming_primary.get("ID#", args.source_id)))
+        row_primary = db.query_by_id(rid_primary)
         if row_primary is not None:
             write_records.append(row_primary)
-        if len(areas) > 1:
-            source_second = t2db.fetch_row_by_id(default_second_id)
-            read_payload["source_incoming_second"] = source_second
-            excel_row_second = read_payload["excel_rows"][1][0] if read_payload["excel_rows"][1] else {}
-            incoming_second = {**source_second, **excel_row_second}
-            read_payload["persist_incoming_second"] = incoming_second
-            ui.persist_fields(incoming_second)
-            row_second = db.query_by_id(int(incoming_second.get("ID#", default_second_id)))
-            if row_second is not None:
-                write_records.append(row_second)
+        # 第二条记录：演示第 k≥1 组值格平移写回
+        source_second = t2db.fetch_row_by_id(default_second_id)
+        read_payload["source_incoming_second"] = source_second
+        excel_row_second = excel_instances[1] if len(excel_instances) > 1 else {}
+        incoming_second = {**source_second, **excel_row_second}
+        read_payload["persist_incoming_second"] = incoming_second
+        rid_second = ui.persist_fields(incoming_second)
+        row_second = db.query_by_id(rid_second)
+        if row_second is not None:
+            write_records.append(row_second)
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        writer.write_back(excel_path, out_path, write_records)
+        # write_records[i] 写入第 i 组值格（instance_k 从 0 起）
+        writer.write_back(excel_path, out_path, write_records, instance_k=0)
         read_payload["output_excel"] = str(out_path)
         print("=== 1. 从 Excel / 数据源读取的数据 ===")
         print(json.dumps(read_payload, ensure_ascii=False, indent=2, default=str))
@@ -647,4 +499,4 @@ def _demo_main() -> None:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    _demo_main()
+    main()

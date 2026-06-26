@@ -6,27 +6,31 @@
 
 **设计依据**：
 - 架构蓝图：`docs/data_sheet_core_design.md`
-- **字段语义与场景**：`docs/toml_config_design.md`（determiner / index / source_* / Input_label 分工；**落库 JSON 键仅为 `Input_label`，`field` 不落库**）
-- TOML 配置契约：`app/services/core_toml.py`
+- **字段语义、标签/值格定位、`input_area` 印证**：`docs/toml_config_design.md`（**权威**；含 `value_from_label` / `value_offset` / `[[input_section]]` / `verify_toml`）
+- TOML 解析与校验：`app/services/core_toml.py`（`GetTomlValues`、`TomlGenerator`、`verify_toml`）
 - 模板路径约定：`app/services/core_registry.py`（`TEMPLATES_DIR`）
+- **落库 JSON 键仅为 `Input_label`**；`field` 不落库（见下文落库策略）
 
 **为何拆成两模块**：
 
 | 分层 | 模块 | 关注点 |
 |------|------|--------|
 | 存储 + UI 供给 | `core_store.py` | UI 纯字符串入 DB；`determiner` 拆分；Gradio 读 DB |
-| Excel 转换 | `core_transform.py` | 外部数据源表读取；Input_sheet 写回；区域检测 |
+| Excel 转换 | `core_transform.py` | 外部数据源读取；`worksheet` 上按定位写回值格 |
+| TOML 与坐标校验 | `core_toml.py`（非本计划交付范围，但为上下游契约） | Load/Save；`verify_toml`；`offset_cell` |
 
 - **UI 只依赖 store 层**：textbox 纯字符串直接落库；`UiProvider` 从 DB 供给 labels + data。
 - **转换层不依赖 store 层**：`Template2DB` 按 `source_file` / `source_sheet` / `Input_label` 读外部表；产出标准 `dict` 由调用方写入 DB。
 - **依赖方向单一**：`core_transform` 不 import `core_store`。
 
 **关键原则**：
-- 仅交付 `core_store.py` 与 `core_transform.py`；不另建 `tests/`
+- 本计划**交付** `core_store.py` 与 `core_transform.py`；不另建 `tests/`
 - 仅 `import` 其他 `core_*.py` 及标准库；`core_transform` 另用 `openpyxl`
 - 不引用 `section_detector`、`excel_parser`、`excel_print`、`paste_parse_config` 等既有服务
-- 字段语义严格遵循 `toml_config_design.md`，**index 不是 Excel 列号**
+- 字段语义与 **worksheet 上标签→值格→`input_area`** 印证，严格遵循 `toml_config_design.md`
+- **`index`**：仅用于 UI textbox 按 `determiner` 拆分后的段序；**不是** Excel 列号，**不参与** `input_section` 的 k 组平移
 - 四个类之外不新增类；不设编排类
+- TOML **只处理**顶层 `worksheet` 指定的那一张表；**与 Print_sheet 及其他工作表无关**（打印区域读取若存在，不纳入 TOML 定位模型）
 
 ## 落库策略：`insert_or_update` 以 TOML 覆盖 JSON
 
@@ -56,52 +60,85 @@ insert_or_update(incoming, cfg):
 
 ## TOML 字段语义（核心契约）
 
-依据 `docs/toml_config_design.md`，两类入参路径：
+依据 `docs/toml_config_design.md`。下列键分工与「路径 A/B」**独立**——路径只产生 `incoming` 或读写 xlsx；**标签如何落在表上**由 `[[fields]]` + `[[input_section]]` + `verify_toml` 定义。
+
+### `[[fields]]` 共有键（每条必有）
+
+| 键 | 作用 |
+|----|------|
+| `Input_label` | 在 `worksheet` 上**全表扫描**（每字段从 (1,1) 重扫）找标签格；**落库 JSON 键名**；`get_labels()` 用 |
+| `value_from_label` | `up` / `down` / `left` / `right`：从标签格推算 **instance 0 填写值格**的方向 |
+| `value_offset` | 与 `value_from_label` 配合的步长（格数） |
+| `index` | **仅路径 A**：`determiner` 拆分后的段序（0-based）；`-1` 表示不参与 textbox 拆分 |
+| `id` | `true` 时：该 `Input_label` 在 `incoming` 中的有效值用于 `records.id`；**同时**写入 JSON |
+
+可选键：`field`、`source_file`、`source_sheet`、`regex`（空串 `""` 视为未配置）。`field` **仅读外部数据源列**，**不写入** `data` JSON。
+
+### 标签格与值格（及与 `input_area` 的相互印证）
+
+**标签与 `input_area` 无关联**：找标签**只认** `Input_label` 文本；`input_area` **不参与**找标签。
+
+1. 在 `worksheet` 指定表上，对每个 `Input_label` 扫描得标签格 `(label_row, label_col)`（trim 后完全相等；0 个或多个匹配 → `verify_toml` 失败）。
+2. 值格：`(value_row, value_col) = offset_cell(label_row, label_col, value_from_label, value_offset)`。
+3. **instance 0** 的值格**必须**落在 `[[input_section]].input_area` 矩形内，否则记入 `out_of_area_labels`。
+4. **标签格坐标固定**；`move_to` / `offset` **只平移**第 k≥1 组的**填写值格**，不平移标签。
+
+第 k 组值格（k≥0）：在记住的 instance 0 值格上，对 k≥1 重复应用 `input_section.move_to` / `offset`。
+
+UI 加载 template 并激活校验时调用 **`core_toml.verify_toml(template_path, cfg)`**（唯一校验入口），返回至少：
+
+- `ok`、`missing_labels`、`out_of_area_labels`
+- `located`：`{ Input_label: {label_row, label_col, value_row, value_col}, ... }`（内存用，不写回 TOML）
+
+`ExcelWriter` 读/写 **填写值格**时应与 `located` + k 平移一致（实现逐步对齐；**不再**以「`input_area` 首行作表头匹配列」为主模型）。
+
+### `[[input_section]]`（有且仅一条）
+
+| 键 | 作用 |
+|----|------|
+| `input_area` | **instance 0 填写值**所在区域（**不含标签格**） |
+| `move_to` | 第 2、3… 组填写值相对 instance 0 的平移方向 |
+| `offset` | 平移步长 |
 
 ### 路径 A：UI textbox → DB（`core_store` 主责）
 
 Gradio 提供一个 **textbox**，用户输入**一整段纯字符串**，原样或解析后写入 DB。
 
-| 键 | 作用 |
-|----|------|
-| `determiner` | 拆分上述纯字符串的分隔符（如 `"\t"` tab） |
-| `index` | 该 `[[fields]]` 对应字段在拆分结果中的**顺序位置**（0-based） |
-| `Input_label` | Excel 模板列标题 / Gradio 表单列名；**写入 `data` JSON 的键名**（`get_labels()` 用） |
-| `field` | **仅路径 B**：在外部数据源表中匹配列名；**不写入** `data` JSON |
-| `id` | `true` 时：该 `Input_label` 的值用于设定 `records.id`（有有效值时）；**同时**作为 `Input_label` 写入 JSON |
+| 键 | 路径 A 中的用途 |
+|----|----------------|
+| `determiner` | 拆分 textbox 纯字符串 |
+| `index` | 拆分结果中的段序；`-1` 不参与拆分 |
+| `Input_label` | 段映射目标键名；落库 JSON 键 |
+| `id` | 见 `[[fields]]` 共有键 |
 
-- `index = -1`：该列**不参与** textbox 拆分；落库时仍出现在 JSON 中（TOML 骨架），值来自本次 `incoming` 或为空
-- 示例：`determiner = "\t"`，用户输入 `"8129\tClark Kent\t..."`，`index = 0` → `ID#`，`index = 1` → `Name`
+- 示例：`determiner = "\t"`，`"8129\tClark Kent\t..."` → `index=0` → `ID#`，`index=1` → `Name`
+- `value_from_label` / `value_offset`：**不参与** textbox 拆分与 DB JSON；仅用于 xlsx 值格定位
 
-`core_store` 须提供：
-- 接收 UI 纯字符串直接持久化
-- 按 `determiner` + 各 rule 的 `index` 拆分为 `{Input_label: segment}`（不写 `field` 名）
+`core_store`：`split_by_determiner` → `record_from_textbox` → `incoming`（局部 `dict[Input_label]`）→ `insert_or_update(incoming, cfg)`
 
 ### 路径 B：外部数据源表 → 标准记录（`Template2DB` 主责）
 
 从 `[[sources]]` 配置的文件 / Google Sheet 读取标准数据库结构工作表。
 
-| 键 | 作用 |
-|----|------|
-| `source_file` | 指向 `[[sources]]` 中的键名（如 `source1`），解析为实际路径或 Sheet URL |
-| `source_sheet` | 数据源工作表名（如 `sheet1`） |
-| `Input_label` | 在**数据源表**中定位列（列标题匹配）；模板列名；**写入 `data` JSON 的键名** |
-| `field` | **仅读外部源表**时匹配列（如 `ID`、`name`、`issues`）；**不写入** `data` JSON |
-| `regex` | 对读到的单元格值再做提取（如 `Report Date` 从 `issues` 列用 `'\d+/\d+/\d+'` 抽日期）；结果写入对应 `Input_label` |
-| `id` | `true` 表示该 `Input_label` 为业务 ID：用于按 ID 查行，并在有有效值时设定 `records.id`；**同时**写入 JSON |
+| 键 | 路径 B 中的用途 |
+|----|----------------|
+| `source_file` / `source_sheet` | 解析并打开外部数据源表 |
+| `field` | 在**数据源表**中匹配列（如 `ID`、`name`）；不落库 |
+| `Input_label` | 产出 `incoming` 的键名（与模板列同名） |
+| `regex` | 读源后的提取；结果写入对应 `Input_label` |
+| `id` | 见 `[[fields]]` 共有键 |
 
-- `source_file` / `source_sheet` 为 `""` 时：不走数据源，仅 UI 或 Input_sheet 路径
-- 同一 `field` + 同一 `index` 可对应不同 `Input_label`（如 `Recent Issue` 与 `Report Date` 均 `field = "issues"`，`index = 2`，后者加 `regex`）；落库时各写各自 `Input_label` 键，**不在 JSON 中出现 `issues` 键**
+- `source_*` 为空：该字段不走数据源，仅 UI / xlsx 填写 / 落库
+- 同 `field` + 同 `index` 可对应不同 `Input_label`（如 `Recent Issue` 与 `Report Date`）；落库为两个 `Input_label` 键
 
 ### 其他顶层键
 
 | 键 | 使用方 | 作用 |
 |----|--------|------|
-| `worksheet` | `core_transform` | Input_sheet 工作表名 |
-| `sections` | `ExcelWriter` | 多区域 `input_area` / `move_to` / `offset` |
-| `sources` | `Template2DB` | 解析 `source_file` 别名 → 真实路径 |
-
-**index 不再表示 Excel 列号。** Input_sheet 写回时按 `sections` 区域内**表头行匹配 `Input_label`** 定位列，或由 `input_area` 首行 headers 顺序推导。
+| `worksheet` | `core_toml` / `core_transform` | **唯一**参与扫描与读写的模板表名 |
+| `input_section` | `core_toml` / `core_transform` | 单条；instance 0 值区 + 多组值格平移 |
+| `sources` | `Template2DB` | `source_file` 别名 → 路径 |
+| `determiner` | `core_store` | textbox 拆分 |
 
 ## 模块结构
 
@@ -135,8 +172,8 @@ Gradio 提供一个 **textbox**，用户输入**一整段纯字符串**，原样
 
 | 类 | 职责 |
 |----|------|
-| `Template2DB` | 按 `source_file` + `source_sheet` 读外部表行；`field` 仅用于读源列；产出 `dict[Input_label]` |
-| `ExcelWriter` | Input_sheet 写回（按 `Input_label` 对表头列）；另存；打印区域；区域检测 |
+| `Template2DB` | 外部数据源 → `incoming`（`dict[Input_label]`，可缺键） |
+| `ExcelWriter` | 按 `verify_toml` 的 `located` + k 组平移读写 **值格**；另存；`get_print_areas`（Print_sheet，非 TOML 定位范围） |
 
 不 import `core_store`。
 
@@ -148,15 +185,12 @@ Gradio 提供一个 **textbox**，用户输入**一整段纯字符串**，原样
 ### 数据流
 
 ```
-                    ┌── UI textbox 纯字符串 ──► core_store
-                    │      determiner 拆分 + index 取段
-GetTomlValues ──────┤                              ▼
-                    │                        SecureSQLite
-                    │                              ▲
-                    └── source_file/sheet ──► Template2DB ── record dict
-                              Input_label            │
-                                                     │
-                    ExcelWriter.write_back ◄─────────┘（写 Input_sheet）
+GetTomlValues.Load ──► verify_toml(xlsx, cfg) ──► located / 问题列表
+        │                                              │
+        ├── UI textbox ──► core_store ──► SecureSQLite ◄── Template2DB ── sources
+        │         determiner+index              ▲              incoming
+        │                                       │
+        └──────── ExcelWriter.write_back ◄──────┘（值格坐标 + k）
                     UiProvider.get_* ◄── DB
 ```
 
@@ -164,17 +198,19 @@ GetTomlValues ──────┤                              ▼
 
 ```python
 cfg = GetTomlValues.Load(template_id)
+report = verify_toml(template_path, cfg)  # UI 激活校验；ok 后再填表/写库
+located = report.get("located", {})
+
 db = SecureSQLite(default_db_path(template_id))
 ui = UiProvider(cfg, db)
 
-# 路径 A 或 B 仅产生 incoming（可为局部 Input_label 子集）
 incoming = ui.record_from_textbox(user_raw_string)
 # incoming = Template2DB(cfg).fetch_row_by_id(source_id)
 
-db.insert_or_update(incoming, cfg)  # TOML 骨架 + incoming 填值 → 覆盖 data
+db.insert_or_update(incoming, cfg)
 
-writer = ExcelWriter(cfg)
-writer.write_back(template_path, output_path, db.query_by_id(...))
+writer = ExcelWriter(cfg, located=located)  # 目标 API：按值格写回；k 由 input_section 推导
+writer.write_back(template_path, output_path, db.query_by_id(...), instance_k=0)
 
 labels = ui.get_labels()
 rows = ui.get_data()
@@ -224,17 +260,18 @@ records (id INTEGER PRIMARY KEY, data TEXT NOT NULL)
 | `incoming` | 调用方传入的局部 `dict[Input_label]`；store 不负责区分来自路径 A 或 B |
 | TOML 变动 | 列定义以**最新 TOML** 为准；`records.id` 为行稳定标识 |
 
-`Template2DB` / `record_from_textbox` 产出 **`incoming`（可缺键）**；持久化后的 `data` JSON **键全、值按 incoming 填或空**。`write_back` 使用已落库的完整行或同等结构的 dict。
+`Template2DB` / `record_from_textbox` 产出 **`incoming`（可缺键）**；持久化后的 `data` JSON **键全、值按 incoming 填或空**。`write_back` 向 **`located` 值格（及 k 平移）** 写入 `incoming` 或 `query_by_id` 中的各 `Input_label` 值。
 
 ## Excel 读写（`core_transform.py`，仅 openpyxl）
 
 | 操作 | 要点 |
 |------|------|
-| 读 Input_sheet | `sections` 首行作表头，列名匹配 `Input_label` |
-| 写回 | 按 `Input_label` 找列号赋值（**不用 index 当列号**） |
-| 打印区域 | `ws.print_area` |
+| 定位前提 | 调用方已 `verify_toml` 通过；使用 `located[Input_label]` 的 instance 0 值格坐标 |
+| 读填写值 | 对 instance k，在 instance 0 值格上应用 k 次 `input_section.move_to`/`offset` 后读单元格 |
+| 写回 | 向同上坐标写入；**不用 `index` 当列号**；**不用**「区域内表头行匹配 `Input_label`」作主路径 |
+| 打印区域 | `ws.print_area`（多在 Print_sheet；**不在** TOML `worksheet` 定位模型内） |
 
-`ExcelWriter` 内建：`_parse_area_range`、`_calculate_next_area`、`detect_areas`、`read_area_rows`、`write_back`、`get_print_areas`。
+`ExcelWriter` 应对齐：`offset_cell` 语义与 `core_toml` 共用；k 组值格平移与 `input_section` 一致。过渡实现若仍含 `detect_areas` / `read_area_rows`（旧 `sections` 表头模型），视为**待废弃**，以本文与 `toml_config_design.md` 为准。
 
 ## 分阶段实施
 
@@ -260,7 +297,18 @@ records (id INTEGER PRIMARY KEY, data TEXT NOT NULL)
 
 ### Phase 4：`core_transform` — ExcelWriter
 
-区域检测、按 `Input_label` 写回 Input_sheet、`get_print_areas`。
+1. 消费 `verify_toml` 的 `located`（或由调用方传入等价坐标表）
+2. 按 `input_section` 计算 instance k 值格并读/写
+3. `write_back` / `get_print_areas`（后者仅读元数据，不参与定位）
+
+**验收**：标准范式下 instance 0 值格落在 `input_area` 内；k=1 值格仅平移、标签坐标不变；与 `toml_config_design.md` 演算示例一致。
+
+### Phase 4b：`core_toml` — 与 UI 的校验契约（已实现，本计划依赖）
+
+1. `verify_toml(template_path, cfg)` → `missing_labels` / `out_of_area_labels` / `located`
+2. TOML 不存在时 `TomlGenerator` 生成标准范式骨架（不全表扫描）
+
+**验收**：故意错 `input_area` 或删标签时 `ok=False` 且问题列表非空。
 
 ### Phase 5：`core_store` — UiProvider
 
@@ -278,27 +326,32 @@ labels: [...]
 data: [...]
 ```
 
-含 textbox 拆分样例与 `Template2DB` 数据源读取各一例。
+含 textbox 拆分、`Template2DB` 数据源读取、`verify_toml` 报告摘要各一例。
 
 ## 成功标准
 
 ### 功能
-- `determiner` 仅用于 UI 纯字符串拆分；`index` 为拆分后的段序
-- `source_file` / `source_sheet` / `Input_label` 仅用于外部数据源表读列
-- 两模块职责与上表一致；无第五类
+- `determiner` / `index`：仅 UI textbox 拆分；与 Excel 列、k 平移无关
+- `value_from_label` / `value_offset`：仅标签→值格定位；不落库
+- `input_section`：单条；只约束/平移**填写值**，不找标签
+- `source_file` / `source_sheet` / `field`：仅外部数据源读列
+- `verify_toml`：标签存在且 instance 0 值格在 `input_area` 内，方可进入填表/写库主流程
+- 两模块（store/transform）职责与上表一致；校验在 `core_toml`
 
 ### 验证
 - `__main__` 打印三段数据且前后一致
 - `data` JSON 键 = 当前 TOML 全部 `Input_label`（不含 `field` 名）
 - `records.id` 与 `id=true` 的 `Input_label` 在有业务 ID 时一致
-- 同 `records.id` 再次 `insert_or_update` 且 incoming 缺键时，缺键在 `data` 中为**空**（非旧值残留）
+- 同 `records.id` 再次 `insert_or_update` 且 incoming 缺键时，缺键在 `data` 中为**空**
+- `verify_toml` 对样本 template 通过，`located` 含全部 `Input_label`
 
 ## 风险与注意事项
 
-1. **index 语义**：禁止当作 Excel 列索引；写回靠 `Input_label` 对表头
-2. **index = -1**：不参与 textbox 拆分；落库仍在 TOML 骨架中，值仅来自本次 incoming
-3. **同 index 多 rule**：读源时靠 `regex` 区分；落库 JSON 中仍为两个 `Input_label` 键
-4. **sources 空路径**：`source_file` 已填但路径为 `""` 时，数据源读取应明确失败或跳过
-5. **模块边界**：`core_store` 不 import `core_transform`
-6. **区域检测**：内建于 `ExcelWriter`，不引用 `section_detector`
-7. **TOML 覆盖**：`insert_or_update` 不得读旧 `data` 做 merge；键集合以**当前 TOML** 为准，与 incoming 来自哪条路径无关
+1. **index**：禁止当作 Excel 列索引；禁止用于 k 组平移；写回靠 **值格坐标**，不靠 index
+2. **index = -1**：不参与 textbox；落库仍在 TOML 骨架中，值仅来自本次 incoming
+3. **标签 vs input_area**：二者独立——先扫标签，再验值格是否入框；勿用 `input_area` 当表头行
+4. **同 index 多 rule**（textbox）：靠多段或同一 `incoming` 键区分；读源时靠 `regex` 区分 `Input_label`
+5. **sources 空路径**：`source_file` 已填但路径为 `""` 时，数据源读取应明确失败或跳过
+6. **模块边界**：`core_store` 不 import `core_transform`；`core_transform` 不 import `core_store`
+7. **TOML 覆盖**：`insert_or_update` 不得读旧 `data` 做 merge
+8. **实现落差**：当前 `ExcelWriter` 可能仍使用旧 `cfg.sections` / 表头模型；对齐 `input_section` + `located` 为后续改造项，以本文为准

@@ -98,6 +98,7 @@ class VerifyTomlReport:
 
     ok: bool
     missing_labels: list[str]
+    duplicate_labels: list[str]
     out_of_area_labels: list[str]
     located: dict[str, dict[str, int]]
     errors: list[str]
@@ -110,14 +111,15 @@ class VerifyTomlReport:
         输入:
             无
         输出:
-            dict[str, Any] - 含 ok / missing_labels / out_of_area_labels / located / errors
+            dict[str, Any] - 含 ok / missing_labels / duplicate_labels / out_of_area_labels / located / errors
         """
         return {
             "ok": self.ok,
-            "missing_labels": list(self.missing_labels),        # 找不到的标签
+            "missing_labels": list(self.missing_labels),          # 找不到的标签
+            "duplicate_labels": list(self.duplicate_labels),    # 工作表上多处匹配的标签
             "out_of_area_labels": list(self.out_of_area_labels),  # 值格越界的标签
-            "located": dict(self.located),                       # 通过项坐标
-            "errors": list(self.errors),                         # 结构性错误
+            "located": dict(self.located),                        # 通过项坐标
+            "errors": list(self.errors),                          # 结构性错误
         }
 
 
@@ -481,23 +483,43 @@ def offset_cell(row: int, col: int, direction: str, offset: int) -> tuple[int, i
     return row, col
 
 
-def _find_label_cell(ws: Any, input_label: str) -> tuple[int, int] | None:
+def _scan_worksheet_labels_diagonal(
+    ws: Any,
+) -> tuple[dict[str, tuple[int, int]], set[str]]:
     """
-    函数名: _find_label_cell
-    作用: 在工作表 (1,1) 起、100×100 内从左到右从上到下找首个完全匹配的标签格
+    函数名: _scan_worksheet_labels_diagonal
+    作用: 按左上→右下斜向波面顺序扫描 100×100，建立标签文本到首见坐标的映射，并记录重复文本
     输入:
         ws (Any) - openpyxl 工作表对象
-        input_label (str) - 要匹配的标签文本
     输出:
-        tuple[int, int] | None - 命中的 (row, col)，未命中为 None
+        tuple[dict[str, tuple[int, int]], set[str]] - (标签→(row,col), 重复出现的标签文本集合)
     """
-    max_row = min(ws.max_row or VERIFY_SCAN_ROWS, VERIFY_SCAN_ROWS)  # 上限封顶 100 行
-    max_col = min(ws.max_column or VERIFY_SCAN_COLS, VERIFY_SCAN_COLS)  # 上限封顶 100 列
-    for row in range(1, max_row + 1):
-        for col in range(1, max_col + 1):
-            if _cell_text(ws.cell(row=row, column=col).value) == input_label:
-                return row, col
-    return None
+    # 流式拉取 100×100 快照，避免逐格随机读
+    grid: list[list[Any]] = []
+    for row in ws.iter_rows(max_row=VERIFY_SCAN_ROWS, max_col=VERIFY_SCAN_COLS):
+        grid.append([cell.value for cell in row])
+    label_to_coord: dict[str, tuple[int, int]] = {}
+    duplicate_labels: set[str] = set()
+    max_r = len(grid)
+    max_c = len(grid[0]) if max_r > 0 else 0
+    if max_r == 0 or max_c == 0:
+        return label_to_coord, duplicate_labels
+    # s = r_idx + c_idx；同一条斜线上 r_idx 小者优先（更靠上）
+    for s in range(max_r + max_c - 1):
+        for r_idx in range(max_r):
+            c_idx = s - r_idx
+            if c_idx < 0 or c_idx >= max_c:
+                continue
+            text = _cell_text(grid[r_idx][c_idx])
+            if not text:
+                continue
+            excel_row = r_idx + 1  # 转回 Excel 1-based 坐标
+            excel_col = c_idx + 1
+            if text in label_to_coord:
+                duplicate_labels.add(text)  # 后续斜向位置再次出现
+            else:
+                label_to_coord[text] = (excel_row, excel_col)  # 首见即最靠近左上角
+    return label_to_coord, duplicate_labels
 
 
 def _cell_in_area(row: int, col: int, area: tuple[int, int, int, int]) -> bool:
@@ -557,35 +579,39 @@ def load_toml(template_id: str) -> GetTomlValues | None:
 def verify_toml(template_path: Path, cfg: GetTomlValues) -> dict[str, Any]:
     """
     函数名: verify_toml
-    作用: UI 唯一校验入口；在 worksheet 上搜每个 Input_label 并验证 instance 0 值格是否落在 input_area
+    作用: UI 唯一校验入口；斜向扫描 worksheet 建标签索引，验证各字段 instance 0 值格是否落在 input_area
     输入:
         template_path (Path) - 当前模板 xlsx 路径
         cfg (GetTomlValues) - 已加载的 TOML 配置
     输出:
-        dict[str, Any] - 报告：ok / missing_labels / out_of_area_labels / located / errors
+        dict[str, Any] - 报告：ok / missing_labels / duplicate_labels / out_of_area_labels / located / errors
     """
     missing_labels: list[str] = []
+    duplicate_labels: list[str] = []
     out_of_area_labels: list[str] = []
     located: dict[str, dict[str, int]] = {}
     errors: list[str] = []
     if not cfg.worksheet:
-        return VerifyTomlReport(False, [], [], {}, ["worksheet is required"]).to_dict()
+        return VerifyTomlReport(False, [], [], [], {}, ["worksheet is required"]).to_dict()
     wb = load_workbook(template_path, read_only=True, data_only=True)
     try:
         # worksheet 不存在直接整体失败
         if cfg.worksheet not in wb.sheetnames:
-            return VerifyTomlReport(False, [], [], {}, [f"worksheet not found: {cfg.worksheet}"]).to_dict()
+            return VerifyTomlReport(False, [], [], [], {}, [f"worksheet not found: {cfg.worksheet}"]).to_dict()
         ws = wb[cfg.worksheet]
         try:
             input_area = _parse_area(cfg.input_section.input_area)  # 解析约束矩形
         except ValueError as exc:
-            return VerifyTomlReport(False, [], [], {}, [f"invalid input_area: {exc}"]).to_dict()
+            return VerifyTomlReport(False, [], [], [], {}, [f"invalid input_area: {exc}"]).to_dict()
+        label_map, duplicate_texts = _scan_worksheet_labels_diagonal(ws)  # 一次斜向扫描建索引
         for rule in cfg.field_rules:
-            label_cell = _find_label_cell(ws, rule.Input_label)  # 每字段从头扫描
-            if label_cell is None:
+            if rule.Input_label not in label_map:
                 missing_labels.append(rule.Input_label)  # 标签找不到
                 continue
-            label_row, label_col = label_cell
+            if rule.Input_label in duplicate_texts:
+                duplicate_labels.append(rule.Input_label)  # 工作表上多处匹配
+                continue
+            label_row, label_col = label_map[rule.Input_label]
             try:
                 value_row, value_col = offset_cell(
                     label_row, label_col, rule.value_from_label, rule.value_offset
@@ -604,8 +630,10 @@ def verify_toml(template_path: Path, cfg: GetTomlValues) -> dict[str, Any]:
             }
     finally:
         wb.close()
-    ok = not missing_labels and not out_of_area_labels and not errors  # 全部无问题才通过
-    return VerifyTomlReport(ok, missing_labels, out_of_area_labels, located, errors).to_dict()
+    ok = not missing_labels and not duplicate_labels and not out_of_area_labels and not errors
+    return VerifyTomlReport(
+        ok, missing_labels, duplicate_labels, out_of_area_labels, located, errors
+    ).to_dict()
 
 
 def ensure_exists(
@@ -874,6 +902,7 @@ def main() -> None:
     report = verify_toml(sample_xlsx, cfg)  # 在 worksheet 上搜标签并校验值格
     print(f"ok: {report['ok']}")
     print(f"missing_labels: {report['missing_labels']}")
+    print(f"duplicate_labels: {report['duplicate_labels']}")
     print(f"out_of_area_labels: {report['out_of_area_labels']}")
     print(f"located: {report['located']}")
     print(f"errors: {report['errors']}")
@@ -883,6 +912,7 @@ def main() -> None:
     report2 = verify_toml(sample_xlsx, cfg)
     print(f"ok: {report2['ok']}")
     print(f"missing_labels: {report2['missing_labels']}")
+    print(f"duplicate_labels: {report2['duplicate_labels']}")
     print(f"out_of_area_labels: {report2['out_of_area_labels']}")
     print(f"located: {report2['located']}")
     print(f"errors: {report2['errors']}")

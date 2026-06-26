@@ -104,15 +104,22 @@ Effective Date|2026-01-31
 | template 已选，**TOML 不存在** | `TomlGenerator` 生成**默认 TOML**（不逐格扫描）；按标准范式：第 1 行写出 `[[fields]].Input_label` 骨架，`input_area` 登记第 2 行填写值区域 |
 | template 已选，**TOML 已存在**，UI **激活校验** | 对 `worksheet` **逐字段**全表扫描各 `Input_label`，确定标签格与 instance 0 值格，并做相互印证 |
 
-#### 标签格如何确定（显像管式全表扫描）
+#### 标签格如何确定（斜向波面扫描）
 
-在 **`worksheet` 指定表**上（仅此表），按**从左到右、从上到下**逐格扫描。最大搜索范围100行，100列。
+在 **`worksheet` 指定表**上（仅此表），在 **100 行 × 100 列**内，按**左上 → 右下**的斜向波面顺序扫描（非行优先逐行扫描）。
 
-对每一个 `[[fields]]` 的 `Input_label`：
+扫描顺序：令 `s = row + col`（1-based），`s` 从小到大；同一 `s` 内 `row` 从小到大。即越靠近 `(1,1)` 的格越早被访问——例如 `(2,2)` 早于 `(1,100)`。
 
-1. **从该表左上角重新**开始扫描（每个字段独立从头找）。
-2. 单元格文本（trim 后）与 `Input_label` **完全相等**的第一个匹配格，即为该字段的**标签格** `(label_row, label_col)`；若匹配 0 个或多个，校验失败（见上表 C、D）。
-3. **标签格是否在 `input_area` 内不作要求**；`input_area` 不参与找标签。
+实现建议：
+
+1. 用 `iter_rows` 一次性读取 100×100 区域到内存快照（避免逐格随机读）。
+2. 在快照上按上述斜向顺序遍历；非空单元格文本（trim 后）作为候选标签。
+3. 某文本**首次**出现的位置记为该标签的**标签格**；若后续斜向位置再次出现相同文本，记为**重复标签**。
+
+对每一个 `[[fields]]` 的 `Input_label`（在校验阶段查索引，不再逐字段重扫）：
+
+1. 在索引中查 `Input_label`：0 个 → `missing_labels`；≥2 个（重复）→ `duplicate_labels`；1 个 → 记为 `(label_row, label_col)`。
+2. **标签格是否在 `input_area` 内不作要求**；`input_area` 不参与找标签。
 
 #### 值格如何确定与 `input_area` 约束
 
@@ -212,6 +219,7 @@ UI **只**调用一个函数 `verify_toml()`，由 `core_toml` 完成「打开 x
 
 - 整体是否通过（无任何问题即通过）。
 - **哪些 `Input_label` 在 `worksheet` 上找不到**（label 不存在）。
+- **哪些 `Input_label` 在工作表上出现多处**（duplicate_labels）。
 - **哪些 `Input_label` 的 instance 0 值格不在 `input_area` 内**（input 越界）。
 
 建议形如：
@@ -220,6 +228,7 @@ UI **只**调用一个函数 `verify_toml()`，由 `core_toml` 完成「打开 x
 {
   "ok": bool,
   "missing_labels": [Input_label, ...],          # 在 worksheet 上搜不到的标签
+  "duplicate_labels": [Input_label, ...],        # 工作表上多处匹配的标签
   "out_of_area_labels": [Input_label, ...],       # 值格不在 input_area 内的标签
   "located": { Input_label: {label_row, label_col, value_row, value_col}, ... }  # 通过项的坐标，可选
 }
@@ -231,10 +240,12 @@ UI **只**调用一个函数 `verify_toml()`，由 `core_toml` 完成「打开 x
 
 1. 打开 `worksheet` 指定的工作表；不存在 → 整体失败。
 2. 把 `[[input_section]].input_area` 解析为矩形 `(min_row, min_col, max_row, max_col)`。
-3. 对每一条 `[[fields]]`，在该表 **(1,1)** 起、**100 行 × 100 列**内从左到右、从上到下扫描（每个字段独立从头扫）：
-   - 找不到与 `Input_label`（trim 后）完全相等的格 → 计入 `missing_labels`。
-   - 找到标签格 `(label_row, label_col)` 后，`offset_cell(...)` 得 instance 0 值格；若不在 `input_area` 矩形内 → 计入 `out_of_area_labels`。
-4. 两个问题列表都为空 → `ok = True`。
+3. 对 100×100 区域做**一次**斜向波面扫描，建立标签文本 → 首见坐标索引，并收集重复文本。
+4. 对每一条 `[[fields]]` 查索引：
+   - 找不到 `Input_label` → 计入 `missing_labels`。
+   - `Input_label` 在表中出现多处 → 计入 `duplicate_labels`。
+   - 找到唯一标签格后，`offset_cell(...)` 得 instance 0 值格；若不在 `input_area` 矩形内 → 计入 `out_of_area_labels`。
+5. `missing_labels`、`duplicate_labels`、`out_of_area_labels` 均为空 → `ok = True`。
 
 **不检查**：标签格是否在 `input_area` 内；`field` / `source_*` / `regex` 是否已映射；Print_sheet 及其他工作表。`verify_toml()` **只报告**问题，**不**静默改 TOML、不改 xlsx、不自动修正坐标。
 
@@ -365,14 +376,14 @@ tomlkit>=0.13
 |------|------|------|
 | 生成默认 TOML | `TomlGenerator` | TOML 不存在时；标准范式；**不**做全表扫描 |
 | 读写 TOML 文本 | `GetTomlValues` | Load / Save / ToDict |
-| **激活校验**（UI 调用） | `verify_toml()` | UI 只调这一个；打开 template xlsx，报告**哪些 `Input_label` 找不到**、**哪些值格不在 `input_area` 内** |
-| 坐标解析 | `offset_cell`、标签扫描等 | 校验与填表共用；扫描上限 **100×100** |
+| **激活校验**（UI 调用） | `verify_toml()` | UI 只调这一个；斜向扫描 worksheet，报告找不到 / 重复 / 值格越界的 `Input_label` |
+| 坐标解析 | `offset_cell`、`_scan_worksheet_labels_diagonal` 等 | 校验与填表共用；扫描上限 **100×100** |
 
 **不在 `core_toml` 内写死**「仅首次 Load 校验」；是否校验、何时校验由 **UI 在加载 template 时决定**。
 
 ### 职责划分
 
 - **生成器（`TomlGenerator`）**：TOML 不存在时，按标准范式生成骨架（第 1 行 → `[[fields]].Input_label`，`input_area` → 第 2 行值区）；默认 `value_from_label = "down"`、`value_offset = 1`；**不**扫描全表。
-- **持久化层（`GetTomlValues`）**：Load / Save / ToDict；**`verify_toml()`**——UI 唯一校验入口，回报找不到的 `Input_label` 与值格越界的 `Input_label`。
-- **定位**：仅在 `worksheet` 上扫描标签；值格由 offset 推算且**必须**在 `input_area` 内；`move_to`/`offset` 处理 k≥1 值格平移。
+- **持久化层（`GetTomlValues`）**：Load / Save / ToDict；**`verify_toml()`**——回报 `missing_labels`、`duplicate_labels`、`out_of_area_labels`。
+- **定位**：仅在 `worksheet` 上斜向波面扫描标签；值格由 offset 推算且**必须**在 `input_area` 内；`move_to`/`offset` 处理 k≥1 值格平移。
 - **数据源路径**：由专用 UI 写入，不由生成器提供。
