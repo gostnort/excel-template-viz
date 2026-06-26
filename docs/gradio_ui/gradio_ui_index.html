@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>线框 · 输入主界面 data_input</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, "Microsoft YaHei", sans-serif;
+      font-size: 13px;
+      line-height: 1.4;
+      background: #fff;
+      color: #000;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .shell { display: flex; height: 100vh; border: 2px solid #000; }
+    /* 左侧模板侧边栏 */
+    .sidebar {
+      width: 200px; min-width: 120px; max-width: 400px;
+      border-right: 1px solid #000;
+      display: flex; flex-direction: column; flex-shrink: 0;
+    }
+    .sidebar-header {
+      padding: 10px 12px; font-weight: bold;
+      border-bottom: 1px solid #000; background: #f0f0f0;
+    }
+    .template-item { padding: 10px 12px; border-bottom: 1px solid #ccc; }
+    .template-item.active { font-weight: bold; background: #e8e8e8; }
+    .template-item.muted { color: #555; }
+    /* 拖拽 / 折叠条（平时窄，悬停可见） */
+    .resize-rail {
+      width: 6px; flex-shrink: 0; position: relative; cursor: col-resize;
+      background: transparent;
+    }
+    .resize-rail::after {
+      content: ""; position: absolute; top: 0; bottom: 0; left: 50%;
+      width: 2px; margin-left: -1px; background: transparent;
+    }
+    .resize-rail:hover::after { background: #999; }
+    .resize-rail .fold-hint {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 10px; writing-mode: vertical-rl; opacity: 0; pointer-events: none;
+    }
+    .resize-rail:hover .fold-hint { opacity: 0.6; }
+    /* 右侧主区 */
+    .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    .tabs { display: flex; border-bottom: 2px solid #000; flex-shrink: 0; }
+    .tab { padding: 10px 24px; border-right: 1px solid #000; font-weight: bold; }
+    .tab.active { background: #eee; }
+    .tab-body { flex: 1; overflow: auto; padding: 16px 20px; }
+    /* 幽灵输入框 */
+    .ghost-input {
+      border: none; border-bottom: 1px dashed #bbb;
+      padding: 8px 4px; margin-bottom: 6px; color: #666; font-style: italic;
+      min-height: 36px;
+    }
+    .ghost-note { font-size: 11px; color: #888; margin: 0 0 16px 4px; }
+    /* 标签 + 输入 */
+    .field-row {
+      display: grid; grid-template-columns: 140px 1fr; gap: 12px;
+      align-items: center; margin-bottom: 10px;
+    }
+    .field-label { text-align: right; }
+    .field-label.primary::after { content: " ★主键"; font-size: 11px; color: #555; }
+    .input-box { border: 1px solid #000; padding: 6px 8px; min-height: 32px; }
+    /* 本次输入列表 */
+    .session-list { margin-top: 18px; }
+    .session-list .title { font-weight: bold; margin-bottom: 6px; }
+    table.records { border-collapse: collapse; width: 100%; }
+    table.records th, table.records td {
+      border: 1px solid #000; padding: 4px 6px; text-align: left;
+    }
+    table.records th { background: #eee; }
+    table.records tbody tr:hover { background: #f7f7f7; }
+    table.records tbody tr.selected { background: #e8e8e8; font-weight: bold; }
+    .chkcol { width: 28px; text-align: center; }
+    .list-btns { display: flex; justify-content: space-between; margin-top: 8px; }
+    /* 统一按钮尺寸 */
+    .btn {
+      width: 110px; height: 36px;
+      border: 1px solid #000; background: #fff; font-weight: bold;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .sep { border: 0; border-top: 2px solid #000; margin: 18px 0; }
+    .toolbar-row {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 12px;
+    }
+    .print-row { display: flex; align-items: center; gap: 8px; }
+    .btn.disabled { color: #999; border-color: #999; background: #f5f5f5; }
+    .dropdown { border: 1px solid #000; padding: 8px 12px; min-width: 280px; height: 36px; display: inline-flex; align-items: center; }
+    .dropdown.narrow { min-width: 200px; }
+    .modal-hint {
+      border: 1px dashed #666; padding: 8px 10px; margin: 8px 0 12px;
+      font-size: 12px; color: #444;
+    }
+    .legend {
+      position: fixed; bottom: 8px; right: 8px; font-size: 11px;
+      border: 1px dashed #000; padding: 8px 10px; background: #fff; max-width: 320px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="shell">
+  <!-- 左侧模板侧边栏 -->
+  <aside class="sidebar">
+    <div class="sidebar-header">模板</div>
+    <div class="template-item active">销售模板</div>
+    <div class="template-item muted">订单模板</div>
+    <div class="template-item muted">月报模板</div>
+    <div class="template-item muted">…</div>
+  </aside>
+
+  <!-- 拖拽 / 折叠条 -->
+  <div class="resize-rail" title="悬停拖拽调宽；单击折叠（宽度记忆）">
+    <span class="fold-hint">折叠</span>
+  </div>
+
+  <!-- 右侧 Tab 区 -->
+  <main class="main">
+    <nav class="tabs">
+      <div class="tab active">输入</div>
+      <div class="tab">输入配置</div>
+      <div class="tab">存储配置</div>
+    </nav>
+
+    <div class="tab-body">
+      <!-- 幽灵输入框 -->
+      <div class="ghost-input">粘贴整行数据…</div>
+      <div class="ghost-note">隐藏样式输入框：切换焦点后按分隔符拆分，自动填入下方各项</div>
+
+      <!-- 标签 + 输入 -->
+      <div class="field-row">
+        <span class="field-label primary">ID#</span>
+        <div class="input-box">8129 ←切换焦点：库有旧数据则询问来源</div>
+      </div>
+      <div class="modal-hint">
+        （库内已有该 ID 时弹窗）从数据源重新读取 &nbsp;|&nbsp; 从数据库读取
+      </div>
+      <div class="field-row">
+        <span class="field-label">姓名</span>
+        <div class="input-box">Clark Kent</div>
+      </div>
+      <div class="field-row">
+        <span class="field-label">近期问题</span>
+        <div class="input-box">recreate himself…</div>
+      </div>
+      <div class="field-row">
+        <span class="field-label">报告日期</span>
+        <div class="input-box">1978/02/29</div>
+      </div>
+      <div class="field-row">
+        <span class="field-label">处理意见</span>
+        <div class="input-box"></div>
+      </div>
+      <div class="field-row">
+        <span class="field-label">生效日期</span>
+        <div class="input-box"></div>
+      </div>
+      <div class="field-row">
+        <span class="field-label">签字</span>
+        <div class="input-box"></div>
+      </div>
+
+      <!-- 本次输入列表（最后一个 input 下、分隔线之上） -->
+      <div class="session-list">
+        <div class="title">本次已录入（HTML5 自定义表格，点击某行可载入上方编辑）</div>
+        <table class="records">
+          <thead>
+            <tr><th class="chkcol">☐</th><th>ID#</th><th>姓名</th><th>报告日期</th><th>…</th></tr>
+          </thead>
+          <tbody>
+            <tr class="selected"><td class="chkcol">☑</td><td>8129</td><td>Clark Kent</td><td>1978/02/29</td><td>…</td></tr>
+            <tr><td class="chkcol">☐</td><td>250</td><td>狗蛋</td><td>2026/01/31</td><td>…</td></tr>
+          </tbody>
+        </table>
+        <div class="list-btns">
+          <div class="btn">清空</div>
+          <div class="btn">删除</div>
+        </div>
+      </div>
+
+      <hr class="sep">
+
+      <!-- 另存为 / 下一行 -->
+      <div class="toolbar-row">
+        <div class="btn">另存为</div>
+        <div class="btn">下一行</div>
+      </div>
+      <div class="ghost-note" style="margin-bottom:10px">
+        另存为直接写出：exports/模板名/模板名_A2026_20260625_143052.xlsx（不弹保存框）
+      </div>
+
+      <!-- 打印文件 + 打印区域 + 打印（紧挨） -->
+      <div class="print-row">
+        <div class="dropdown narrow">打印文件 ▼ &nbsp;（空）</div>
+        <div class="dropdown">打印区域 ▼ &nbsp; Input_sheet, A1:D4</div>
+        <div class="btn">打印</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="legend">
+  线框 · 主界面（输入）<br>
+  左：模板侧边栏（拖拽调宽 / 单击折叠 / 宽度记忆）<br>
+  中：竖向拖拽条（悬停可见）<br>
+  右：三 Tab（输入 / 输入配置 / 存储配置）<br>
+  详见 docs/gradio_ui_plan.md
+</div>
+
+</body>
+</html>

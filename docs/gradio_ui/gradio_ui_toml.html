@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>线框 · 输入配置 toml_config</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, "Microsoft YaHei", sans-serif;
+      font-size: 13px; line-height: 1.4; background: #fff; color: #000;
+      height: 100vh; overflow: hidden;
+    }
+    .main { display: flex; flex-direction: column; height: 100vh; border: 2px solid #000; }
+    .tabs { display: flex; border-bottom: 2px solid #000; flex-shrink: 0; }
+    .tab { padding: 10px 24px; border-right: 1px solid #000; font-weight: bold; }
+    .tab.active { background: #eee; }
+    .tab-body { flex: 1; overflow: auto; padding: 16px 20px; }
+    .section { border: 1px solid #000; margin-bottom: 14px; }
+    .section-title { border-bottom: 1px solid #000; padding: 6px 10px; font-weight: bold; background: #f5f5f5; }
+    .section-body { padding: 10px; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; }
+    .row:last-child { margin-bottom: 0; }
+    .field-label { min-width: 80px; }
+    .ctrl { border: 1px solid #000; padding: 6px 8px; min-height: 32px; display: inline-flex; align-items: center; }
+    .ctrl.medium { min-width: 160px; }
+    .ctrl.wide { min-width: 260px; }
+    .btn { width: 110px; height: 36px; border: 1px solid #000; background: #fff; font-weight: bold; display: inline-flex; align-items: center; justify-content: center; }
+    table.t { border-collapse: collapse; width: 100%; }
+    table.t th, table.t td { border: 1px solid #000; padding: 4px 6px; text-align: left; }
+    table.t th { background: #eee; }
+    .placeholder { border: 1px dashed #666; padding: 10px; color: #444; font-style: italic; }
+    .legend { position: fixed; bottom: 8px; right: 8px; font-size: 11px; border: 1px dashed #000; padding: 8px 10px; background: #fff; max-width: 320px; }
+  </style>
+</head>
+<body>
+
+<div class="main">
+  <!-- 顶部 Tab（保留名称与间隔；本页无侧边栏/分隔条） -->
+  <nav class="tabs">
+    <div class="tab">输入</div>
+    <div class="tab active">输入配置</div>
+    <div class="tab">存储配置</div>
+  </nav>
+
+  <div class="tab-body">
+    <div class="section">
+      <div class="section-title">基础</div>
+      <div class="section-body">
+        <div class="row">
+          <span class="field-label">分隔符</span>
+          <div class="ctrl medium">\t（制表符）</div>
+          <span class="field-label">工作表</span>
+          <div class="ctrl medium">Input_sheet</div>
+          <div class="btn">保存</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">数据源</div>
+      <div class="section-body">
+        <table class="t">
+          <thead><tr><th>数据源键</th><th>路径 / 链接</th><th>操作</th></tr></thead>
+          <tbody>
+            <tr><td>source1</td><td>E:\...\执法堂业绩.xlsx</td><td>浏览</td></tr>
+            <tr><td>source2</td><td class="placeholder">（空）</td><td>浏览</td></tr>
+          </tbody>
+        </table>
+        <div class="row" style="margin-top:8px"><div class="btn">保存</div></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">区域</div>
+      <div class="section-body">
+        <table class="t">
+          <thead><tr><th>输入区域</th><th>方向</th><th>偏移</th></tr></thead>
+          <tbody><tr><td>A2:G2</td><td>down</td><td>1</td></tr></tbody>
+        </table>
+        <div class="row" style="margin-top:8px">
+          <div class="btn">检测区域</div>
+          <div class="ctrl wide placeholder">区域预览</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">字段映射</div>
+      <div class="section-body">
+        <table class="t">
+          <thead>
+            <tr><th>列标题</th><th>源列</th><th>数据源</th><th>工作表</th><th>序号</th><th>正则</th><th>主键</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>ID#</td><td>ID</td><td>source1</td><td>sheet1</td><td>0</td><td></td><td>是</td></tr>
+            <tr><td>姓名</td><td>name</td><td>source1</td><td>sheet1</td><td>1</td><td></td><td>否</td></tr>
+            <tr><td>近期问题</td><td>issues</td><td>source1</td><td>sheet2</td><td>2</td><td></td><td>否</td></tr>
+            <tr><td>报告日期</td><td>issues</td><td>source1</td><td>sheet2</td><td>2</td><td>\d+/\d+/\d+</td><td>否</td></tr>
+            <tr><td>处理意见</td><td></td><td></td><td></td><td>-1</td><td></td><td>否</td></tr>
+            <tr><td>生效日期</td><td></td><td></td><td></td><td>-1</td><td></td><td>否</td></tr>
+            <tr><td>签字</td><td></td><td></td><td></td><td>-1</td><td></td><td>否</td></tr>
+          </tbody>
+        </table>
+        <div class="row" style="margin-top:8px">
+          <div class="btn">生成骨架</div>
+          <div class="btn">保存</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">高级（TOML 全文）</div>
+      <div class="section-body">
+        <div class="placeholder" style="min-height:80px">TOML 文本编辑区</div>
+        <div class="row" style="margin-top:8px">
+          <div class="btn">保存</div>
+          <div class="btn">重置</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="legend">
+  线框 · 输入配置<br>
+  本页无侧边栏 / 拖拽条，仅保留顶部 Tab<br>
+  TOML：分隔符 / 工作表 / 数据源 / 区域 / 字段 / 全文<br>
+  详见 docs/gradio_ui_plan.md
+</div>
+
+</body>
+</html>

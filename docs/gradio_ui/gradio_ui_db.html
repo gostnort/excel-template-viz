@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>线框 · 存储配置 db_config</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, "Microsoft YaHei", sans-serif;
+      font-size: 13px; line-height: 1.4; background: #fff; color: #000;
+      height: 100vh; overflow: hidden;
+    }
+    .main { display: flex; flex-direction: column; height: 100vh; border: 2px solid #000; }
+    .tabs { display: flex; border-bottom: 2px solid #000; flex-shrink: 0; }
+    .tab { padding: 10px 24px; border-right: 1px solid #000; font-weight: bold; }
+    .tab.active { background: #eee; }
+    .tab-body { flex: 1; overflow: auto; padding: 16px 20px; }
+    .section { border: 1px solid #000; margin-bottom: 14px; }
+    .section-title { border-bottom: 1px solid #000; padding: 6px 10px; font-weight: bold; background: #f5f5f5; }
+    .section-body { padding: 10px; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; }
+    .row:last-child { margin-bottom: 0; }
+    .field-label { min-width: 80px; }
+    .ctrl { border: 1px solid #000; padding: 6px 8px; min-height: 32px; display: inline-flex; align-items: center; }
+    .ctrl.medium { min-width: 200px; }
+    .btn { width: 110px; height: 36px; border: 1px solid #000; background: #fff; font-weight: bold; display: inline-flex; align-items: center; justify-content: center; }
+    .btn.disabled { color: #999; border-color: #999; background: #f5f5f5; }
+    table.t { border-collapse: collapse; width: 100%; }
+    table.t th, table.t td { border: 1px solid #000; padding: 4px 6px; text-align: left; }
+    table.t th { background: #eee; }
+    table.t tbody tr:hover { background: #f7f7f7; }
+    table.t tbody tr.selected { background: #e8e8e8; font-weight: bold; }
+    .chkcol { width: 28px; text-align: center; }
+    .placeholder { border: 1px dashed #666; padding: 10px; color: #444; font-style: italic; }
+    .legend { position: fixed; bottom: 8px; right: 8px; font-size: 11px; border: 1px dashed #000; padding: 8px 10px; background: #fff; max-width: 320px; }
+  </style>
+</head>
+<body>
+
+<div class="main">
+  <!-- 顶部 Tab（保留名称与间隔；本页无侧边栏/分隔条） -->
+  <nav class="tabs">
+    <div class="tab">输入</div>
+    <div class="tab">输入配置</div>
+    <div class="tab active">存储配置</div>
+  </nav>
+
+  <div class="tab-body">
+    <div class="section">
+      <div class="section-title">当前数据库</div>
+      <div class="section-body">
+        <div class="row">
+          <span class="field-label">使用库</span>
+          <div class="ctrl medium">▼ sample_template.A2026</div>
+          <div class="btn disabled">切换</div>
+          <div class="btn">新建库</div>
+        </div>
+        <p style="margin-top:8px;font-size:11px;color:#666">
+          「切换」平时不可用；仅当 Dropdown 选中项 ≠ 当前使用库时才变为可点。
+        </p>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">全部数据（HTML5 自定义表格）</div>
+      <div class="section-body">
+        <table class="t">
+          <thead>
+            <tr><th class="chkcol">☐</th><th>id</th><th>ID#</th><th>姓名</th><th>报告日期</th><th>处理意见</th><th>签字</th></tr>
+          </thead>
+          <tbody>
+            <tr class="selected"><td class="chkcol">☑</td><td>8129</td><td>8129</td><td>Clark Kent</td><td>1978/02/29</td><td></td><td></td></tr>
+            <tr><td class="chkcol">☐</td><td>250</td><td>250</td><td>狗蛋</td><td>2026/01/31</td><td>每日刷牙</td><td>One</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">覆盖录入（选中某行后，粘贴整段数据覆盖并保存）</div>
+      <div class="section-body">
+        <div class="placeholder" style="min-height:48px">粘贴整行数据…（按分隔符覆盖选中记录）</div>
+        <div class="row" style="margin-top:8px">
+          <div class="btn">覆盖保存</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="legend">
+  线框 · 存储配置<br>
+  本页无侧边栏 / 拖拽条，仅保留顶部 Tab<br>
+  指定当前库 / 新建库 / 查看全部数据 / 选行覆盖录入<br>
+  详见 docs/gradio_ui_plan.md
+</div>
+
+</body>
+</html>

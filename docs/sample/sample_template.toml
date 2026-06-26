@@ -6,7 +6,7 @@ worksheet = "Input_sheet"
 # 首次生成时写入空值 ""，真实路径由专用配置页写入后再落盘
 # 写入Windows路径需要使用'
 [[sources]]
-source1 = 'E:\my_github\excel-template-viz\docs\执法堂业绩.xlsx'
+source1 = 'E:\my_github\excel-template-viz\docs\sample\执法堂业绩.xlsx'
 
 # 多区域配置（一页 3 个证书，垂直排列）
 [[sections]]
