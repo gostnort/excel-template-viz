@@ -72,6 +72,22 @@ Effective Date|2026-01-31
 
 `[[sources]]`：路径尚未配置时使用空字符串 `""` 填充；有路径后用 `tomlkit.string(..., literal=True)` 写单引号字面量。
 
+顶层可选键 **`db_id`**：指定本地 `records` 表主键所对应的 **`Input_label`**（不是 `field` 列名）。未配置时由校验/入库逻辑按下列 id 规则自动推断或报错。
+
+### `id` 与 `source_sheet`
+
+`[[fields]].id = true` 表示该字段参与**外部数据源行查找**与**本地 records 主键**语义。规则如下：
+
+| 规则 | 约定 |
+|------|------|
+| 每外部表至多一个 id | 对每个 `(source_file, source_sheet)`，**至多一条** `id = true`；同一表出现多条 → `verify_toml` 报告 `duplicate_id_sheets`（如 `source1/sheet1`） |
+| 外部行查找键 | 对所有 `id = true` 字段，查行用 **`field`（已映射时）否则 `Input_label`**；汇总为 `id_lookup_keys`；**全局 OR**：任意一个键匹配即视为命中该行 |
+| 单 id | 仅一条 `id = true` 时，生效的 `db_id` 自动为该条的 **`Input_label`**；若写了 `db_id` 且与唯一 id 的 `Input_label` 不一致 → `invalid_db_id` |
+| 多 id | 两条及以上 `id = true` 时，**必须**在顶层写 `db_id = "<某个 id 字段的 Input_label>"`；未写 → `db_id_required`；写了但不在 `id_labels` 列表中 → `invalid_db_id` |
+| 无 id | 无 `id = true` 时，`db_id` 为 `null`（报告字段）；入库时由数据库自动分配主键 |
+
+**`db_id` 始终引用 `Input_label`**，例如 `db_id = "ID#"` 表示本地主键取自模板工作表上标签为 `ID#` 的那一列对应的填写值，而非数据源列名 `ID`。
+
 ### 定位模型
 
 每次 **UI 加载 template 并激活校验** 时，须对当前 xlsx + 当前 TOML **重新扫描、重新印证**（防止 template 被改过）。`core_toml` **提供函数供 UI 调用**，不在模块内部写死「只校验一次」。
@@ -227,35 +243,46 @@ UI **只**调用一个函数 `verify_toml()`，由 `core_toml` 完成「打开 x
 ```
 {
   "ok": bool,
-  "missing_labels": [Input_label, ...],          # 在 worksheet 上搜不到的标签
-  "duplicate_labels": [Input_label, ...],        # 工作表上多处匹配的标签
-  "out_of_area_labels": [Input_label, ...],       # 值格不在 input_area 内的标签
-  "located": { Input_label: {label_row, label_col, value_row, value_col}, ... }  # 通过项的坐标，可选
+  "missing_labels": [Input_label, ...],
+  "duplicate_labels": [Input_label, ...],
+  "out_of_area_labels": [Input_label, ...],
+  "located": { Input_label: {label_row, label_col, value_row, value_col}, ... },
+  "errors": [str, ...],
+  "duplicate_id_sheets": ["source_file/source_sheet", ...],
+  "db_id_required": bool,
+  "invalid_db_id": str | null,
+  "db_id": str | null,
+  "id_labels": [Input_label, ...],
+  "id_lookup_keys": [str, ...]
 }
 ```
 
+`ok` 为真当且仅当：坐标三项列表与 `errors` 均为空，且 `duplicate_id_sheets` 为空、`db_id_required` 为假、`invalid_db_id` 为 `null`。
+
 `located` 仅内存返回，供 UI 初始化输入框与后续填表使用；**不写回 TOML**。k≥1 的值格由填表逻辑在 instance 0 坐标上再应用 `move_to`/`offset`，不在本次校验逐 instance 扫描。
 
-**执行步骤（仅 `worksheet` 指定表）**
+**执行步骤（仅 `worksheet` 指定表 + TOML 层 id 规则）**
 
-1. 打开 `worksheet` 指定的工作表；不存在 → 整体失败。
-2. 把 `[[input_section]].input_area` 解析为矩形 `(min_row, min_col, max_row, max_col)`。
-3. 对 100×100 区域做**一次**斜向波面扫描，建立标签文本 → 首见坐标索引，并收集重复文本。
-4. 对每一条 `[[fields]]` 查索引：
+1. **TOML 层**（不打开 xlsx）：统计各 `(source_file, source_sheet)` 的 `id=true` 数量；汇总 `id_labels`、`id_lookup_keys`；解析或校验 `db_id`。
+2. 打开 `worksheet` 指定的工作表；不存在 → 整体失败。
+3. 把 `[[input_section]].input_area` 解析为矩形 `(min_row, min_col, max_row, max_col)`。
+4. 对 100×100 区域做**一次**斜向波面扫描，建立标签文本 → 首见坐标索引，并收集重复文本。
+5. 对每一条 `[[fields]]` 查索引：
    - 找不到 `Input_label` → 计入 `missing_labels`。
    - `Input_label` 在表中出现多处 → 计入 `duplicate_labels`。
    - 找到唯一标签格后，`offset_cell(...)` 得 instance 0 值格；若不在 `input_area` 矩形内 → 计入 `out_of_area_labels`。
-5. `missing_labels`、`duplicate_labels`、`out_of_area_labels` 均为空 → `ok = True`。
+6. 坐标与 id 规则均通过 → `ok = True`。
 
 **不检查**：标签格是否在 `input_area` 内；`field` / `source_*` / `regex` 是否已映射；Print_sheet 及其他工作表。`verify_toml()` **只报告**问题，**不**静默改 TOML、不改 xlsx、不自动修正坐标。
 
-> 文本层面的 TOML 语法/字段骨架解析由 Load 解析阶段负责（不打开 xlsx）；`verify_toml()` 专注 xlsx 与坐标印证。
+> 文本层面的 TOML 语法/字段骨架解析由 Load 解析阶段负责（不打开 xlsx）；`verify_toml()` 专注 xlsx 坐标印证与 **id/db_id 规则**。
 
 ### 配置示例
 
 ```# toml
 determiner = "\t"           # 纯文本粘贴的分隔符；支持 \t(tab) 等转义字符和其他单字符分隔符
 worksheet = "Input_sheet"   # 模板中需要输入数据的表格
+db_id = "ID#"               # 本地 records 主键对应的 Input_label；仅一条 id=true 时可省略；多条 id=true 时必填
 
 # 外部数据源；路径可为本地文件、网页链接或 Google Sheet
 # 首次生成时写入空值 ""，真实路径由专用配置页写入后再落盘
@@ -376,7 +403,8 @@ tomlkit>=0.13
 |------|------|------|
 | 生成默认 TOML | `TomlGenerator` | TOML 不存在时；标准范式；**不**做全表扫描 |
 | 读写 TOML 文本 | `GetTomlValues` | Load / Save / ToDict |
-| **激活校验**（UI 调用） | `verify_toml()` | UI 只调这一个；斜向扫描 worksheet，报告找不到 / 重复 / 值格越界的 `Input_label` |
+| **激活校验**（UI 调用） | `verify_toml()` | UI 只调这一个；斜向扫描 worksheet，报告找不到 / 重复 / 值格越界的 `Input_label`，以及 `duplicate_id_sheets` / `db_id` 相关项 |
+| 解析本地主键 | `resolve_db_id()` | 由已加载配置推断生效的 `db_id`（`Input_label`）；无 id 字段时返回 `None` |
 | 坐标解析 | `offset_cell`、`_scan_worksheet_labels_diagonal` 等 | 校验与填表共用；扫描上限 **100×100** |
 
 **不在 `core_toml` 内写死**「仅首次 Load 校验」；是否校验、何时校验由 **UI 在加载 template 时决定**。
@@ -384,6 +412,6 @@ tomlkit>=0.13
 ### 职责划分
 
 - **生成器（`TomlGenerator`）**：TOML 不存在时，按标准范式生成骨架（第 1 行 → `[[fields]].Input_label`，`input_area` → 第 2 行值区）；默认 `value_from_label = "down"`、`value_offset = 1`；**不**扫描全表。
-- **持久化层（`GetTomlValues`）**：Load / Save / ToDict；**`verify_toml()`**——回报 `missing_labels`、`duplicate_labels`、`out_of_area_labels`。
+- **持久化层（`GetTomlValues`）**：Load / Save / ToDict（含可选 `db_id`）；**`verify_toml()`**——回报坐标问题与 id 规则（`duplicate_id_sheets`、`db_id_required`、`invalid_db_id`、`db_id`、`id_lookup_keys`）。
 - **定位**：仅在 `worksheet` 上斜向波面扫描标签；值格由 offset 推算且**必须**在 `input_area` 内；`move_to`/`offset` 处理 k≥1 值格平移。
 - **数据源路径**：由专用 UI 写入，不由生成器提供。

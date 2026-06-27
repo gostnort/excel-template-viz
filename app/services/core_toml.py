@@ -102,6 +102,12 @@ class VerifyTomlReport:
     out_of_area_labels: list[str]
     located: dict[str, dict[str, int]]
     errors: list[str]
+    duplicate_id_sheets: list[str]
+    db_id_required: bool
+    invalid_db_id: str | None
+    db_id: str | None
+    id_labels: list[str]
+    id_lookup_keys: list[str]
 
 
     def to_dict(self) -> dict[str, Any]:
@@ -111,15 +117,21 @@ class VerifyTomlReport:
         输入:
             无
         输出:
-            dict[str, Any] - 含 ok / missing_labels / duplicate_labels / out_of_area_labels / located / errors
+            dict[str, Any] - 含坐标、id 规则与 db_id 相关字段
         """
         return {
             "ok": self.ok,
-            "missing_labels": list(self.missing_labels),          # 找不到的标签
-            "duplicate_labels": list(self.duplicate_labels),    # 工作表上多处匹配的标签
-            "out_of_area_labels": list(self.out_of_area_labels),  # 值格越界的标签
-            "located": dict(self.located),                        # 通过项坐标
-            "errors": list(self.errors),                          # 结构性错误
+            "missing_labels": list(self.missing_labels),
+            "duplicate_labels": list(self.duplicate_labels),
+            "out_of_area_labels": list(self.out_of_area_labels),
+            "located": dict(self.located),
+            "errors": list(self.errors),
+            "duplicate_id_sheets": list(self.duplicate_id_sheets),
+            "db_id_required": self.db_id_required,
+            "invalid_db_id": self.invalid_db_id,
+            "db_id": self.db_id,
+            "id_labels": list(self.id_labels),
+            "id_lookup_keys": list(self.id_lookup_keys),
         }
 
 
@@ -360,12 +372,14 @@ def _config_from_dict(raw: dict[str, Any]) -> GetTomlValues | None:
     if not worksheet or input_section is None or not field_rules:
         return None
     determiner = str(raw.get("determiner", DEFAULT_DETERMINER)) or DEFAULT_DETERMINER
+    db_id = _optional_string(raw.get("db_id"))
     return GetTomlValues(
         determiner=determiner,
         sources=_parse_sources(raw.get("sources")),
         field_rules=field_rules,
         worksheet=worksheet,
         input_section=input_section,
+        db_id=db_id,
     )
 
 
@@ -382,6 +396,9 @@ def _dict_to_toml(config: dict[str, Any]) -> str:
     doc = document()
     doc["determiner"] = str(config.get("determiner", DEFAULT_DETERMINER))
     doc["worksheet"] = str(config.get("worksheet", ""))
+    db_id = config.get("db_id")
+    if db_id is not None and str(db_id).strip():
+        doc["db_id"] = str(db_id).strip()
     # ---- [[sources]]：空别名落盘为空串 ----
     sources_aot = aot()
     for item in config.get("sources", DEFAULT_SOURCES):
@@ -555,6 +572,145 @@ def _headers_from_first_row(ws: Any) -> list[tuple[int, str]]:
     return headers
 
 
+def _source_ref_key(source_file: str, source_sheet: str) -> str:
+    """
+    函数名: _source_ref_key
+    作用: 拼出外部数据源表引用键 source_file/source_sheet
+    输入:
+        source_file (str) - sources 别名
+        source_sheet (str) - 外部工作表名
+    输出:
+        str - 如 source1/sheet1
+    """
+    return f"{source_file}/{source_sheet}"
+
+
+def _id_lookup_key(rule: TomlDefault) -> str:
+    """
+    函数名: _id_lookup_key
+    作用: 取外部表查行用的列名；已映射 field 优先，否则用 Input_label
+    输入:
+        rule (TomlDefault) - id=true 的字段规则
+    输出:
+        str - 查行键
+    """
+    if not _is_unmapped(rule.field):
+        return rule.field  # type: ignore[return-value]
+    return rule.Input_label
+
+
+def _validate_id_rules(cfg: GetTomlValues) -> dict[str, Any]:
+    """
+    函数名: _validate_id_rules
+    作用: 纯 TOML 层校验 id 规则：每外部表至多一个 id=true、汇总 id_lookup_keys、解析 db_id
+    输入:
+        cfg (GetTomlValues) - 已加载配置
+    输出:
+        dict[str, Any] - duplicate_id_sheets / db_id_required / invalid_db_id / db_id / id_labels / id_lookup_keys
+    """
+    duplicate_id_sheets: list[str] = []
+    sheet_id_count: dict[str, int] = {}
+    id_labels: list[str] = []
+    id_lookup_keys: list[str] = []
+    seen_lookup: set[str] = set()
+    for rule in cfg.field_rules:
+        if not rule.id:
+            continue
+        id_labels.append(rule.Input_label)
+        lookup = _id_lookup_key(rule)
+        if lookup not in seen_lookup:
+            seen_lookup.add(lookup)
+            id_lookup_keys.append(lookup)
+        if not _is_unmapped(rule.source_file) and not _is_unmapped(rule.source_sheet):
+            ref = _source_ref_key(rule.source_file, rule.source_sheet)  # type: ignore[arg-type]
+            sheet_id_count[ref] = sheet_id_count.get(ref, 0) + 1
+    for ref, count in sheet_id_count.items():
+        if count > 1:
+            duplicate_id_sheets.append(ref)
+    db_id_required = False
+    invalid_db_id: str | None = None
+    resolved_db_id: str | None = None
+    if len(id_labels) == 1:
+        resolved_db_id = id_labels[0]
+        if cfg.db_id and cfg.db_id != resolved_db_id:
+            invalid_db_id = cfg.db_id
+    elif len(id_labels) > 1:
+        if _is_unmapped(cfg.db_id):
+            db_id_required = True
+        elif cfg.db_id not in id_labels:
+            invalid_db_id = cfg.db_id
+        else:
+            resolved_db_id = cfg.db_id
+    return {
+        "duplicate_id_sheets": duplicate_id_sheets,
+        "db_id_required": db_id_required,
+        "invalid_db_id": invalid_db_id,
+        "db_id": resolved_db_id,
+        "id_labels": id_labels,
+        "id_lookup_keys": id_lookup_keys,
+    }
+
+
+def resolve_db_id(cfg: GetTomlValues) -> str | None:
+    """
+    函数名: resolve_db_id
+    作用: 解析本地 records 主键所对应的 Input_label；无 id 字段时返回 None
+    输入:
+        cfg (GetTomlValues) - 已加载配置
+    输出:
+        str | None - 生效的 db_id（Input_label），无则 None
+    """
+    id_info = _validate_id_rules(cfg)
+    return id_info["db_id"]
+
+
+def _id_ok(id_info: dict[str, Any]) -> bool:
+    """id 规则是否通过（无重复表 id、db_id 合法）。"""
+    if id_info["duplicate_id_sheets"]:
+        return False
+    if id_info["db_id_required"]:
+        return False
+    if id_info["invalid_db_id"]:
+        return False
+    return True
+
+
+def _make_report(
+    ok: bool,
+    missing_labels: list[str],
+    duplicate_labels: list[str],
+    out_of_area_labels: list[str],
+    located: dict[str, dict[str, int]],
+    errors: list[str],
+    id_info: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    函数名: _make_report
+    作用: 合并模板坐标结果与 id 规则结果，构造 verify_toml 报告字典
+    输入:
+        ok (bool) - 模板坐标部分是否通过
+        missing_labels / duplicate_labels / out_of_area_labels / located / errors - 坐标校验
+        id_info (dict) - _validate_id_rules 返回值
+    输出:
+        dict[str, Any] - verify_toml 完整报告
+    """
+    full_ok = ok and _id_ok(id_info)
+    return VerifyTomlReport(
+        full_ok,
+        missing_labels,
+        duplicate_labels,
+        out_of_area_labels,
+        located,
+        errors,
+        id_info["duplicate_id_sheets"],
+        id_info["db_id_required"],
+        id_info["invalid_db_id"],
+        id_info["db_id"],
+        id_info["id_labels"],
+        id_info["id_lookup_keys"],
+    ).to_dict()
+
+
 def load_toml(template_id: str) -> GetTomlValues | None:
     """
     函数名: load_toml
@@ -579,48 +735,50 @@ def load_toml(template_id: str) -> GetTomlValues | None:
 def verify_toml(template_path: Path, cfg: GetTomlValues) -> dict[str, Any]:
     """
     函数名: verify_toml
-    作用: UI 唯一校验入口；斜向扫描 worksheet 建标签索引，验证各字段 instance 0 值格是否落在 input_area
+    作用: UI 唯一校验入口；模板坐标印证 + TOML 层 id/db_id 规则校验
     输入:
         template_path (Path) - 当前模板 xlsx 路径
         cfg (GetTomlValues) - 已加载的 TOML 配置
     输出:
-        dict[str, Any] - 报告：ok / missing_labels / duplicate_labels / out_of_area_labels / located / errors
+        dict[str, Any] - 完整报告（坐标、duplicate_id_sheets、db_id 等）
     """
     missing_labels: list[str] = []
     duplicate_labels: list[str] = []
     out_of_area_labels: list[str] = []
     located: dict[str, dict[str, int]] = {}
     errors: list[str] = []
+    id_info = _validate_id_rules(cfg)  # TOML 层 id 规则，不依赖 xlsx
     if not cfg.worksheet:
-        return VerifyTomlReport(False, [], [], [], {}, ["worksheet is required"]).to_dict()
+        return _make_report(False, [], [], [], {}, ["worksheet is required"], id_info)
     wb = load_workbook(template_path, read_only=True, data_only=True)
     try:
-        # worksheet 不存在直接整体失败
         if cfg.worksheet not in wb.sheetnames:
-            return VerifyTomlReport(False, [], [], [], {}, [f"worksheet not found: {cfg.worksheet}"]).to_dict()
+            return _make_report(
+                False, [], [], [], {}, [f"worksheet not found: {cfg.worksheet}"], id_info
+            )
         ws = wb[cfg.worksheet]
         try:
-            input_area = _parse_area(cfg.input_section.input_area)  # 解析约束矩形
+            input_area = _parse_area(cfg.input_section.input_area)
         except ValueError as exc:
-            return VerifyTomlReport(False, [], [], [], {}, [f"invalid input_area: {exc}"]).to_dict()
-        label_map, duplicate_texts = _scan_worksheet_labels_diagonal(ws)  # 一次斜向扫描建索引
+            return _make_report(False, [], [], [], {}, [f"invalid input_area: {exc}"], id_info)
+        label_map, duplicate_texts = _scan_worksheet_labels_diagonal(ws)
         for rule in cfg.field_rules:
             if rule.Input_label not in label_map:
-                missing_labels.append(rule.Input_label)  # 标签找不到
+                missing_labels.append(rule.Input_label)
                 continue
             if rule.Input_label in duplicate_texts:
-                duplicate_labels.append(rule.Input_label)  # 工作表上多处匹配
+                duplicate_labels.append(rule.Input_label)
                 continue
             label_row, label_col = label_map[rule.Input_label]
             try:
                 value_row, value_col = offset_cell(
                     label_row, label_col, rule.value_from_label, rule.value_offset
-                )  # 由标签推算 instance 0 值格
+                )
             except ValueError as exc:
-                errors.append(f"{rule.Input_label}: {exc}")  # 方向/步长非法或越界
+                errors.append(f"{rule.Input_label}: {exc}")
                 continue
             if not _cell_in_area(value_row, value_col, input_area):
-                out_of_area_labels.append(rule.Input_label)  # 值格不在 input_area 内
+                out_of_area_labels.append(rule.Input_label)
                 continue
             located[rule.Input_label] = {
                 "label_row": label_row,
@@ -630,10 +788,10 @@ def verify_toml(template_path: Path, cfg: GetTomlValues) -> dict[str, Any]:
             }
     finally:
         wb.close()
-    ok = not missing_labels and not duplicate_labels and not out_of_area_labels and not errors
-    return VerifyTomlReport(
-        ok, missing_labels, duplicate_labels, out_of_area_labels, located, errors
-    ).to_dict()
+    layout_ok = not missing_labels and not duplicate_labels and not out_of_area_labels and not errors
+    return _make_report(
+        layout_ok, missing_labels, duplicate_labels, out_of_area_labels, located, errors, id_info
+    )
 
 
 def ensure_exists(
@@ -771,6 +929,7 @@ class GetTomlValues:
         field_rules: list[TomlDefault] | None = None,
         worksheet: str | None = None,
         input_section: InputSection | None = None,
+        db_id: str | None = None,
     ) -> None:
         """
         函数名: GetTomlValues.__init__
@@ -781,6 +940,7 @@ class GetTomlValues:
             field_rules (list[TomlDefault] | None) - 字段规则列表
             worksheet (str | None) - 目标工作表名
             input_section (InputSection | None) - 单条区段
+            db_id (str | None) - 本地 records 主键对应的 Input_label；多 id 时必填
         输出:
             无
         """
@@ -789,6 +949,7 @@ class GetTomlValues:
         self.field_rules = field_rules if field_rules is not None else []
         self.worksheet = worksheet
         self.input_section = input_section if input_section is not None else InputSection("A2:A2")
+        self.db_id = db_id
 
 
     def Load(self, template_id: str) -> GetTomlValues | None:
@@ -854,6 +1015,7 @@ class GetTomlValues:
         return {
             "determiner": self.determiner,
             "worksheet": self.worksheet,
+            "db_id": self.db_id,
             "sources": [dict(item) for item in self.sources],
             "input_section": self.input_section.to_dict(),
             "fields": [rule.to_dict() for rule in self.field_rules],
@@ -916,6 +1078,64 @@ def main() -> None:
     print(f"out_of_area_labels: {report2['out_of_area_labels']}")
     print(f"located: {report2['located']}")
     print(f"errors: {report2['errors']}")
+    # ---- 5. id 规则：单 id 时自动解析 db_id ----
+    print("=== 5. id rules: single id ===")
+    base_rules = [
+        TomlDefault(
+            Input_label="ID#", index=0, field="ID", source_file="source1",
+            source_sheet="sheet1", id=True,
+        ),
+        TomlDefault(
+            Input_label="Name", index=1, field="name", source_file="source1",
+            source_sheet="sheet1",
+        ),
+    ]
+    cfg3 = GetTomlValues(
+        worksheet=cfg.worksheet,
+        field_rules=base_rules,
+        input_section=InputSection(input_area="A2:G2", move_to="down", offset=1),
+        sources=[dict(item) for item in cfg.sources],
+    )
+    report3 = verify_toml(sample_xlsx, cfg3)
+    print(f"ok: {report3['ok']}")
+    print(f"db_id: {report3['db_id']}")
+    print(f"id_labels: {report3['id_labels']}")
+    print(f"id_lookup_keys: {report3['id_lookup_keys']}")
+    # ---- 6. 多 id 且无 db_id → db_id_required ----
+    print("=== 6. id rules: multi id without db_id ===")
+    multi_rules = list(base_rules) + [
+        TomlDefault(
+            Input_label="AltID", index=-1, field="ID", source_file="source1",
+            source_sheet="sheet2", id=True,
+        ),
+    ]
+    multi_cfg = GetTomlValues(
+        worksheet=cfg.worksheet,
+        field_rules=multi_rules,
+        input_section=InputSection(input_area="A2:G2", move_to="down", offset=1),
+        sources=[dict(item) for item in cfg.sources],
+    )
+    report4 = verify_toml(sample_xlsx, multi_cfg)
+    print(f"ok: {report4['ok']}")
+    print(f"db_id_required: {report4['db_id_required']}")
+    print(f"duplicate_id_sheets: {report4['duplicate_id_sheets']}")
+    # ---- 7. 同一 source_sheet 两个 id=true → duplicate_id_sheets ----
+    print("=== 7. id rules: duplicate id on same sheet ===")
+    dup_rules = list(base_rules) + [
+        TomlDefault(
+            Input_label="DupID", index=-1, field="Report_date", source_file="source1",
+            source_sheet="sheet1", id=True,
+        ),
+    ]
+    dup_cfg = GetTomlValues(
+        worksheet=cfg.worksheet,
+        field_rules=dup_rules,
+        input_section=InputSection(input_area="A2:G2", move_to="down", offset=1),
+        sources=[dict(item) for item in cfg.sources],
+    )
+    report5 = verify_toml(sample_xlsx, dup_cfg)
+    print(f"ok: {report5['ok']}")
+    print(f"duplicate_id_sheets: {report5['duplicate_id_sheets']}")
 
 
 if __name__ == "__main__":

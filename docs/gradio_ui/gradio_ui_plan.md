@@ -1,465 +1,445 @@
-# Gradio UI 实施计划（基于 core*.py）
+# Gradio UI 实施约束（基于 core*.py）
 
-## 概述
+## 目的
 
-全新 Gradio 界面，仅依赖 `core_*.py`。**界面文案纯中文**；英文（`data_input` / `toml_config` / `Input_label` 等）仅作代码标识，不出现在界面上。
+本文档是给实现者看的约束文档，用来限制 Gradio UI 的编码逻辑，避免把旧设计、历史组件或 UI 自行推导 Excel 坐标的逻辑带回来。
 
-不考虑既有 `gradio_*.py`、YAML 或历史路径。
+界面文案使用中文。英文名称仅用于代码级别标识，例如 `data_input`、`toml_config`、`db_config`、`Input_label`。
 
-**依赖模块**：
+不考虑历史兼容，不沿用旧 `gradio_*.py` 组件。
 
-| 模块 | UI 用途 |
-|------|---------|
-| `core_registry.py` | 左侧模板列表 `SortTemplates` |
-| `core_toml.py` | 输入配置（toml_config） |
-| `core_store.py` | 存储配置（db_config）、输入页落库与读表 |
-| `core_transform.py` | 输入页数据源拉取、写回、打印区域 |
+## 依赖边界
 
-**线框图（三张，旧版已废弃）**：
+| 模块 | UI 可做的事 | UI 不可做的事 |
+|------|-------------|---------------|
+| `core_registry.py` | 列出模板、切换模板、记录最近使用 | 自行扫描模板目录以外的位置 |
+| `core_toml.py` | `ensure_exists()` / Load / Save / `verify_toml()`；展示校验报告 | 自行扫描 xlsx 标签、修正 TOML、猜坐标 |
+| `core_store.py` | 当前库管理、落库、读 DB、文本拆分 | 合并旧 JSON、保留旧字段值 |
+| `core_transform.py` | 数据源读取、`max_instance_count()` 取容量、`write_back()` 写回、打印区域读取 | 在 UI 层复制 Excel 坐标计算 |
 
-| 文件 | 对应页 |
-|------|--------|
-| [`gradio_ui_index.html`](gradio_ui_index.html) | 主界面 · 输入（含侧边栏 + 拖拽条） |
-| [`gradio_ui_toml.html`](gradio_ui_toml.html) | 输入配置（仅顶部 Tab） |
-| [`gradio_ui_db.html`](gradio_ui_db.html) | 存储配置（仅顶部 Tab） |
+核心原则：
 
----
+- UI 负责交互、状态、提示。
+- core 负责 TOML 解析、校验、定位、读写。
+- UI 不计算标签坐标、不计算值格坐标、不推导 Excel 写入坐标。
 
-## 整体布局
+## 三个 Tab
 
-```
-┌─────────────────┬──┬──────────────────────────────────────────┐
-│  模板侧边栏      │▐ │  [ 输入 ]  [ 输入配置 ]  [ 存储配置 ]        │
-│  销售模板        │▐ │                                          │
-│  订单模板        │▐ │           （当前 Tab 内容区）               │
-│  …              │▐ │                                          │
-└─────────────────┴──┴──────────────────────────────────────────┘
-                  ↑
-           拖拽条 / 折叠钮（平时隐藏，悬停显示）
-```
+| 代码名 | 中文标签 | 职责 |
+|--------|----------|------|
+| `data_input` | 输入 | 粘贴 / 手动输入 / ID 拉源 / 本次录入列表 / 下一行 / 另存为 / 打印 |
+| `toml_config` | 输入配置 | 编辑 TOML、保存、校验当前模板 |
+| `db_config` | 存储配置 | 指定当前 DB、查看全部数据、选行覆盖录入 |
 
-侧边栏与拖拽条是**全局**组件，三个 Tab 共用。线框中 toml / db 两页省略侧边栏只为聚焦内容；实际应用里侧边栏始终在左。
+左侧模板侧边栏与中间拖拽条是全局布局，不属于任一 Tab。
 
-### 左侧 — 模板侧边栏
+## 必须使用的新 TOML 模型
 
-| 行为 | 实现要点 |
-|------|----------|
-| 列出模板 | `SortTemplates.UpdateJson()` → 时间线 / `templates[]`，显示中文名 |
-| 点击切换 | 重载 `template_id`、`cfg`、`db`、`ui`、`writer`、`t2db`；更新 `LastUseTemplate` |
-| 高亮当前 | 与 `gr.State.template_id` 同步 |
+以 `docs/toml_config_design.md` 为准。
 
-### 拖拽条（侧边栏与主区之间）
+必须使用：
 
-| 行为 | 实现要点 |
-|------|----------|
-| 平时 | 几乎不可见（约 2–6px 命中区，透明） |
-| 悬停 | 显示竖条，光标 `col-resize` |
-| 拖拽 | 改侧边栏宽度，限 120–400px |
-| 记忆宽度 | `localStorage`（如 `etv_sidebar_width`）持久化 |
-| 单击 | 折叠 / 展开，状态同样持久化 |
+- 顶层 `worksheet`
+- 单条 `[[input_section]]`
+- `[[fields]].Input_label`
+- `[[fields]].value_from_label`
+- `[[fields]].value_offset`
+- `[[fields]].index`
+- `[[fields]].id`
 
-Gradio 侧：`Blocks(css=..., js=...)` 注入；侧边栏与主区用并列 Column，JS 改宽度。
+禁止继续使用旧模型：
 
-### 右侧 — 三个 Tab
+- `sections`
+- `sections[0]`
+- `detect_areas()` 作为主流程
+- 表头行匹配 `Input_label` 作为主写回逻辑
+- UI 维护完整 area 列表作为下一行依据
 
-| 代码名 | 界面标签 |
-|--------|----------|
-| `data_input` | 输入 |
-| `toml_config` | 输入配置 |
-| `db_config` | 存储配置 |
+## 模板激活流程
 
----
+切换模板或启动默认模板时，必须按顺序执行：
 
-## 会话状态（`gr.State`）
+1. 根据模板路径得到 `template_id`。
+2. `ensure_exists(template_id, template_path, worksheet_name=None)`。
+3. `cfg = GetTomlValues().Load(template_id)`（等价于模块级 `load_toml(template_id)`）。
+4. 调用 `verify_toml(template_path, cfg)`（等价于 `cfg.VerifyToml(template_path)`）。
+5. 如果校验失败：展示问题，禁用输入、下一行、另存为、打印。
+6. 如果校验成功：保存 `verify_report` 和 `verify_report["located"]` 到 `gr.State`。
+7. 打开当前 DB：`default_db_path(template_id)` + `SecureSQLite`。
+8. 构造 `UiProvider(cfg, db)`、`Template2DB(cfg)`、`ExcelWriter(cfg)`。
+9. `input_capacity = writer.max_instance_count(template_path)`。
+10. 清空 `draft`、`session_rows`，重置 `current_instance_index = 0`。
 
-| 键 | 类型 | 说明 |
-|----|------|------|
-| `template_id` | `str` | 当前模板 |
-| `template_path` | `Path` | xlsx 路径 |
-| `cfg` | `GetTomlValues` | 当前 TOML |
-| `db_path` | `Path` | 当前库 `temp/{id}.A2026` |
-| `db` | `SecureSQLite` | 连接 |
-| `ui` | `UiProvider` | 表单列 + 落库 |
-| `writer` | `ExcelWriter` | 写回 / 区域 / 打印区 |
-| `t2db` | `Template2DB` | 按 ID 拉源 |
-| `current_section_index` | `int` | 当前承接数据的区域序号（0-based，`detect_areas` 顺序） |
-| `draft` | `dict` | 上方各 input 的 `Input_label → 值` |
-| `session_rows` | `list[dict]` | 本次会话已录入的记录列表（驱动底部列表） |
-| `session_table_event` | `dict` | HTML5 表格 JS 回传的动作：点击行、勾选、删除等 |
-| `suppress_id_search` | `bool` | 由幽灵框拆分填充时置 True，防止误触发 ID 自动搜索 |
-| `pending_id_value` | `Any` | ID 冲突询问弹窗暂存的待查 ID |
-| `exported_files` | `list[Path]` | 本模板历次「另存为」产出的 xlsx 路径（供打印文件下拉） |
-| `last_export_path` | `Path \| None` | 最近一次另存为路径；打印文件下拉默认选中 |
-| `active_db_suffix` | `str` | 当前正在使用的库后缀（如 `A2026`），与下拉比对以控制「切换」按钮 |
-| `sidebar_collapsed` / `sidebar_width_px` | — | 侧边栏 UI 状态 |
+`verify_toml()` 的报告是 UI 是否允许录入和写回的前置条件。
 
-选模板后初始化：`EnsureExists` → `Load` → `default_db_path` → 构造 `UiProvider` / `ExcelWriter` / `Template2DB`。
+## 会话状态
 
----
+| State | 含义 |
+|-------|------|
+| `template_id` | 当前模板 ID |
+| `template_path` | 当前模板 xlsx |
+| `cfg` | 当前 TOML 配置 |
+| `verify_report` | `verify_toml()` 返回报告 |
+| `located` | `verify_report["located"]`，供 core 写回使用 |
+| `db_path` | 当前 DB 路径 |
+| `db` | 当前 `SecureSQLite` |
+| `ui` | 当前 `UiProvider` |
+| `t2db` | 当前 `Template2DB` |
+| `writer` | 当前 `ExcelWriter` |
+| `input_capacity` | 当前 input_section 最多可承接的数据条数 |
+| `current_instance_index` | 当前第几条录入，0-based |
+| `draft` | 当前 inputs 中的 `Input_label -> value` |
+| `session_rows` | 本次已录入记录，顺序即 instance 顺序 |
+| `session_table_event` | HTML5 表格 JS 回传事件 |
+| `suppress_id_search` | 防止程序填值误触发 ID 搜索 |
+| `pending_id_value` | ID 冲突弹窗暂存 ID |
+| `exported_files` | 本模板已导出的 xlsx 列表 |
+| `last_export_path` | 最近一次导出的 xlsx |
+| `active_db_suffix` | 当前 DB 后缀 |
+| `sidebar_width_px` | 侧边栏宽度 |
+| `sidebar_collapsed` | 侧边栏是否折叠 |
 
-## Tab「输入」（data_input）
+不要把这些用户会话状态放到模块级全局变量。
 
-### 布局（自上而下）
+## 输入页
 
-```
-（幽灵输入框 — 几乎无边框）
-ID#           [____]   ← 焦点切走时自动查数据源
-姓名          [____]
-…             （ui.get_labels() 动态生成）
-─ 本次已录入列表（勾选 / 点击载入）───────
-  ☑ 8129  Clark Kent  …
-  ☐ 250   狗蛋        …
-  [ 清空 ]                         [ 删除 ]
-──────────── 分隔线 ────────────
-[ 另存为 ]                         [ 下一行 ]
-[ 打印文件 ▼ （空） ] [ 打印区域 ▼ Input_sheet, A1:D4 ] [ 打印 ]
-```
+### 幽灵输入框
 
-### 1. 幽灵输入框（顶部）
+顶部保留一个近似隐藏的输入框，用于粘贴整行文本。
 
-| 项 | 说明 |
-|----|------|
-| 控件 | `gr.Textbox`，`show_label=False`，自定义 CSS 去边框、浅色 placeholder「粘贴整行数据…」 |
-| 触发 | **`.blur()`（切换焦点）** → `ui.record_from_textbox(raw)` 拆分 |
-| 结果 | 拆分值写入 `draft` 并填入下方各 input；**置 `suppress_id_search=True`** |
-| 分隔符 | `cfg.determiner` |
+行为：
 
-### 2. 标签 + 输入列
+1. 用户粘贴文本。
+2. 输入框 `.blur()`。
+3. 调用 `ui.record_from_textbox(raw)`。
+4. 将返回值写入 `draft` 和下方 inputs。
+5. 设置 `suppress_id_search = True`。
 
-| 项 | 说明 |
-|----|------|
-| 生成 | `labels = ui.get_labels()`，每项一行：中文标签 + `gr.Textbox` |
-| 绑定 | 读写 `draft[Input_label]` |
-| 主键列 | `id=true` 的 `Input_label`，标签旁标「★主键」 |
+注意：
 
-### 3. ID 自动搜索 与 幽灵拆分的**互不冲突**
+- 这个输入框只负责拆分，不直接落库。
+- 拆分依据是 `cfg.determiner` 和 `[[fields]].index`。
+- `value_from_label` / `value_offset` 与文本拆分无关。
 
-两者都绑 `.blur()`，靠「真实焦点离开」区分，且加守卫标志：
+### 动态 inputs
 
-- **幽灵框 blur** → 拆分填充（含 ID 框的值）。程序写值**不会**让 ID 框失焦，故不会触发 ID 搜索。同时置 `suppress_id_search=True`。
-- **ID 框 blur**（用户手动编辑后离开）→ 若 `suppress_id_search` 为 True 则消费该标志并跳过本次；否则进入 **ID 解析流程**（见下）。
-- ID 解析执行中 ID 框 `interactive=False`。
+根据 `ui.get_labels()` 生成输入项。
 
-要点：**自动搜索只认焦点切换**，不依赖任何按钮；幽灵框整段填充不应被误判为用户在 ID 上的编辑。
+主键字段：
 
-#### ID 解析流程（含库内旧数据询问）
+- 来自 `id=true` 的 `Input_label`。
+- 用户手动修改并切换焦点后，触发 ID 解析流程。
 
-```
-ID 框 blur（且未 suppress）
-  → 规范化 id_value
-  → row = db.query_by_id(id_value)
-  → if row 存在:
-        弹出询问（gr.Modal 或双按钮确认）:
-          「从数据源重新读取」 | 「从数据库读取」
-        暂存 pending_id_value = id_value
-     else:
-        直接 t2db.fetch_row_by_id(id_value) → merge draft
-```
+### ID 解析流程
 
-| 用户选择 | 行为 |
-|----------|------|
-| **从数据源重新读取** | `t2db.fetch_row_by_id(pending_id_value)` → merge 进 `draft`，刷新各 input |
-| **从数据库读取** | `db.query_by_id(pending_id_value)` → 去掉顶层 `id` 键后载入 `draft`，刷新各 input |
+ID 输入框 `.blur()` 时：
 
-库内无该 ID 时**不弹窗**，直接走数据源拉取；数据源未配置或查无结果 → `gr.Warning`，其余字段不动。
+1. 第一行检查 `suppress_id_search`。
+2. 如果为 True：置回 False，直接返回。
+3. 如果为 False：规范化 ID。
+4. `db.query_by_id(id_value)`。
+5. 如果 DB 已有旧数据：询问用户「从数据源重新读取」还是「从数据库读取」。
+6. 如果 DB 无旧数据：直接 `t2db.fetch_row_by_id(id_value)`。
 
-### 4. 本次输入列表（最后一个 input 下、分隔线之上）
+用户选择：
 
-| 项 | 说明 |
-|----|------|
-| 控件 | **HTML5 自定义表格**（`gr.HTML` 渲染），不使用 `gr.Dataframe` |
-| 数据 | `session_rows`：每成功录入一条 → 追加一行 |
-| 列 | 勾选 + 关键列（`id` + 部分 `Input_label`） |
-| 点击行 | 该行数据载入上方各 input（`draft` 覆盖），便于编辑 |
-| 左按钮 | **清空**：清空整个列表（仅会话列表层；不删库） |
-| 右按钮 | **删除**：删除勾选行 |
+| 选择 | 行为 |
+|------|------|
+| 从数据源重新读取 | `t2db.fetch_row_by_id(pending_id_value)`，merge 到 `draft` |
+| 从数据库读取 | `db.query_by_id(pending_id_value)`，载入 `draft` |
 
-列表让用户随时看到「本次录入了多少 / 哪些」。
+禁止用按钮触发 ID 搜索。ID 搜索只由焦点切换触发。
+
+### 本次录入列表
+
+必须使用 HTML5 自定义表格，不使用 `gr.Dataframe`。
+
+原因：
+
+- 需要点击行载入。
+- 需要 checkbox 勾选。
+- 需要删除勾选行。
+- 需要当前行高亮。
+- `gr.Dataframe` 对这些交互支持不稳定。
 
 实现方式：
 
-- 后端根据 `session_rows` 生成 `<table>` HTML：每行带 `data-row-index` / `data-record-id`，checkbox 带稳定标识。
-- JS 监听表格行点击、checkbox change、清空、删除按钮。
-- JS 将动作写入一个隐藏组件（如隐藏 `gr.Textbox` / `gr.JSON`），内容为 JSON：`{"action": "load_row", "row_index": 1}`。
-- 隐藏组件 `.change()` 触发 Python handler，更新 `draft`、`session_rows` 和 HTML 表格。
-- 行高亮、勾选状态、删除预览都由 HTML5 + JS 控制；Python 只保留权威状态。
+- 后端根据 `session_rows` 渲染 `<table>`。
+- 每行带 `data-row-index`。
+- JS 监听点击、勾选、删除、清空。
+- JS 将事件写入隐藏组件，例如隐藏 `gr.Textbox` / `gr.JSON`。
+- 隐藏组件 `.change()` 触发 Python handler。
+- Python 更新 `draft` / `session_rows` 后重新渲染 HTML。
 
-不用 `gr.Dataframe` 的原因：它不提供稳定的「点击某行」事件，也不适合做行高亮、checkbox 勾选、删除勾选行这类交互。
+表格外观继续使用线框中的样式：边框、表头底色、hover、高亮行、checkbox 列宽。
 
-外观要求：HTML5 表格仍按线框中的表格样式呈现，视觉上不需要像浏览器默认表格；用 CSS 统一边框、表头底色、行 hover、高亮行、checkbox 列宽。换成 HTML5 的目的只是获得交互能力，不是改变用户看到的表格风格。
+### 下一行
 
-### 5. 分隔线下的操作区
+“下一行”只处理 UI instance 序号，不计算 Excel 坐标。
 
-#### 另存为（左） / 下一行（右）
+点击后：
 
-| 按钮 | 行为 |
-|------|------|
-| **另存为** | 见下文「另存为 xlsx 命名规则」；**不弹保存对话框**，按规则直接写出文件 |
-| **下一行** | ① `ui.persist_fields(draft)` 保存当前行并追加到 `session_rows`；② 按 TOML `sections.move_to` / `offset` 方向 `current_section_index += 1`（对应 `detect_areas` 的下一区域）；③ 清空上方 input，等待下一条录入 |
+1. 校验 `verify_report.ok`。
+2. 校验 `current_instance_index < input_capacity`。
+3. `ui.persist_fields(draft)`。
+4. 将当前 `draft` 追加或覆盖到 `session_rows[current_instance_index]`。
+5. 如果 `current_instance_index + 1 >= input_capacity`：提示已到最后可承接位置，不清空 input。
+6. 否则 `current_instance_index += 1`。
+7. 清空 inputs，等待下一条。
 
-「下一行」= **保存 + 按 TOML 方向切到下一个承接数据的区域**（不是切 DB 记录）。
+UI 只保存：
 
-#### 区域顺序与越界检查
+- `current_instance_index`
+- `input_capacity`
+- `session_rows`
 
-「下一行」不能只做 `current_section_index += 1`，必须依赖一个已验证的区域序列：
+UI 不保存完整 area 列表。
 
-1. 读取当前 TOML 的 `sections[0]`。
-2. 根据 `input_area` / `move_to` / `offset` 生成候选区域序列。
-3. 用模板实际内容检测候选区域是否仍属于同一组承接区域。
-4. 得到有序 `areas` 后，`current_section_index + 1 < len(areas)` 才允许切下一行。
-5. 若区域不足，提示「已到最后一个区域」，不清空当前输入。
+写回时由 `core_transform` 根据：
 
-建议在 `core_transform.ExcelWriter` 增加一个公开方法，而不是让 Gradio 层自己计算：
+- `located`
+- `input_section.move_to`
+- `input_section.offset`
+- `instance_k`
+
+计算真实值格坐标。
+
+### input capacity
+
+UI 需要知道最多可录入多少条，但不需要知道每条对应的 Excel area。
+
+core 已提供真实 API（不是概念 API）：
 
 ```python
-def detect_section_areas(self, excel_path: Path, section_index: int = 0) -> list[dict[str, Any]]:
-    ...
+ExcelWriter.max_instance_count(excel_path: Path) -> int
 ```
 
-返回结构沿用并扩展现有 `detect_areas` 风格：
+语义：
+
+- 以 `input_section.input_area` 为第一块，按 `move_to` / `offset` 逐块平移。
+- 统计与第一块 `cell.value` 完全一致的最大块数，含 instance 0。
+- 公式格（`=` 开头）不参与比较。
+- 行/列上界 16384；越界或遇到与第一块不一致的块即停止。
+
+UI 用法：
 
 ```python
-[
-    {
-        "index": 1,
-        "area": "A2:G2",
-        "start_row": 2,
-        "start_col": 1,
-        "end_row": 2,
-        "end_col": 7,
-    },
-    ...
-]
+input_capacity = writer.max_instance_count(template_path)
+max_instance_index = input_capacity - 1
 ```
 
-为什么不只返回 `"A2:G100"`：这个范围丢失了每一条记录对应哪个承接区，`write_back` 时仍要重新拆分，容易错位。  
-为什么不只返回坐标：UI / 日志 / `write_back` 都需要 A1 字符串。  
-因此推荐同时返回 `area` 字符串和数值坐标；`area` 给 UI 与写回，坐标给越界检查和调试。
+UI 主流程只使用 `input_capacity` / `max_instance_index`。
 
-现有 `detect_areas` 已接近这个目标；若保留原名，也应明确它返回的顺序就是 `sections.move_to` / `offset` 推导出的承接顺序，并在越界时停止。
+不要在 UI 中用 `input_area`、`move_to`、`offset` 自行推导坐标。
 
-#### 另存为 xlsx 命名规则
+注意（实现者需知道的边界）：
 
-**不询问用户路径**；点击「另存为」后按下列规则生成文件并 `write_back`：
+- `max_instance_count` 只比较 `input_area` 内的 `cell.value`，不看边框、合并单元格、单元格样式，也不看 `input_area` 以外的内容。
+- 若 `input_area` 是空白且每块均匀（标准库范式常见），所有平移块都为全空、彼此一致，返回值会一路逼近 16384，相当于“几乎不限量”。此时 UI 不应把 `input_capacity` 当作可见证书槽位数，仅作为“能否继续 +1”的上界。
+- 因此“最后一块”的判定要么来自该上界，要么来自 `input_area` 内出现与第一块不同的值；其余结构性边界（边框/版式）core 当前不识别。
 
-| 项 | 规则 |
-|----|------|
-| 目录 | `exports/{template_id}/`（不存在则创建） |
-| 文件名 | `{template_id}_{db_suffix}_{YYYYMMDD}_{HHMMSS}.xlsx` |
-| `db_suffix` | 当前库后缀，如 `A2026`（来自 `db_path`） |
-| 写入内容 | `session_rows` 中全部记录（若无则仅当前 `draft` 落库后那一行） |
-| 区域 | `writer.detect_areas(template_path)` 得到的 areas，与记录条数 zip |
+### 另存为
 
-示例：`exports/sample_template/sample_template_A2026_20260625_143052.xlsx`
+“另存为”不询问路径，直接输出 xlsx。
 
-成功后：
+命名规则：
 
-1. 路径追加到 `exported_files`（去重，新文件排最前）
-2. `last_export_path` 更新为该路径
-3. **打印文件** Dropdown 刷新并**默认选中**此文件
-4. `gr.Info` 提示完整路径（仅通知，非对话框）
-
-#### 打印文件 + 打印区域 + 打印（同一行紧挨）
-
-| 控件 | 说明 |
-|------|------|
-| **打印文件** Dropdown | 选项来自 `exported_files`（本模板历次另存为产出）；**平时可为空**（placeholder「选择文件…」）；另存为成功后默认选中新文件；用户可改选其他已导出文件 |
-| **打印区域** Dropdown | 对**所选 xlsx** 调用 `writer.get_print_areas(所选路径)`；每项 `{sheet_name}, {print_area}` |
-| **打印** | 紧挨打印区域右侧；对所选文件打开 Windows 系统打印对话框（`os.startfile(path, "print")` 等）；未选文件时 `gr.Warning`；非 Windows 降级为下载提示 |
-
-打印**不再**临时 `write_back`；以用户选定的已导出 xlsx 为准。
-
-### 6. 按钮统一尺寸
-
-清空 / 删除 / 另存为 / 下一行 / 打印 等所有按钮**等宽等高**（如 110×36），通过统一 CSS 类设定。
-
----
-
-## Tab「输入配置」（toml_config）
-
-TOML 编辑，影响输入页列定义与拉源行为；保存后刷新输入页动态表单。
-
-| 区块 | 内容 | core API |
-|------|------|----------|
-| 基础 | 分隔符、工作表 | `GetTomlValues` + `Save` |
-| 数据源 | `[[sources]]` 表格 | `Save` |
-| 区域 | `[[sections]]` 输入区域 / 方向 / 偏移 | `Save`；「检测区域」只读 `writer.detect_areas` |
-| 字段 | `[[fields]]` 全列 | `Save` + `Validate` |
-| 高级 | TOML 全文 | `Save(toml_text=...)` |
-| 操作 | 生成骨架 / 重置 | `TomlGenerator` |
-
-仅落盘 TOML，不写 DB。
-
-### TOML 保存后的 UI 刷新
-
-保存 TOML 后必须整套重建依赖当前配置的对象，禁止沿用旧实例：
-
-1. `cfg = GetTomlValues.Load(template_id)`
-2. `ui = UiProvider(cfg, db)`
-3. `t2db = Template2DB(cfg)`
-4. `writer = ExcelWriter(cfg)`
-5. 重新生成输入页动态字段
-6. 重新检测 `areas = writer.detect_areas(template_path)`
-7. 清空 `draft`
-8. 清空 `session_rows`
-9. 重置 `current_section_index = 0`
-10. 清空 `suppress_id_search` / `pending_id_value`
-
-这样可以避免「字段已删但 input 还在」「旧数据源路径仍被使用」「下一行还指向旧 sections」这类残留状态。
-
----
-
-## Tab「存储配置」（db_config）
-
-当前模板的 SQLite 库（`temp/{template_id}.{Letter}{Year}`）管理与全量数据查看。
-
-| 区块 | 内容 | core API |
-|------|------|----------|
-| 当前数据库 | 显示并指定本模板**当前使用**的库；下拉同年全部库 | `default_db_path` / `list_db_paths` |
-| **切换** | 仅当 Dropdown 选项 ≠ `active_db_suffix` 时可点；确认后切库、重建连接、刷新数据表 | `SecureSQLite` + `UiProvider` |
-| **新建库** | 始终可用；同年下一字母并设为 active | `allocate_next_db_path` |
-
-**「切换」按钮交互**：
-
-- 初始与每次切库成功后：`interactive=False`（灰显不可用）
-- Dropdown `.change()`：若选中值 ≠ `active_db_suffix` → `interactive=True`；若改回当前库 → 再置 `False`
-- 点击「切换」：执行切库 → 更新 `active_db_suffix` → 按钮恢复不可用
-| 全部数据 | HTML5 只读表：`id` + 全部 `Input_label`，带勾选 | `ui.get_data()` |
-| 覆盖录入 | **选中某行**后，在粘贴框输入整段数据 → 按分隔符覆盖该记录并保存 | `record_from_textbox` → `persist_fields`（同 `records.id` 覆盖） |
-
-「数据库直接输入文字」的入口放在此页：选行 → 粘贴 → 覆盖保存。Excel 写回 / 打印只在「输入」页。
-
----
-
-## 事件流（输入页核心）
-
+```text
+exports/{template_id}/{template_id}_{db_suffix}_{YYYYMMDD}_{HHMMSS}.xlsx
 ```
+
+行为：
+
+1. 汇总 `session_rows`；若为空，则先保存当前 `draft` 作为一条记录。
+2. 调用 `ExcelWriter.write_back(...)`。
+3. 写回顺序为 `session_rows[0] -> instance 0`，`session_rows[1] -> instance 1`，依此类推。
+4. 成功后更新 `exported_files` 和 `last_export_path`。
+5. 打印文件 Dropdown 默认选中新文件。
+
+UI 不向 `ExcelWriter` 传旧 `areas`。
+
+### 打印
+
+打印基于已导出的 xlsx 文件。
+
+控件顺序：
+
+```text
+[打印文件 Dropdown] [打印区域 Dropdown] [打印]
+```
+
+规则：
+
+- 打印文件 Dropdown 平时可为空。
+- 另存为成功后默认选中新文件。
+- 打印区域来自 `writer.get_print_areas(所选 xlsx)`。
+- 打印区域只用于打印，不参与 TOML 定位。
+- Windows 本地可调用系统打印。
+- 非 Windows 或云端环境提供下载文件作为降级。
+
+## 输入配置页
+
+### 字段表
+
+字段表必须包含新 TOML 必有键。
+
+| 中文列 | TOML 键 |
+|--------|---------|
+| 标签 | `Input_label` |
+| 值相对标签方向 | `value_from_label` |
+| 值偏移 | `value_offset` |
+| 数据源列 | `field` |
+| 数据源 | `source_file` |
+| 数据源工作表 | `source_sheet` |
+| 文本序号 | `index` |
+| 正则 | `regex` |
+| 主键 | `id` |
+
+### 输入区域
+
+只编辑单条 `[[input_section]]`。
+
+| 中文列 | TOML 键 |
+|--------|---------|
+| 输入值区域 | `input_area` |
+| 下一组方向 | `move_to` |
+| 下一组偏移 | `offset` |
+
+不要再出现 `sections` 或多条 section 表。
+
+### 校验配置
+
+配置页需要有“校验配置”动作。
+
+行为：
+
+1. 保存或暂存 TOML。
+2. 调用 `verify_toml(template_path, cfg)`。
+3. 展示：
+   - 找不到的标签
+   - 重复标签
+   - 值格不在输入值区域内的标签
+4. 通过后刷新 `verify_report`、`located`、`input_capacity`。
+
+### TOML 保存后的刷新
+
+保存 TOML 后必须：
+
+1. `cfg = GetTomlValues().Load(template_id)`。
+2. `verify_report = verify_toml(template_path, cfg)`。
+3. 若失败：禁用输入页写入动作，展示错误。
+4. 若成功：更新 `located`，并重算 `input_capacity = writer.max_instance_count(template_path)`。
+5. 重建 `UiProvider(cfg, db)`。
+6. 重建 `Template2DB(cfg)`。
+7. 重建 `ExcelWriter(cfg)`。
+8. 重新生成输入页动态字段。
+9. 清空 `draft`。
+10. 清空 `session_rows`。
+11. 重置 `current_instance_index = 0`。
+12. 清空 `suppress_id_search` 和 `pending_id_value`。
+
+## 存储配置页
+
+职责：
+
+- 指定当前模板使用哪个 DB。
+- 新建 DB。
+- 查看全部数据。
+- 选中某行后粘贴文本，覆盖性保存。
+
+DB 切换按钮：
+
+- 初始不可用。
+- Dropdown 变更且不同于 `active_db_suffix` 时可用。
+- 切换成功后重新不可用。
+
+全部数据表也使用 HTML5 自定义表格，不使用 `gr.Dataframe`。
+
+覆盖录入：
+
+1. 用户在 HTML5 表格中选中一行。
+2. 粘贴整段文本。
+3. `record_from_textbox` 得到 `incoming`。
+4. 使用选中行 ID 覆盖保存。
+
+## 事件流
+
+只保留对实现有帮助的事件流。
+
+```text
+模板切换
+  -> ensure_exists
+  -> Load TOML
+  -> verify_toml
+  -> 成功: 构造 ui/t2db/writer, input_capacity = writer.max_instance_count(path)
+  -> 失败: 展示校验问题, 禁用输入写回动作
+
 幽灵框 blur
-  → record_from_textbox → 填 draft + 各 Textbox → suppress_id_search=True
+  -> record_from_textbox
+  -> draft / inputs
+  -> suppress_id_search = True
 
-ID 框 blur
-  → if suppress_id_search: 消费标志, 跳过
-    else if db.query_by_id 有记录: 弹窗询问数据源 / 数据库
-    else: fetch_row_by_id → merge draft → 刷新其余 Textbox
+ID blur
+  -> if suppress_id_search: consume and return
+  -> db.query_by_id
+  -> if exists: ask source/db
+  -> else: fetch_row_by_id
 
-下一行 click
-  → persist_fields(draft) → session_rows.append
-  → current_section_index++（按 move_to/offset）
-  → 清空 inputs
+HTML5 表格事件
+  -> JS 写隐藏组件
+  -> Python 更新 draft/session_rows
+  -> 重新渲染表格 HTML
 
-另存为 click
-  → 汇总 session_rows（或当前 draft）
-  → 按命名规则 write_back → exported_files / last_export_path 更新
-  → 打印文件 Dropdown 默认选新文件 → gr.Info
+下一行
+  -> persist_fields
+  -> session_rows[current_instance_index] = draft
+  -> 检查 input_capacity
+  -> current_instance_index += 1
+  -> 清空 inputs
 
-HTML5 表格 click
-  → JS 写隐藏事件组件
-  → Python 按 row_index 载入该行到 inputs（draft 覆盖）
+另存为
+  -> write_back(session_rows, located, instance order)
+  -> 更新 exported_files / last_export_path
 
-清空 click → 清空 session_rows
-删除 click → 移除勾选行
-
-打印 click
-  → 校验已选打印文件 → 系统打印对话框（所选 xlsx）
-
-TOML 保存 click
-  → Save
-  → Load 新 cfg
-  → 重建 UiProvider / Template2DB / ExcelWriter
-  → 清空 draft / session_rows / current_section_index
-  → 重新渲染输入页字段和区域状态
+TOML 保存
+  -> Load
+  -> verify_toml
+  -> 重建 ui/t2db/writer
+  -> 清空输入会话状态
 ```
 
-防双提交：触达 DB / 文件 / 数据源的按钮与拉源过程 `interactive=False`，完毕恢复。
+## 禁止事项
 
----
+- 禁止 UI 自行扫描 Excel 标签。
+- 禁止 UI 自行计算值格坐标。
+- 禁止 UI 保存完整 area 列表作为主流程状态。
+- 禁止继续使用旧 `sections` 模型。
+- 禁止把 `index` 当 Excel 列号。
+- 禁止用 `gr.Dataframe` 实现需要点击行、勾选、删除、高亮的交互表格。
+- 禁止 TOML 保存后沿用旧 `UiProvider` / `Template2DB` / `ExcelWriter`。
+- 禁止打印逻辑参与 TOML 定位。
+- 禁止模块级全局变量保存用户会话数据。
 
-## 文件布局建议
+## 风险与降级
 
-```
-app/components/
-  gradio_app.py              # Blocks：侧边栏 + 拖拽条 + 三 Tab
-  gradio_layout_sidebar.py   # 模板列表 + 折叠/宽度 JS
-  gradio_tab_data_input.py   # 输入
-  gradio_tab_toml_config.py  # 输入配置
-  gradio_tab_db_config.py    # 存储配置
-  gradio_session.py          # State 初始化、切模板
-app/services/
-  print_windows.py           # 可选：Windows 打印封装
-```
-
----
-
-## 与 core API 对照
-
-| 用户动作 | 调用 |
-|----------|------|
-| 点侧边栏模板 | `SortTemplates` + 会话初始化 |
-| 幽灵框拆分 | `UiProvider.record_from_textbox` |
-| ID 焦点切走（库无记录） | `Template2DB.fetch_row_by_id` |
-| ID 焦点切走（库有记录） | 询问后：`fetch_row_by_id` 或 `db.query_by_id` |
-| 下一行 | `persist_fields` + 按 `sections` 切区域 |
-| 另存为 | `ExcelWriter.write_back` → `exports/{id}/{id}_{suffix}_{时间}.xlsx` |
-| 打印文件列表 | `exported_files`（会话 + 扫描 `exports/{template_id}/`） |
-| 打印区域列表 | `ExcelWriter.get_print_areas(所选xlsx)` |
-| 改 TOML | `GetTomlValues.Save` |
-| 指定 / 新建库 | `default_db_path` / `list_db_paths` / `allocate_next_db_path` |
-| 覆盖录入 | `record_from_textbox` → `persist_fields` |
-
----
-
-## 分阶段实施
-
-### Phase 1 — 壳 + 侧边栏 + 输入页骨架
-
-- 三栏布局、拖拽条 CSS/JS、宽度记忆与折叠
-- 侧边栏模板列表、切模板、State 初始化
-- 输入页：幽灵框 + 动态字段 + 占位按钮
-
-### Phase 2 — 输入页业务
-
-- 幽灵框 blur 拆分；ID blur 拉源；`suppress_id_search` 互斥
-- HTML5 本次输入列表（追加 / 勾选 / 清空 / 删除 / 点击载入）
-- 下一行（落库 + 使用已验证 `areas` 顺序切区域，处理区域不足）
-
-### Phase 3 — 另存为与打印
-
-- `write_back` 另存
-- `get_print_areas` Dropdown + 紧邻打印钮 + Windows 打印对话框
-
-### Phase 4 — 输入配置 + 存储配置
-
-- toml_config 完整编辑与保存后刷新输入页
-- db_config 指定/新建库、全部数据、选行覆盖录入
-
----
+| 风险 | 处理 |
+|------|------|
+| `.blur()` 版本差异 | 程序填值前设 `suppress_id_search=True`；ID blur 第一行检查并消费 |
+| HTML5 表格事件 | 使用 JS + 隐藏组件桥接到 Python |
+| 侧边栏拖拽 | CSS/JS 注入；宽度和折叠状态写 localStorage |
+| 打印 | Windows 本地调用系统打印；其他环境降级下载 |
+| TOML 校验失败 | 禁用输入写回动作，只允许修配置 |
+| input capacity 不足 | 提示已满，不清空当前输入 |
 
 ## 验收标准
 
-1. 侧边栏列出模板；拖拽改宽刷新后仍记住；单击折叠再展开。
-2. 三个 Tab，标签为「输入 / 输入配置 / 存储配置」，界面纯中文。
-3. 幽灵框粘贴并切换焦点后，下方字段自动拆分填充，且**不触发** ID 搜索。
-4. 手动改 ID# 并切换焦点：库无记录时自动从数据源回填；库有记录时弹窗询问数据源 / 数据库。
-5. 每次录入在底部列表新增一行；勾选后「删除」移除，「清空」清空全部；点击行载回 input 编辑。
-6. 「下一行」保存当前并按 TOML 方向切到下一区域；区域不足时提示且不清空 input。
-7. 「另存为」按 `{template_id}_{db_suffix}_{日期}_{时间}.xlsx` 直接写出，不弹保存框。
-8. 打印文件 Dropdown 平时可空；另存为后默认选新文件；打印区域对所选文件显示 `{sheet_name}, {print_area}`；打印钮紧邻其右。
-9. 存储配置「切换」平时不可用，仅 Dropdown 变更后才可用。
-10. 所有按钮等宽等高。
-11. 存储配置页可指定当前库、查看全部数据、选行粘贴覆盖保存。
-12. 会话数据均在 `gr.State`，无模块级用户变量。
-
----
-
-## 风险
-
-| 项 | 说明 |
-|----|------|
-| `.blur()` 版本差异 | Gradio 不同版本中 blur / change / 程序写值的触发顺序可能不同。所有程序填值前必须设置 `suppress_id_search=True`；ID blur handler 第一行必须检查并消费该标志。 |
-| HTML5 表格事件 | `gr.Dataframe` 不承担点击行、勾选、删除、高亮。本次输入列表与存储配置数据表用 `gr.HTML` + JS + 隐藏组件回传事件实现。 |
-| 打印 | core 仅提供 `get_print_areas`。Windows 本地可用系统打印；macOS / Linux / 云端环境降级为下载文件。 |
-| 侧边栏拖拽 | Gradio 原生不提供拖拽调宽、折叠、悬停、localStorage 记忆；必须用 `Blocks(css=..., js=...)` 或独立 JS 文件注入。 |
-| 区域移动 | `sections.move_to` / `offset` 必须由 core 统一计算并返回有序区域列表；UI 只消费列表，不自行推导，避免越界和错位。 |
-| TOML 刷新 | 保存后必须重建 `UiProvider` / `Template2DB` / `ExcelWriter` 并清空会话输入状态，避免旧字段和旧区域残留。 |
-| 删除记录 | 列表「删除」目前为会话层；同步删库需后续扩展 `SecureSQLite` |
-| Google Sheet | 远程源需先下载到本地再写入 `sources` |
+1. 模板切换后必定执行 `verify_toml()`。
+2. 校验失败时不能录入、下一行、另存为或打印。
+3. 输入配置页字段表包含 `value_from_label` 和 `value_offset`。
+4. 输入配置页使用单条 `input_section`，不出现旧 `sections`。
+5. 输入页使用 `current_instance_index`，不使用 `current_section_index`。
+6. 下一行只基于 `input_capacity` 判断能否继续。
+7. xlsx 写回由 core 根据 `located + input_section + instance_k` 完成。
+8. HTML5 表格支持点击载入、勾选、删除、高亮。
+9. TOML 保存后重建 UI 相关对象并清空会话输入状态。
+10. 另存为输出固定命名 xlsx，并更新打印文件 Dropdown。

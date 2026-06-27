@@ -72,34 +72,34 @@
     </div>
 
     <div class="section">
-      <div class="section-title">区域</div>
+      <div class="section-title">输入区段 input_section（单条）</div>
       <div class="section-body">
         <table class="t">
-          <thead><tr><th>输入区域</th><th>方向</th><th>偏移</th></tr></thead>
+          <thead><tr><th>输入值区域 input_area</th><th>下一组方向 move_to</th><th>下一组偏移 offset</th></tr></thead>
           <tbody><tr><td>A2:G2</td><td>down</td><td>1</td></tr></tbody>
         </table>
         <div class="row" style="margin-top:8px">
-          <div class="btn">检测区域</div>
-          <div class="ctrl wide placeholder">区域预览</div>
+          <div class="btn">校验配置</div>
+          <div class="ctrl wide placeholder">校验报告（缺失标签 / 重复标签 / 越界标签）</div>
         </div>
       </div>
     </div>
 
     <div class="section">
-      <div class="section-title">字段映射</div>
+      <div class="section-title">字段映射 fields</div>
       <div class="section-body">
         <table class="t">
           <thead>
-            <tr><th>列标题</th><th>源列</th><th>数据源</th><th>工作表</th><th>序号</th><th>正则</th><th>主键</th></tr>
+            <tr><th>标签<br>Input_label</th><th>值方向<br>value_from_label</th><th>值偏移<br>value_offset</th><th>数据源列<br>field</th><th>数据源<br>source_file</th><th>工作表<br>source_sheet</th><th>序号<br>index</th><th>正则<br>regex</th><th>主键<br>id</th></tr>
           </thead>
           <tbody>
-            <tr><td>ID#</td><td>ID</td><td>source1</td><td>sheet1</td><td>0</td><td></td><td>是</td></tr>
-            <tr><td>姓名</td><td>name</td><td>source1</td><td>sheet1</td><td>1</td><td></td><td>否</td></tr>
-            <tr><td>近期问题</td><td>issues</td><td>source1</td><td>sheet2</td><td>2</td><td></td><td>否</td></tr>
-            <tr><td>报告日期</td><td>issues</td><td>source1</td><td>sheet2</td><td>2</td><td>\d+/\d+/\d+</td><td>否</td></tr>
-            <tr><td>处理意见</td><td></td><td></td><td></td><td>-1</td><td></td><td>否</td></tr>
-            <tr><td>生效日期</td><td></td><td></td><td></td><td>-1</td><td></td><td>否</td></tr>
-            <tr><td>签字</td><td></td><td></td><td></td><td>-1</td><td></td><td>否</td></tr>
+            <tr><td>ID#</td><td>right</td><td>1</td><td>ID</td><td>source1</td><td>sheet1</td><td>0</td><td></td><td>是</td></tr>
+            <tr><td>姓名</td><td>right</td><td>1</td><td>name</td><td>source1</td><td>sheet1</td><td>1</td><td></td><td>否</td></tr>
+            <tr><td>近期问题</td><td>down</td><td>1</td><td>issues</td><td>source1</td><td>sheet2</td><td>2</td><td></td><td>否</td></tr>
+            <tr><td>报告日期</td><td>right</td><td>1</td><td>issues</td><td>source1</td><td>sheet2</td><td>2</td><td>\d+/\d+/\d+</td><td>否</td></tr>
+            <tr><td>处理意见</td><td>down</td><td>1</td><td></td><td></td><td></td><td>-1</td><td></td><td>否</td></tr>
+            <tr><td>生效日期</td><td>right</td><td>1</td><td></td><td></td><td></td><td>-1</td><td></td><td>否</td></tr>
+            <tr><td>签字</td><td>right</td><td>1</td><td></td><td></td><td></td><td>-1</td><td></td><td>否</td></tr>
           </tbody>
         </table>
         <div class="row" style="margin-top:8px">
@@ -125,8 +125,8 @@
 <div class="legend">
   线框 · 输入配置<br>
   本页无侧边栏 / 拖拽条，仅保留顶部 Tab<br>
-  TOML：分隔符 / 工作表 / 数据源 / 区域 / 字段 / 全文<br>
-  详见 docs/gradio_ui_plan.md
+  TOML：分隔符 / 工作表 / 数据源 / 输入区段 / 字段 / 全文<br>
+  详见 docs/gradio_ui/gradio_ui_plan.md
 </div>
 
 </body>

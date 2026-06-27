@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 from openpyxl import load_workbook
-from .core_toml import GetTomlValues, TomlDefault, offset_cell
+from .core_toml import GetTomlValues, TomlDefault, _validate_id_rules, offset_cell
 
 
 logger = logging.getLogger(__name__)
@@ -104,6 +104,17 @@ def _find_row_by_id(rows: list[dict[str, Any]], id_column: str, id_value: Any) -
     return None
 
 
+def _find_row_by_lookup_keys(
+    rows: list[dict[str, Any]], lookup_keys: list[str], id_value: Any
+) -> dict[str, Any] | None:
+    """在数据源行列表中按 id_lookup_keys 全局 OR 匹配一行。"""
+    for key in lookup_keys:
+        matched = _find_row_by_id(rows, key, id_value)
+        if matched is not None:
+            return matched
+    return None
+
+
 
 
 class Template2DB:
@@ -157,17 +168,6 @@ class Template2DB:
         return match.group(0)
 
 
-    def _id_column_name(self) -> str | None:
-        """优先取 id=true 且已映射 field 的列名作为查行键。"""
-        for rule in self.cfg.field_rules:
-            if rule.id and rule.field:
-                return rule.field
-        for rule in self.cfg.field_rules:
-            if rule.id:
-                return rule.Input_label
-        return None
-
-
     def fetch_row_by_id(self, id_value: Any) -> dict[str, Any]:
         """
         函数名: fetch_row_by_id
@@ -178,7 +178,8 @@ class Template2DB:
             dict[str, Any] - incoming：键仅为 Input_label（不含 field 名 / 不含主键 id）
         """
         record: dict[str, Any] = {}
-        id_column = self._id_column_name()
+        id_info = _validate_id_rules(self.cfg)
+        lookup_keys = id_info["id_lookup_keys"] or ["ID"]
         sheet_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
         # 每个 rule 可能指向不同 source_file / source_sheet
         for rule in self.cfg.field_rules:
@@ -192,12 +193,11 @@ class Template2DB:
             if cache_key not in sheet_cache:
                 sheet_cache[cache_key] = _load_sheet_rows(source_path, rule.source_sheet)
             rows = sheet_cache[cache_key]
-            lookup_col = id_column or "ID"
-            matched = _find_row_by_id(rows, lookup_col, id_value)
+            matched = _find_row_by_lookup_keys(rows, lookup_keys, id_value)
             if matched is None:
                 continue
             raw_value = _lookup_row_value(matched, rule)
-            # 只写 Input_label 键；落库主键由 core_store 据 id=true 推导或自动生成
+            # 只写 Input_label 键；落库主键由 core_store 据 db_id 推导或自动生成
             record[rule.Input_label] = self.apply_regex(raw_value, rule.regex)
         return record
 
@@ -299,6 +299,57 @@ class ExcelWriter:
                     break
                 instances.append(values)
             return instances
+        finally:
+            wb.close()
+
+
+    def max_instance_count(self, excel_path: Path) -> int:
+        """
+        函数名: max_instance_count
+        作用: 以 input_area 为第一块，按 move_to/offset 平移，统计与第一块 cell.value 完全一致的最大块数（含 instance 0）
+        输入:
+            excel_path (Path) - 模板 xlsx
+        输出:
+            int - 允许的最大 instance 数（含 instance 0），上界 16384
+        """
+        from openpyxl.utils import range_boundaries  # 仅此方法用到，局部导入避免改动顶层 import
+        BOUND = 16384  # 行列统一边界
+        section = self.cfg.input_section
+        min_col, min_row, max_col, max_row = range_boundaries(section.input_area)
+        sheet_name = self._worksheet_name(excel_path)
+        # data_only=False 让公式格呈现 "=..." 文本，便于排除
+        wb = load_workbook(excel_path, read_only=True, data_only=False)
+        try:
+            ws = wb[sheet_name]
+            # 读第一块各相对坐标的值；"=" 开头的公式格不参与比较
+            base: dict[tuple[int, int], Any] = {}
+            for r in range(min_row, max_row + 1):
+                for c in range(min_col, max_col + 1):
+                    value = ws.cell(row=r, column=c).value
+                    if isinstance(value, str) and value.startswith("="):
+                        continue
+                    base[(r - min_row, c - min_col)] = value
+            count = 1  # instance 0 自身计入
+            for k in range(1, BOUND):
+                shift = section.offset * k
+                try:
+                    # 整块四角同向平移；越过第 1 行/列时 offset_cell 抛错
+                    k_min_row, k_min_col = offset_cell(min_row, min_col, section.move_to, shift)
+                    k_max_row, k_max_col = offset_cell(max_row, max_col, section.move_to, shift)
+                except ValueError:
+                    break
+                if k_max_row > BOUND or k_max_col > BOUND:
+                    break  # 越过 16384 边界
+                matched = True
+                for rel, base_value in base.items():
+                    cell_value = ws.cell(row=k_min_row + rel[0], column=k_min_col + rel[1]).value
+                    if cell_value != base_value:
+                        matched = False
+                        break
+                if not matched:
+                    break  # 与第一块不一致，到此为止
+                count += 1
+            return count
         finally:
             wb.close()
 

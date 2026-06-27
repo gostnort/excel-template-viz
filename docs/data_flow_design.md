@@ -44,7 +44,7 @@ insert_or_update(incoming, cfg):
   2. 对 cfg.field_rules 中每一个 Input_label：
        若 incoming 含该键且值有效 → payload[Input_label] = 值
        否则 → payload[Input_label] = ""（或 null，实现统一一种）
-  3. records.id ← id=true 的 Input_label 在 incoming 中的有效值；无则自动生成
+  3. records.id ← resolve_db_id(cfg) 所指 Input_label 在 incoming 中的有效值；无则自动生成
   4. INSERT 或 UPDATE：data = json.dumps(payload)   # 不读旧 data
 ```
 
@@ -70,7 +70,7 @@ insert_or_update(incoming, cfg):
 | `value_from_label` | `up` / `down` / `left` / `right`：从标签格推算 **instance 0 填写值格**的方向 |
 | `value_offset` | 与 `value_from_label` 配合的步长（格数） |
 | `index` | **仅路径 A**：`determiner` 拆分后的段序（0-based）；`-1` 表示不参与 textbox 拆分 |
-| `id` | `true` 时：该 `Input_label` 在 `incoming` 中的有效值用于 `records.id`；**同时**写入 JSON |
+| `id` | `true` 时：参与**外部数据源**行查找（汇总为 `id_lookup_keys`）；**本地** `records.id` 由顶层 **`db_id`** 指定，见下文 |
 
 可选键：`field`、`source_file`、`source_sheet`、`regex`（空串 `""` 视为未配置）。`field` **仅读外部数据源列**，**不写入** `data` JSON。
 
@@ -87,7 +87,7 @@ insert_or_update(incoming, cfg):
 
 UI 加载 template 并激活校验时调用 **`core_toml.verify_toml(template_path, cfg)`**（唯一校验入口），返回至少：
 
-- `ok`、`missing_labels`、`out_of_area_labels`
+- `ok`、`missing_labels`、`out_of_area_labels`、`duplicate_id_sheets`、`db_id` / `db_id_required` / `invalid_db_id`
 - `located`：`{ Input_label: {label_row, label_col, value_row, value_col}, ... }`（内存用，不写回 TOML）
 
 `ExcelWriter` 读/写 **填写值格**时应与 `located` + k 平移一致（实现逐步对齐；**不再**以「`input_area` 首行作表头匹配列」为主模型）。
@@ -126,10 +126,11 @@ Gradio 提供一个 **textbox**，用户输入**一整段纯字符串**，原样
 | `field` | 在**数据源表**中匹配列（如 `ID`、`name`）；不落库 |
 | `Input_label` | 产出 `incoming` 的键名（与模板列同名） |
 | `regex` | 读源后的提取；结果写入对应 `Input_label` |
-| `id` | 见 `[[fields]]` 共有键 |
+| `id` | 见 `[[fields]]` 共有键；外部查行用 `id_lookup_keys`（全局 OR） |
 
 - `source_*` 为空：该字段不走数据源，仅 UI / xlsx 填写 / 落库
 - 同 `field` + 同 `index` 可对应不同 `Input_label`（如 `Recent Issue` 与 `Report Date`）；落库为两个 `Input_label` 键
+- 查行键：对所有 `id=true` 字段，用 **`field`（已映射时）否则 `Input_label`**，汇总为 `id_lookup_keys`；**任意一个键匹配即命中该行**（与 `toml_config_design.md` 一致）
 
 ### 其他顶层键
 
@@ -139,6 +140,20 @@ Gradio 提供一个 **textbox**，用户输入**一整段纯字符串**，原样
 | `input_section` | `core_toml` / `core_transform` | 单条；instance 0 值区 + 多组值格平移 |
 | `sources` | `Template2DB` | `source_file` 别名 → 路径 |
 | `determiner` | `core_store` | textbox 拆分 |
+| `db_id` | `core_toml` / `core_store` | 本地 `records.id` 所对应的 **`Input_label`**（不是 `field` 列名）；解析见 `resolve_db_id(cfg)` |
+
+#### `db_id` 与 `id`（本地主键 vs 外部查行）
+
+依据 `docs/toml_config_design.md`：
+
+| 情况 | `db_id`（生效值） |
+|------|-------------------|
+| 无 `id=true` | `null`；`records.id` 由数据库自动生成 |
+| 仅一条 `id=true` | 自动为该条的 `Input_label`；若 TOML 写了 `db_id` 且不一致 → `verify_toml` 报 `invalid_db_id` |
+| 两条及以上 `id=true` | **必须**写顶层 `db_id = "<某个 id 字段的 Input_label>"`；未写 → `db_id_required` |
+
+- **`core_store`**：`insert_or_update` 通过 `resolve_db_id(cfg)` 取主键列名，从 `incoming[db_id]` 推导 `records.id`。
+- **`core_toml`**：`verify_toml` 回报 `db_id` / `db_id_required` / `invalid_db_id` / `id_labels` / `id_lookup_keys` 等；`id` 规则不通过时 `ok=False`。
 
 ## 模块结构
 
@@ -179,7 +194,7 @@ Gradio 提供一个 **textbox**，用户输入**一整段纯字符串**，原样
 
 **数据源读取**（`Template2DB`）：
 1. `resolve_source_path(cfg.sources, rule.source_file)` → 文件路径或 Sheet 句柄（本模块仅本地 xlsx；远程 URL 由上层注入路径后调用）
-2. 打开 `rule.source_sheet`，按 `id=true` 的 rule 所对应源表列定位行
+2. 打开 `rule.source_sheet`，按 `id_lookup_keys`（`id=true` 字段的 field/Input_label，全局 OR）定位行
 3. 读外部表时用 `field` / `Input_label` 匹配列 → `apply_regex` → 写入 `record[rule.Input_label]`（不写 `field` 名）
 
 ### 数据流
@@ -229,9 +244,10 @@ records (id INTEGER PRIMARY KEY, data TEXT NOT NULL)
 ### `records.id`（行主键）
 
 - **查询与 UPSERT 以 SQLite 列 `records.id` 为准**（不依赖解析 `data` 内的键）。
-- 若当前 TOML 中存在 `id=true` 的 `[[fields]]`，且本次写入中该 **`Input_label` 有有效值**，则 `records.id` 取该值（规范化后）。
-- 若**没有任何** `Input_label` 被标记为 `id=true`，或本次未提供有效业务 ID，则 `records.id` 由数据库**自动生成**（如 `uuid.uuid4().int >> 64`）。
-- 标记为 `id=true` 的 `Input_label`（如 `ID#`）**同样写入** `data` JSON，与 `records.id` 在有业务 ID 时数值一致。
+- 生效的 **`db_id`**（`Input_label`）由 `core_toml.resolve_db_id(cfg)` 解析：单条 `id=true` 时自动推断；多条 `id=true` 时取顶层 `db_id`；无 `id=true` 时为 `null`。
+- 若 `resolve_db_id(cfg)` 非空，且本次 `incoming` 中该 **`Input_label` 有有效值**，则 `records.id` 取该值（规范化后）。
+- 若 `resolve_db_id(cfg)` 为 `null`，或本次未提供有效业务 ID，则 `records.id` 由数据库**自动生成**（如 `uuid.uuid4().int >> 64`）。
+- `db_id` 所指的 `Input_label`（如 `ID#`）**同样写入** `data` JSON，与 `records.id` 在有业务 ID 时数值一致。
 
 ### `data` JSON（业务列）
 
@@ -335,13 +351,13 @@ data: [...]
 - `value_from_label` / `value_offset`：仅标签→值格定位；不落库
 - `input_section`：单条；只约束/平移**填写值**，不找标签
 - `source_file` / `source_sheet` / `field`：仅外部数据源读列
-- `verify_toml`：标签存在且 instance 0 值格在 `input_area` 内，方可进入填表/写库主流程
+- `verify_toml`：坐标通过且 **id/db_id 规则**通过（无 `duplicate_id_sheets`、`db_id_required`、`invalid_db_id`），方可进入填表/写库主流程
 - 两模块（store/transform）职责与上表一致；校验在 `core_toml`
 
 ### 验证
 - `__main__` 打印三段数据且前后一致
 - `data` JSON 键 = 当前 TOML 全部 `Input_label`（不含 `field` 名）
-- `records.id` 与 `id=true` 的 `Input_label` 在有业务 ID 时一致
+- `records.id` 与 `resolve_db_id(cfg)` 所指 `Input_label` 在有业务 ID 时一致
 - 同 `records.id` 再次 `insert_or_update` 且 incoming 缺键时，缺键在 `data` 中为**空**
 - `verify_toml` 对样本 template 通过，`located` 含全部 `Input_label`
 

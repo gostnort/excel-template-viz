@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from app.services.core_registry import PROJECT_ROOT
-from app.services.core_toml import GetTomlValues
+from app.services.core_toml import GetTomlValues, resolve_db_id
 
 
 TEMP_DIR = PROJECT_ROOT / "temp"
@@ -94,7 +94,11 @@ def list_db_paths(template_id: str, year: int | None = None) -> list[Path]:
         if parsed is None or parsed[1] != year:
             continue
         paths.append(candidate)
-    paths.sort(key=lambda item: _parse_suffix_token(_suffix_token_from_path(item) or "A0000")[0])
+    paths.sort(
+        key=lambda item: _parse_suffix_token(_suffix_token_from_path(item) or "A0000")[
+            0
+        ]
+    )
     return paths
 
 
@@ -182,15 +186,9 @@ def _has_valid_id_value(value: Any) -> bool:
     return True
 
 
-def _id_input_label(cfg: GetTomlValues) -> str | None:
-    """返回 id=true 的 Input_label；无则 None。"""
-    for rule in cfg.field_rules:
-        if rule.id:
-            return rule.Input_label
-    return None
-
-
-def _build_payload_from_toml(cfg: GetTomlValues, incoming: dict[str, Any]) -> dict[str, Any]:
+def _build_payload_from_toml(
+    cfg: GetTomlValues, incoming: dict[str, Any]
+) -> dict[str, Any]:
     """
     函数名: _build_payload_from_toml
     作用: 按当前 TOML 全体 Input_label 生成落库 JSON；incoming 无则填空串
@@ -213,14 +211,14 @@ def _build_payload_from_toml(cfg: GetTomlValues, incoming: dict[str, Any]) -> di
 def _resolve_records_id(cfg: GetTomlValues, incoming: dict[str, Any]) -> int:
     """
     函数名: _resolve_records_id
-    作用: 由 id=true 的 Input_label 在 incoming 中的值推导 records.id，否则自动生成
+    作用: 由 resolve_db_id 指定的 Input_label 在 incoming 中的值推导 records.id，否则自动生成
     输入:
         cfg (GetTomlValues) - TOML 配置
         incoming (dict[str, Any]) - 本次写入的原始字段 dict
     输出:
         int - SQLite 行主键
     """
-    label = _id_input_label(cfg)
+    label = resolve_db_id(cfg)
     if label is not None and label in incoming and _has_valid_id_value(incoming[label]):
         return _normalize_id(incoming[label])
     return uuid.uuid4().int >> 64
@@ -276,7 +274,6 @@ class SecureSQLite:
         self.conn = sqlite3.connect(self.db_path)
         self.ensure_table()
 
-
     def ensure_table(self) -> None:
         """
         函数名: ensure_table
@@ -294,7 +291,6 @@ class SecureSQLite:
             """
         )
         self.conn.commit()
-
 
     def insert_or_update(self, incoming: dict[str, Any], cfg: GetTomlValues) -> int:
         """
@@ -316,7 +312,6 @@ class SecureSQLite:
         self.conn.commit()
         return rid
 
-
     def query_by_id(self, rid: int) -> dict[str, Any] | None:
         """
         函数名: query_by_id
@@ -333,7 +328,6 @@ class SecureSQLite:
             return None
         return _row_from_db(row[0], row[1])
 
-
     def query_all(self) -> list[dict[str, Any]]:
         """
         函数名: query_all
@@ -346,7 +340,6 @@ class SecureSQLite:
         cur.execute("SELECT id, data FROM records ORDER BY id")
         return [_row_from_db(row_id, data_text) for row_id, data_text in cur.fetchall()]
 
-
     def close(self) -> None:
         """
         函数名: close
@@ -355,7 +348,6 @@ class SecureSQLite:
         输出: 无
         """
         self.conn.close()
-
 
 
 class UiProvider:
@@ -373,7 +365,6 @@ class UiProvider:
         self.cfg = cfg
         self.db = db
 
-
     def get_labels(self) -> list[str]:
         """
         函数名: get_labels
@@ -384,7 +375,6 @@ class UiProvider:
         """
         return [rule.Input_label for rule in self.cfg.field_rules]
 
-
     def get_data(self) -> list[dict[str, Any]]:
         """
         函数名: get_data
@@ -394,7 +384,6 @@ class UiProvider:
             list[dict[str, Any]] - 与 query_all 一致
         """
         return self.db.query_all()
-
 
     def persist_fields(self, incoming: dict[str, Any]) -> int:
         """
@@ -407,7 +396,6 @@ class UiProvider:
         """
         return self.db.insert_or_update(incoming, self.cfg)
 
-
     def split_by_determiner(self, raw: str) -> list[str]:
         """
         函数名: split_by_determiner
@@ -418,7 +406,6 @@ class UiProvider:
             list[str] - 拆分后的段列表
         """
         return raw.split(self.cfg.determiner)
-
 
     def record_from_textbox(self, raw: str) -> dict[str, Any]:
         """
@@ -431,7 +418,9 @@ class UiProvider:
         """
         parts = self.split_by_determiner(raw)
         fields: dict[str, Any] = {}
-        max_index = max((rule.index for rule in self.cfg.field_rules if rule.index >= 0), default=-1)
+        max_index = max(
+            (rule.index for rule in self.cfg.field_rules if rule.index >= 0), default=-1
+        )
         if max_index >= 0 and len(parts) <= max_index:
             raise ValueError(
                 f"textbox split into {len(parts)} part(s), need at least {max_index + 1}"
