@@ -15,7 +15,8 @@
 | `core_registry.py` | 列出模板、切换模板、记录最近使用 | 自行扫描模板目录以外的位置 |
 | `core_toml.py` | `ensure_exists()` / Load / Save / `verify_toml()`；展示校验报告 | 自行扫描 xlsx 标签、修正 TOML、猜坐标 |
 | `core_store.py` | 当前库管理、落库、读 DB、文本拆分 | 合并旧 JSON、保留旧字段值 |
-| `core_transform.py` | 数据源读取、`max_instance_count()` 取容量、`write_back()` 写回、打印区域读取 | 在 UI 层复制 Excel 坐标计算 |
+| `core_transform.py` | 本地 xlsx 数据源读取、`max_instance_count()` 取容量、`write_back()` 写回、打印区域读取 | 在 UI 层复制 Excel 坐标计算 |
+| `core_connect.py` | OAuth 授权、`connect(cfg)` / `disconnect()`、ID 列表、`fetch_fields()` | 自行解析 Sheet URL、自行维护 sheet 缓存文件、改写 TOML 字段映射 |
 
 核心原则：
 
@@ -23,13 +24,16 @@
 - core 负责 TOML 解析、校验、定位、读写。
 - UI 不计算标签坐标、不计算值格坐标、不推导 Excel 写入坐标。
 
-## 三个 Tab
+## 四个 Tab
 
 | 代码名 | 中文标签 | 职责 |
 |--------|----------|------|
 | `data_input` | 输入 | 粘贴 / 手动输入 / ID 拉源 / 本次录入列表 / 下一行 / 另存为 / 打印 |
 | `toml_config` | 输入配置 | 编辑 TOML、保存、校验当前模板 |
 | `db_config` | 存储配置 | 指定当前 DB、查看全部数据、选行覆盖录入 |
+| `google_config` | Google 连接 | OAuth 授权、连接状态、主 ID 表单表多选预览、「导入选中行」入库 |
+
+线框：`docs/gradio_ui/gradio_ui_connect.html`。实现契约：`docs/connect_google.md`。
 
 左侧模板侧边栏与中间拖拽条是全局布局，不属于任一 Tab。
 
@@ -69,6 +73,11 @@
 8. 构造 `UiProvider(cfg, db)`、`Template2DB(cfg)`、`ExcelWriter(cfg)`。
 9. `input_capacity = writer.max_instance_count(template_path)`。
 10. 清空 `draft`、`session_rows`，重置 `current_instance_index = 0`。
+11. **Google 重连（每次切换模板必做）**：
+    - 若上一模板曾连接：`connect_google.disconnect()` → `sheet_operation = None`，`google_connected = False`，清空 Google Tab 表格。
+    - 加载**新模板** `cfg` 后，若同时满足：**已 OAuth 授权**、新 TOML 的 `[[sources]]` 中存在被 `fields` 引用的 Google Sheet URL、且 `verify_toml` 已成功 → `authorize()`（静默）→ `connect(cfg)` → `SheetOperation(connect_google)` → 渲染 Google Tab 主 ID 表。
+    - 任一条件不满足（未授权、仅本地 xlsx、sources URL 为空、connect 失败）：保持未连接；Google Tab 显示原因，表格禁用。connect 失败时 `gr.Warning`，不阻塞模板其余功能。
+12. 同一 `ConnectGoogle` 实例可复用（`gr.State`）；每次 `connect(cfg)` 前必须先 `disconnect()`，避免旧 spreadsheet 内存残留。
 
 `verify_toml()` 的报告是 UI 是否允许录入和写回的前置条件。
 
@@ -98,6 +107,11 @@
 | `active_db_suffix` | 当前 DB 后缀 |
 | `sidebar_width_px` | 侧边栏宽度 |
 | `sidebar_collapsed` | 侧边栏是否折叠 |
+| `connect_google` | 当前 `ConnectGoogle` 实例（`gr.State`） |
+| `sheet_operation` | 连接成功后的 `SheetOperation` 实例；`disconnect()` 后置 `None` |
+| `google_connected` | 是否已执行 `connect(cfg)`（模板激活自动或手动重连） |
+| `google_sheet_rows` | 主 ID 表浅拷贝（`FetchFieldsResult.sheet_rows` 或 connect 后直接取自 `_tables`） |
+| `google_table_event` | 主 ID 表 JS 回传事件（勾选 / 全选 / 取消） |
 
 不要把这些用户会话状态放到模块级全局变量。
 
@@ -153,6 +167,11 @@ ID 输入框 `.blur()` 时：
 ### 本次录入列表
 
 必须使用 HTML5 自定义表格，不使用 `gr.Dataframe`。
+
+来源：
+
+- 用户在「输入」页手动录入 / 下一行追加。
+- 用户在「Google 连接」页勾选行并点击「导入选中行」：`fetch_fields` → `ui.persist_fields` 落库 → 同时追加到 `session_rows`（与手动录入共用同一列表）。
 
 原因：
 
@@ -307,6 +326,18 @@ UI 不向 `ExcelWriter` 传旧 `areas`。
 
 不要再出现 `sections` 或多条 section 表。
 
+### 数据源 sources
+
+在「输入配置」Tab **唯一**维护 `[[sources]]`：
+
+| 中文列 | 说明 |
+|--------|------|
+| 数据源键 | 如 `source1`、`source2` |
+| 路径 / Google Sheet URL | 本地 xlsx 路径或完整 Google Sheet URL |
+| 操作 | 浏览（本地）或粘贴（URL） |
+
+保存后 `connect(cfg)` 从此处读取；「Google 连接」Tab 不重复编辑 sources。
+
 ### 校验配置
 
 配置页需要有“校验配置”动作。
@@ -362,16 +393,96 @@ DB 切换按钮：
 3. `record_from_textbox` 得到 `incoming`。
 4. 使用选中行 ID 覆盖保存。
 
+## Google 连接页
+
+实现契约见 `docs/connect_google.md`。UI 只调用 `ConnectGoogle` 与 `SheetOperation`，不 import 旧 `google_sheets` / `data_source` 模块。
+
+**不在本 Tab 编辑 `[[sources]]`** — 数据源 URL / 本地路径仅在「输入配置」Tab 的 sources 表维护。
+
+### 分区
+
+| 分区 | 控件 | 行为 |
+|------|------|------|
+| OAuth 授权 | 上传 oauth_client.json、授权状态、「授权 Google 账号」 | `ConnectGoogle.authorize()`；执行中禁用按钮 |
+| 连接状态 | 只读状态、主 ID 表摘要 | 模板激活时若已授权则自动 `connect(cfg)`；本 Tab 无「连接」按钮 |
+| 主 ID 工作表 | **单张** HTML5 表：checkbox + 主表全部列（浅拷贝） | 勾选行高亮；数据来自 connect 后的主 ID 表 |
+| 导入 | 「全选」「取消全选」「导入选中行」 | 见下方导入流程 |
+
+### 自动连接（模板切换时断开并重连）
+
+数据源随模板变化，**每次切换模板**必须：
+
+```text
+disconnect(旧)  →  connect(新 cfg)  （若可用）
+```
+
+| 步骤 | 行为 |
+|------|------|
+| 1 | `connect_google.disconnect()`：清 `_tables` / `_spreadsheets`；`sheet_operation = None` |
+| 2 | 判断新模板是否「可连 Google」：已授权 + `fields` 引用的 source 在 `[[sources]]` 中有非空 Google URL |
+| 3 | 可连 → `connect(cfg)`（新 TOML 的 sources / sheets）→ `SheetOperation` → 渲染主 ID 表 |
+| 4 | 不可连 → 保持断开；表格区禁用并提示（未授权 / 无 Google 源 / connect 失败） |
+
+注意：
+
+- **不**保留上一模板的 sheet 内存；切换即断开。
+- OAuth token **不**随 `disconnect()` 清除；跨模板复用授权。
+- 用户在本 Tab  newly 授权后：应触发与「切换模板」相同的重连序列（或提示用户切换一次模板）。
+
+### 主 ID 表（单表：多选 + 预览）
+
+- **一张表**同时承担：浅拷贝预览 + checkbox 多选。
+- 勾选行加 `selected` 样式高亮（与输入页本次录入列表一致）。
+- 不单独展示「字段摘要」表或第二张预览表。
+- JS + 隐藏组件回传勾选行 index / id_value。
+
+### 导入选中行
+
+用户勾选一行或多行 → 点击「导入选中行」：
+
+1. 收集勾选行的 `id_value`。
+2. `result = sheet_operation.fetch_fields(id_values)`。
+3. 对每条 `record`（`found=True`）：
+   - `ui.persist_fields(record.data)` → 写入当前 DB（`core_store`）。
+   - 将 `record.data` 追加到 `session_rows`（与输入页共用 State）。
+4. `gr.Info` 反馈导入条数。
+5. 刷新「输入」Tab 的「本次已录入」HTML5 表格（同 `session_rows` 数据源）。
+
+`found=False` 的 ID 跳过并 Warning，不中断其余行。
+
+### ID 与跨表规则（UI 只展示，不在 UI 推导）
+
+- 每个 `(source_file, source_sheet)` 至多一个 `id=true`。
+- 无自身 `id=true` 的 sheet 继承已声明 ID 列；多列 OR 匹配由 core 完成。
+- 主 ID 表为 TOML 顺序中第一个 `id=true` 的 sheet；表格展示其浅拷贝列。
+- `fetch_fields` 仍按 TOML 跨 sheet 取全部 `Input_label` 字段用于入库。
+
+### 与输入页的关系
+
+- **共用 `session_rows`**：Google 导入与手动「下一行」写入同一列表；输入 Tab 立即可见。
+- 输入页 ID blur：DB 有记录优先；无记录且 `google_connected` 时可 `fetch_fields([id])` 单条拉源（与批量导入同一套 core API）。
+
+### 禁止事项（本 Tab）
+
+- 禁止重复编辑 `[[sources]]`（属输入配置 Tab）。
+- 禁止 UI 自行请求 gspread / 解析 spreadsheet id。
+- 禁止在本 Tab 编辑 `fields` 映射。
+- 禁止绕过 `core_store` / `ui.persist_fields` 写 DB。
+- 禁止模块级变量保存 OAuth 凭据或 `_tables`。
+
 ## 事件流
 
 只保留对实现有帮助的事件流。
 
 ```text
 模板切换
+  -> disconnect() 清旧 Google 内存（必做，不论新模板是否用 Google）
   -> ensure_exists
-  -> Load TOML
+  -> Load TOML（新 cfg）
   -> verify_toml
   -> 成功: 构造 ui/t2db/writer, input_capacity = writer.max_instance_count(path)
+  -> 若已授权且新 cfg 含可用 Google sources: connect(cfg), SheetOperation, 渲染 Google Tab 主 ID 表
+  -> 否则: google_connected=False, Google Tab 表格禁用
   -> 失败: 展示校验问题, 禁用输入写回动作
 
 幽灵框 blur
@@ -406,6 +517,17 @@ TOML 保存
   -> verify_toml
   -> 重建 ui/t2db/writer
   -> 清空输入会话状态
+
+Google 导入选中行
+  -> 勾选主 ID 表行（同表预览+多选，高亮）
+  -> fetch_fields(selected_ids)
+  -> ui.persist_fields(record.data) 写入 DB
+  -> 追加 session_rows
+  -> 刷新输入 Tab 本次已录入表格
+
+OAuth 授权（Google Tab）
+  -> authorize()
+  -> 用户可切换模板触发自动 connect，或点可选「重新连接」
 ```
 
 ## 禁止事项
@@ -430,6 +552,8 @@ TOML 保存
 | 打印 | Windows 本地调用系统打印；其他环境降级下载 |
 | TOML 校验失败 | 禁用输入写回动作，只允许修配置 |
 | input capacity 不足 | 提示已满，不清空当前输入 |
+| Google 未授权 | 跳过自动 connect；Google Tab 表格禁用 |
+| Google 导入部分失败 | 跳过 `found=False` 的 ID，其余照常入库 |
 
 ## 验收标准
 
@@ -443,3 +567,5 @@ TOML 保存
 8. HTML5 表格支持点击载入、勾选、删除、高亮。
 9. TOML 保存后重建 UI 相关对象并清空会话输入状态。
 10. 另存为输出固定命名 xlsx，并更新打印文件 Dropdown。
+11. 模板切换：`disconnect(旧)` 后按新 TOML 重连 Google（已授权且 sources 可用时）；不可用时保持断开。
+12. Google 相关逻辑仅通过 `core_connect.py`；`[[sources]]` 仅在输入配置 Tab 编辑。

@@ -167,6 +167,7 @@ Does **not** construct `SheetOperation`. Caller does that after `connect()`.
 - Clear `self._tables`, `self._spreadsheets`, `self._id_columns_by_sheet`, `self._primary_id_sheet`, `self._cfg`, connection flags.
 - Keep `self._credentials` and token files intact.
 - Set `self._connected = False`.
+- **UI must call before every template switch** so the next `connect(cfg)` loads only the new template’s sources (no stale spreadsheet memory).
 
 ### Internal state (for `SheetOperation` read access)
 
@@ -276,19 +277,38 @@ Use for: missing OAuth client, auth failure, bad URL, spreadsheet not found, per
 
 ## Call sequence (reference for Gradio / CLI)
 
+### Per template session
+
 ```
-conn = ConnectGoogle()
-conn.authorize()
-conn.connect(cfg)                      # cfg: GetTomlValues; URLs from cfg.sources only
+conn = ConnectGoogle()          # reuse same instance in gr.State across templates
+conn.authorize()                # once per app session if needed
+conn.connect(cfg)               # cfg for current template; URLs from cfg.sources only
 op = SheetOperation(conn)
-ids = op.list_ids()                    # → UI multi-select
-result = op.fetch_fields(selected_ids)
-# result.sheet_rows → UI HTML5 table (primary id worksheet)
-# result.records    → selected ID → TOML Input_label values (may span source1 + source2)
-conn.disconnect()                      # end session; token remains
+# ... list_ids / fetch_fields / import to DB ...
+conn.disconnect()               # REQUIRED before switching template; token remains
 ```
 
-Caller responsibility (out of scope for this module): UI collects full Google Sheet URLs and writes them into TOML `[[sources]]` before calling `connect(cfg)`.
+### Template switch (UI orchestration)
+
+```
+on_template_change(new_template_id):
+  connect_google.disconnect()           # always; drop old _tables / _spreadsheets
+  sheet_operation = None
+  google_connected = False
+  cfg = Load(new_template_id)
+  verify_toml(...)
+  if authorized and cfg_has_google_sources(cfg):
+      connect_google.connect(cfg)       # new TOML sources / sheets
+      sheet_operation = SheetOperation(connect_google)
+      google_connected = True
+      render_google_tab_table()
+  else:
+      show_disconnected_state()
+```
+
+`cfg_has_google_sources(cfg)`: at least one `field_rules` entry references a `source_file` whose `[[sources]]` value looks like a Google Sheet URL (contains `docs.google.com/spreadsheets` or bare spreadsheet id). Local xlsx-only templates skip `connect()`.
+
+Caller responsibility (out of scope for this module): UI writes Google URLs into TOML `[[sources]]` on the input-config tab before connect.
 
 ---
 

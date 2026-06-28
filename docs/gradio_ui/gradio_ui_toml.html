@@ -41,6 +41,7 @@
     <div class="tab">输入</div>
     <div class="tab active">输入配置</div>
     <div class="tab">存储配置</div>
+    <div class="tab">Google 连接</div>
   </nav>
 
   <div class="tab-body">
@@ -61,13 +62,14 @@
       <div class="section-title">数据源</div>
       <div class="section-body">
         <table class="t">
-          <thead><tr><th>数据源键</th><th>路径 / 链接</th><th>操作</th></tr></thead>
+          <thead><tr><th>数据源键</th><th>路径 / Google Sheet URL</th><th>操作</th></tr></thead>
           <tbody>
-            <tr><td>source1</td><td>E:\...\执法堂业绩.xlsx</td><td>浏览</td></tr>
-            <tr><td>source2</td><td class="placeholder">（空）</td><td>浏览</td></tr>
+            <tr><td>source1</td><td>https://docs.google.com/spreadsheets/d/1XdaRK0cDnet54KzDUiSrpl_xcu4vOMSYacdipDXT14c/edit</td><td>粘贴</td></tr>
+            <tr><td>source2</td><td>E:\...\执法堂业绩.xlsx</td><td>浏览</td></tr>
           </tbody>
         </table>
         <div class="row" style="margin-top:8px"><div class="btn">保存</div></div>
+        <p style="margin-top:6px;font-size:11px;color:#666">本地 xlsx 与 Google Sheet 完整 URL 均在此维护；connect(cfg) 只读此处 [[sources]]。</p>
       </div>
     </div>
 

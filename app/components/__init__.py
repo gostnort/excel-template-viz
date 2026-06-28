@@ -1,3 +1,0 @@
-"""
-Gradio UI Components Package
-"""

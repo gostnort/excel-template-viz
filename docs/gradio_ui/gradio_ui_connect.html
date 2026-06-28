@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>线框 · Google 连接 google_config</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, "Microsoft YaHei", sans-serif;
+      font-size: 13px; line-height: 1.4; background: #fff; color: #000;
+      height: 100vh; overflow: hidden;
+    }
+    .main { display: flex; flex-direction: column; height: 100vh; border: 2px solid #000; }
+    .tabs { display: flex; border-bottom: 2px solid #000; flex-shrink: 0; }
+    .tab { padding: 10px 24px; border-right: 1px solid #000; font-weight: bold; }
+    .tab.active { background: #eee; }
+    .tab-body { flex: 1; overflow: auto; padding: 16px 20px; }
+    .section { border: 1px solid #000; margin-bottom: 14px; }
+    .section-title { border-bottom: 1px solid #000; padding: 6px 10px; font-weight: bold; background: #f5f5f5; }
+    .section-body { padding: 10px; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; }
+    .row:last-child { margin-bottom: 0; }
+    .field-label { min-width: 88px; }
+    .ctrl { border: 1px solid #000; padding: 6px 8px; min-height: 32px; display: inline-flex; align-items: center; }
+    .ctrl.medium { min-width: 180px; }
+    .ctrl.wide { min-width: 420px; flex: 1; }
+    .ctrl.status-ok { background: #f0fff0; }
+    .ctrl.status-warn { background: #fff8e6; color: #664; }
+    .ctrl.status-off { color: #666; }
+    .btn { width: 110px; height: 36px; border: 1px solid #000; background: #fff; font-weight: bold; display: inline-flex; align-items: center; justify-content: center; }
+    .btn.primary { min-height: auto; min-width: 130px; padding: 0 12px; }
+    .btn.disabled { color: #999; border-color: #999; background: #f5f5f5; }
+    table.t { border-collapse: collapse; width: 100%; }
+    table.t th, table.t td { border: 1px solid #000; padding: 4px 6px; text-align: left; }
+    table.t th { background: #eee; }
+    table.t tbody tr:hover { background: #f7f7f7; }
+    table.t tbody tr.selected { background: #e8e8e8; font-weight: bold; }
+    .chkcol { width: 28px; text-align: center; }
+    .hint { font-size: 11px; color: #666; margin-top: 6px; }
+    .legend { position: fixed; bottom: 8px; right: 8px; font-size: 11px; border: 1px dashed #000; padding: 8px 10px; background: #fff; max-width: 360px; }
+    .file-pick { border: 1px dashed #000; padding: 6px 10px; min-width: 200px; }
+  </style>
+</head>
+<body>
+
+<div class="main">
+  <nav class="tabs">
+    <div class="tab">输入</div>
+    <div class="tab">输入配置</div>
+    <div class="tab">存储配置</div>
+    <div class="tab active">Google 连接</div>
+  </nav>
+
+  <div class="tab-body">
+    <div class="section">
+      <div class="section-title">OAuth 授权</div>
+      <div class="section-body">
+        <div class="row">
+          <span class="field-label">客户端 JSON</span>
+          <div class="file-pick">选择 oauth_client.json …</div>
+          <div class="btn">上传</div>
+        </div>
+        <div class="row">
+          <span class="field-label">授权状态</span>
+          <div class="ctrl medium status-ok">✅ 已授权</div>
+          <div class="btn">授权 Google 账号</div>
+        </div>
+        <p class="hint">首次授权打开浏览器；之后复用 token 文件。未授权时本 Tab 表格不可用。</p>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">连接状态（模板激活时自动连接）</div>
+      <div class="section-body">
+        <div class="row">
+          <span class="field-label">Google 连接</span>
+          <div class="ctrl medium status-ok">已连接 · source1 / Sheet1 · 3 行</div>
+        </div>
+        <div class="row">
+          <span class="field-label">主 ID 表</span>
+          <div class="ctrl wide">source1 / Sheet1（TOML 第一个 id=true）</div>
+        </div>
+        <p class="hint">
+          每次切换模板：先 disconnect 旧连接，再按新 TOML [[sources]] 自动 connect（已授权且 URL 可用时）。<br>
+          sources 仅在「输入配置」Tab 维护；切换模板不保留上一模板的 sheet 内存。
+        </p>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">主 ID 工作表（多选 + 预览，同一张 HTML5 表）</div>
+      <div class="section-body">
+        <table class="t">
+          <thead>
+            <tr>
+              <th class="chkcol">☐</th>
+              <th>ID</th>
+              <th>姓名</th>
+              <th>部门</th>
+              <th>…</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="selected">
+              <td class="chkcol">☑</td>
+              <td>8129</td>
+              <td>Clark Kent</td>
+              <td>Metropolis</td>
+              <td>…</td>
+            </tr>
+            <tr class="selected">
+              <td class="chkcol">☑</td>
+              <td>250</td>
+              <td>狗蛋</td>
+              <td>执法堂</td>
+              <td>…</td>
+            </tr>
+            <tr>
+              <td class="chkcol">☐</td>
+              <td>301</td>
+              <td>…</td>
+              <td>…</td>
+              <td>…</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="row" style="margin-top:8px">
+          <div class="btn">全选</div>
+          <div class="btn">取消全选</div>
+          <div class="btn primary">导入选中行</div>
+        </div>
+        <p class="hint">
+          表格数据 = <code>fetch_fields</code> 的 <code>sheet_rows</code> 浅拷贝（主 ID 表原始列）。<br>
+          勾选行高亮；「导入选中行」→ 对选中 ID 调用 <code>fetch_fields</code> → <code>ui.persist_fields</code> 写入 DB → 追加 <code>session_rows</code> →「输入」Tab 本次已录入列表同步可见。
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="legend">
+  线框 · Google 连接（google_config）<br>
+  sources 仅在输入配置 Tab · 切换模板 disconnect→connect<br>
+  单表多选+预览 · 导入选中行 → DB + session_rows<br>
+  详见 docs/gradio_ui/gradio_ui_plan.md
+</div>
+
+</body>
+</html>
