@@ -2,12 +2,7 @@
 __pycache__/
 *.py[cod]
 .venv/
-venv/
-.env
 
-# Streamlit
-.streamlit/secrets.toml
-.run.pid
 
 # Google OAuth 凭证（勿提交）
 credentials/
@@ -15,10 +10,10 @@ credentials/
 oauth_token.json
 client_secret*.json
 app/oauth/
+app/models/*
 
 # 本地模板副本（排除用户模板文件，只保留 readme.txt）
 templates/*
-!templates/readme.txt
 !templates/README.txt
 
 # IDE
@@ -33,9 +28,7 @@ Thumbs.db
 models/*
 
 # llama-cpp wheel probe artifacts (manual install debugging)
-_cpu_index.html
 **/_wheel_probe*/
-tests/_artifacts/
 
 # 测试文件夹和测试脚本（排除所有测试代码和临时文件）
 tests/

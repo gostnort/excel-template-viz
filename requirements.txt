@@ -1,4 +1,4 @@
-gradio>=4.0
+nicegui>=2.0
 
 pandas>=2.0
 
@@ -20,8 +20,8 @@ Pillow>=10.0
 
 # LLM dependencies - llama.cpp for GGUF inference (CPU wheel)
 # Windows CPU wheel compatibility (install.bat auto-detects via app/services/cpu_features.py):
-#   0.3.28  — CPUs WITHOUT AVX512 (Ryzen 5600X, Core 7 150U, most laptops)
-#   0.3.29+ — CPUs WITH AVX512F (Zen 4+, Xeon/workstation); 0xc000001d on non-AVX512
+#   0.3.28  - CPUs WITHOUT AVX512 (Ryzen 5600X, Core 7 150U, most laptops)
+#   0.3.29+ - CPUs WITH AVX512F (Zen 4+, Xeon/workstation); 0xc000001d on non-AVX512
 # Manual install (uses CPU detection):
 #   python -c "from app.services.cpu_features import llama_cpp_install_command; print(llama_cpp_install_command())"
 # Full table: QUICKSTART.md § LLM Dependencies

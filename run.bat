@@ -1,5 +1,5 @@
 @echo off
-echo Starting Excel Template Viz - Gradio Version...
+echo Starting Excel Template Viz - NiceGUI...
 echo.
 
 REM Activate virtual environment
@@ -11,8 +11,8 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM Start Gradio application
-python gradio_app.py
+REM Start NiceGUI application
+python -m nicegui_ui.app
 
 REM If the script exits, pause to see any error messages
 if errorlevel 1 (

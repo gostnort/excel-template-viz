@@ -613,7 +613,7 @@ def _validate_id_rules(cfg: GetTomlValues) -> dict[str, Any]:
     id_labels: list[str] = []
     id_lookup_keys: list[str] = []
     seen_lookup: set[str] = set()
-    for rule in cfg.field_rules:
+    for rule in (cfg.field_rules or []):
         if not rule.id:
             continue
         id_labels.append(rule.Input_label)
