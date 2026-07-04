@@ -14,6 +14,10 @@ app/models/*
 # NiceGUI 用户会话存储（运行时生成，勿提交）
 .nicegui/
 
+# Cursor / Agent 本地配置（勿提交）
+.cursor/
+.agents/
+
 # 本地模板数据（仅保留 README.txt 入库）
 templates/*
 !templates/README.txt
@@ -34,6 +38,7 @@ models/*
 
 # 测试文件夹和测试脚本（排除所有测试代码和临时文件）
 tests/
+test/
 test_*.py
 *_test.py
 
