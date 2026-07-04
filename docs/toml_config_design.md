@@ -45,8 +45,8 @@ Effective Date|2026-01-31
 
 ### 作用域
 
-- TOML **只处理**顶层 `worksheet` 所指定的**那一张**工作表（如 `Input_sheet`）。
-- **与 Print_sheet、其他工作表无关**；定位、扫描、校验均不在 `worksheet` 之外进行。
+- TOML **只处理**顶层 `work_sheet` 所指定的**那一张**工作表（如 `Input_sheet`）。
+- **`print_sheet`** 仅用于 UI 打印区选择与 Windows 打印时激活的工作表；**不参与**定位、扫描、校验。
 - **切换 template** 会换用另一套 xlsx + 另一份 TOML，属于 UI 层行为；本文档与 `core_toml` **只负责解析/校验当前 template 下的 TOML**，不描述切换流程。
 
 ### 未映射语义
@@ -98,13 +98,13 @@ Effective Date|2026-01-31
 
 | 层级 | 键 | 作用对象 | 是否随第 k 组录入而变 |
 |------|-----|----------|----------------------|
-| 字段级 | `Input_label`、`value_from_label`、`value_offset` | 在 `worksheet` 上扫描得**标签格** → 推算 instance 0 **值格** | 否（单次校验内坐标固定） |
+| 字段级 | `Input_label`、`value_from_label`、`value_offset` | 在 `work_sheet` 上扫描得**标签格** → 推算 instance 0 **值格** | 否（单次校验内坐标固定） |
 | `[[input_section]]` | `input_area` | 第一组 instance 0 **填写值**区域（校验值格是否落入） | 否 |
 | `[[input_section]]` | `move_to`、`offset` | 第 k≥1 组**填写值**相对 instance 0 的整体平移 | 是（仅值格） |
 
 #### 标准数据库范式（默认唯一自动处理布局）
 
-默认生成与自动校验**仅**支持标准范式（指 `worksheet` 上的输入表，**不是** sheet1/sheet2 数据源）：
+默认生成与自动校验**仅**支持标准范式（指 `work_sheet` 上的输入表，**不是** sheet1/sheet2 数据源）：
 
 | 行 | 含义 |
 |----|------|
@@ -118,11 +118,11 @@ Effective Date|2026-01-31
 | 条件 | 行为 |
 |------|------|
 | template 已选，**TOML 不存在** | `TomlGenerator` 生成**默认 TOML**（不逐格扫描）；按标准范式：第 1 行写出 `[[fields]].Input_label` 骨架，`input_area` 登记第 2 行填写值区域 |
-| template 已选，**TOML 已存在**，UI **激活校验** | 对 `worksheet` **逐字段**全表扫描各 `Input_label`，确定标签格与 instance 0 值格，并做相互印证 |
+| template 已选，**TOML 已存在**，UI **激活校验** | 对 `work_sheet` **逐字段**全表扫描各 `Input_label`，确定标签格与 instance 0 值格，并做相互印证 |
 
 #### 标签格如何确定（斜向波面扫描）
 
-在 **`worksheet` 指定表**上（仅此表），在 **100 行 × 100 列**内，按**左上 → 右下**的斜向波面顺序扫描（非行优先逐行扫描）。
+在 **`work_sheet` 指定表**上（仅此表），在 **100 行 × 100 列**内，按**左上 → 右下**的斜向波面顺序扫描（非行优先逐行扫描）。
 
 扫描顺序：令 `s = row + col`（1-based），`s` 从小到大；同一 `s` 内 `row` 从小到大。即越靠近 `(1,1)` 的格越早被访问——例如 `(2,2)` 早于 `(1,100)`。
 
@@ -227,14 +227,14 @@ UI **只**调用一个函数 `verify_toml()`，由 `core_toml` 完成「打开 x
 | 参数 | 说明 |
 |------|------|
 | `template_path` | 当前 template 的 `.xlsx` 路径 |
-| 已加载的 `GetTomlValues`（或 `template_id`） | 提供 `worksheet` / `input_section` / `fields`，二选一，以实现为准 |
+| 已加载的 `GetTomlValues`（或 `template_id`） | 提供 `work_sheet` / `print_sheet` / `input_section` / `fields`，二选一，以实现为准 |
 
 **返回（概念）**
 
 返回一份**报告**，至少能让 UI 知道：
 
 - 整体是否通过（无任何问题即通过）。
-- **哪些 `Input_label` 在 `worksheet` 上找不到**（label 不存在）。
+- **哪些 `Input_label` 在 `work_sheet` 上找不到**（label 不存在）。
 - **哪些 `Input_label` 在工作表上出现多处**（duplicate_labels）。
 - **哪些 `Input_label` 的 instance 0 值格不在 `input_area` 内**（input 越界）。
 
@@ -261,10 +261,10 @@ UI **只**调用一个函数 `verify_toml()`，由 `core_toml` 完成「打开 x
 
 `located` 仅内存返回，供 UI 初始化输入框与后续填表使用；**不写回 TOML**。k≥1 的值格由填表逻辑在 instance 0 坐标上再应用 `move_to`/`offset`，不在本次校验逐 instance 扫描。
 
-**执行步骤（仅 `worksheet` 指定表 + TOML 层 id 规则）**
+**执行步骤（仅 `work_sheet` 指定表 + TOML 层 id 规则）**
 
 1. **TOML 层**（不打开 xlsx）：统计各 `(source_file, source_sheet)` 的 `id=true` 数量；汇总 `id_labels`、`id_lookup_keys`；解析或校验 `db_id`。
-2. 打开 `worksheet` 指定的工作表；不存在 → 整体失败。
+2. 打开 `work_sheet` 指定的工作表；不存在 → 整体失败。
 3. 把 `[[input_section]].input_area` 解析为矩形 `(min_row, min_col, max_row, max_col)`。
 4. 对 100×100 区域做**一次**斜向波面扫描，建立标签文本 → 首见坐标索引，并收集重复文本。
 5. 对每一条 `[[fields]]` 查索引：
@@ -273,7 +273,7 @@ UI **只**调用一个函数 `verify_toml()`，由 `core_toml` 完成「打开 x
    - 找到唯一标签格后，`offset_cell(...)` 得 instance 0 值格；若不在 `input_area` 矩形内 → 计入 `out_of_area_labels`。
 6. 坐标与 id 规则均通过 → `ok = True`。
 
-**不检查**：标签格是否在 `input_area` 内；`field` / `source_*` / `regex` 是否已映射；Print_sheet 及其他工作表。`verify_toml()` **只报告**问题，**不**静默改 TOML、不改 xlsx、不自动修正坐标。
+**不检查**：标签格是否在 `input_area` 内；`field` / `source_*` / `regex` 是否已映射；`print_sheet` 是否存在或其 `print_area`。`verify_toml()` **只报告**问题，**不**静默改 TOML、不改 xlsx、不自动修正坐标。
 
 > 文本层面的 TOML 语法/字段骨架解析由 Load 解析阶段负责（不打开 xlsx）；`verify_toml()` 专注 xlsx 坐标印证与 **id/db_id 规则**。
 
@@ -281,7 +281,8 @@ UI **只**调用一个函数 `verify_toml()`，由 `core_toml` 完成「打开 x
 
 ```# toml
 determiner = "\t"           # 纯文本粘贴的分隔符；支持 \t(tab) 等转义字符和其他单字符分隔符
-worksheet = "Input_sheet"   # 模板中需要输入数据的表格
+work_sheet = "Input_sheet"   # 模板中需要输入数据的表格（TOML 定位 / 读写）
+print_sheet = "Print_sheet"  # UI 打印区选择与 Windows 打印时激活的工作表（可选）
 db_id = "ID#"               # 本地 records 主键对应的 Input_label；仅一条 id=true 时可省略；多条 id=true 时必填
 
 # 外部数据源；路径可为本地文件、网页链接或 Google Sheet
@@ -382,7 +383,7 @@ id = false
 2. **Windows 路径**：单引号字面量，反斜杠原样保留，例如 `'c:\temp\cache\执法堂业绩.xlsx'`。
 3. **正则表达式**：含反斜杠时用字面量，例如 `'\d+/\d+/\d+'`。
 4. **已映射但无 regex**：写入空字符串 `regex = ""`。
-5. **默认配置**：包含 `determiner`、`worksheet`（若有）、`[[input_section]]`（**一条**）、`[[sources]]` 与 `[[fields]]` 骨架；可选字符串键以 `""` 占位。
+5. **默认配置**：包含 `determiner`、`work_sheet`（若有）、`print_sheet`（可选）、`[[input_section]]`（**一条**）、`[[sources]]` 与 `[[fields]]` 骨架；可选字符串键以 `""` 占位。
 6. **`index`**：纯文本粘贴时按 `determiner` 拆分后的列索引（base 0）；与 Excel 列号、与 `input_section` 平移无关。
 7. **`input_area`**：只框 instance 0 **填写值**；**不**用于找标签。找标签后推算出的值格**必须**落在此区域内。
 8. **标签与 `input_area`**：二者独立——扫描只认 `Input_label`；`input_area` 只校验值格是否入框。
@@ -403,7 +404,7 @@ tomlkit>=0.13
 |------|------|------|
 | 生成默认 TOML | `TomlGenerator` | TOML 不存在时；标准范式；**不**做全表扫描 |
 | 读写 TOML 文本 | `GetTomlValues` | Load / Save / ToDict |
-| **激活校验**（UI 调用） | `verify_toml()` | UI 只调这一个；斜向扫描 worksheet，报告找不到 / 重复 / 值格越界的 `Input_label`，以及 `duplicate_id_sheets` / `db_id` 相关项 |
+| **激活校验**（UI 调用） | `verify_toml()` | UI 只调这一个；斜向扫描 work_sheet，报告找不到 / 重复 / 值格越界的 `Input_label`，以及 `duplicate_id_sheets` / `db_id` 相关项 |
 | 解析本地主键 | `resolve_db_id()` | 由已加载配置推断生效的 `db_id`（`Input_label`）；无 id 字段时返回 `None` |
 | 坐标解析 | `offset_cell`、`_scan_worksheet_labels_diagonal` 等 | 校验与填表共用；扫描上限 **100×100** |
 
@@ -413,5 +414,6 @@ tomlkit>=0.13
 
 - **生成器（`TomlGenerator`）**：TOML 不存在时，按标准范式生成骨架（第 1 行 → `[[fields]].Input_label`，`input_area` → 第 2 行值区）；默认 `value_from_label = "down"`、`value_offset = 1`；**不**扫描全表。
 - **持久化层（`GetTomlValues`）**：Load / Save / ToDict（含可选 `db_id`）；**`verify_toml()`**——回报坐标问题与 id 规则（`duplicate_id_sheets`、`db_id_required`、`invalid_db_id`、`db_id`、`id_lookup_keys`）。
-- **定位**：仅在 `worksheet` 上斜向波面扫描标签；值格由 offset 推算且**必须**在 `input_area` 内；`move_to`/`offset` 处理 k≥1 值格平移。
+- **定位**：仅在 `work_sheet` 上斜向波面扫描标签；值格由 offset 推算且**必须**在 `input_area` 内；`move_to`/`offset` 处理 k≥1 值格平移。
+- **打印**：`print_sheet` 由 `ExcelWriter.get_print_areas()` 与 UI 打印行使用；不参与 `verify_toml` 坐标印证。
 - **数据源路径**：由专用 UI 写入，不由生成器提供。

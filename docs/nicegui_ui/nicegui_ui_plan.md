@@ -133,6 +133,13 @@ Four tabs, fixed order:
   * **Interactions:** row click loads row into `draft` and refreshes `input_fields`; checkbox column for bulk delete; highlight selected row via `selected` binding or table API.
   * If `ui.table` selection API is insufficient, use `@ui.refreshable` HTML table inside `ui.card` — still wire clicks to Python handlers directly (`on_click` on row buttons), not JSON bridges.
 
+* **Session list toolbar** (`.list-btns` under the table)
+  * **Left:** `装载文件` — open dialog to pick an xlsx from `exports/{template_id}/`; parse rows via `ExcelWriter.read_instances(path)` into `session_rows` so users can edit multiple exported files in the UI and **另存为** as new files.
+  * **Right:** `清空` then `单个删除` (adjacent).
+  * **`装载文件` merge policy:** if `session_rows` is empty → **replace** (load into empty list). If non-empty → dialog offers **替换当前列表** or **追加到当前列表**; rows are capped at `input_capacity`; notify when truncated.
+  * **`清空`:** clear `session_rows`, reset `current_instance_index = 0`, `selected_session_index = None`, reset `draft` from `template_defaults`, refresh table and fields.
+  * **`单个删除`:** remove the single selected table row (former `删除`); recompute `current_instance_index = len(session_rows)`.
+
 * **Toolbar**
   * Row 1: `另存为`, `下一行`, read-only label `当前 {current_instance_index + 1} / 容量 {input_capacity}`.
   * Row 2: `打印文件` (`ui.select`), `打印区域` (`ui.select`), `打印` (`ui.button`).
@@ -152,7 +159,8 @@ Four tabs, fixed order:
 * **打印**
   * Windows: `os.startfile(path, 'print')` from Python after user picks exported file + print area.
   * Other OS: `ui.download.file(path)` as fallback.
-  * Print areas from `writer.get_print_areas(selected_xlsx)`; print logic must not participate in TOML定位.
+  * Print areas from `writer.get_print_areas(selected_xlsx)` using TOML `print_sheet`; print logic must not participate in TOML定位.
+  * Before Windows print, copy export to a temp xlsx with `print_sheet` set as the active sheet (Excel prints the active sheet by default). The dropdown `打印区域` shows `print_sheet` and its `print_area` when defined; `selected_area` is informational — OS print does not accept a per-invocation area override.
 
 ### 3.2 Tab 2: Google Connection (`google_config` / `Google 连接`)
 
@@ -166,7 +174,7 @@ Four tabs, fixed order:
 
 Sections as `ui.card` or `ui.expansion`, matching `nicegui_ui_toml.html`:
 
-1. **基础:** `determiner`, `worksheet`, `保存`
+1. **基础:** `determiner`, `work_sheet`, `print_sheet`, `保存`
 2. **数据源:** editable table for `[[sources]]` keys/paths; `保存`
 3. **输入区段:** single `input_section` row (`input_area`, `move_to`, `offset`); `校验配置` + report area
 4. **字段映射:** table with `Input_label`, `value_from_label`, `value_offset`, `field`, `source_file`, `source_sheet`, `index`, `regex`, `id`; `生成骨架`, `保存`
@@ -289,7 +297,7 @@ On sidebar click or initial load:
 
 ### 4.4 TOML model (unchanged)
 
-Must use: `worksheet`, single `[[input_section]]`, `Input_label`, `value_from_label`, `value_offset`, `index`, `id`.
+Must use: `work_sheet`, `print_sheet` (optional), single `[[input_section]]`, `Input_label`, `value_from_label`, `value_offset`, `index`, `id`.
 
 Forbidden: old `sections` model, UI-maintained area lists, UI coordinate math.
 
@@ -418,7 +426,7 @@ Use `ui.download.file` for exported xlsx when not printing. Use `ui.notify` for 
 2. `ui.splitter` (or approved equivalent) provides drag resize and collapse with persisted width.
 3. Template activation always runs `verify_toml`; failure disables 输入 write/export/print.
 4. Input fields are generated from `ui.get_labels()`; primary key uses blur + dialog flow.
-5. Session table supports select, highlight, delete, load into `draft` without hidden JSON bridges.
+5. Session table supports select, highlight, 单个删除, 清空, 装载文件 (from exports), load into `draft` without hidden JSON bridges.
 6. 下一行 uses `input_capacity` from `writer.max_instance_count()` only.
 7. 另存为 writes to `exports/{template_id}/...` and refreshes print-file list.
 8. TOML save rebuilds engines and clears input session state.

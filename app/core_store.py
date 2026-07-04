@@ -10,14 +10,16 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from app.services.core_registry import PROJECT_ROOT
-from app.services.core_toml import GetTomlValues, resolve_db_id
+from app.core_connect import _apply_regex
+from app.core_registry import TEMPLATES_DIR
+from app.core_toml import GetTomlValues, resolve_db_id
 
 
-TEMP_DIR = PROJECT_ROOT / "temp"
 _ACTIVE_POINTER_SUFFIX = ".active"
 _FORBIDDEN_DB_SUFFIXES = (".db", ".sqlite", ".sql")
 _SUFFIX_TOKEN_PATTERN = re.compile(r"^[A-Z]\d{4}$")
+_SQLITE_INT_MIN = -9223372036854775808
+_SQLITE_INT_MAX = 9223372036854775807
 
 
 def _current_year() -> int:
@@ -44,8 +46,13 @@ def _parse_suffix_token(token: str) -> tuple[str, int] | None:
     return token[0], int(token[1:])
 
 
+def _template_dir(template_id: str) -> Path:
+    """模板 sidecar 目录：与 {template_id}.toml 同级。"""
+    return TEMPLATES_DIR / template_id
+
+
 def _active_pointer_path(template_id: str) -> Path:
-    return TEMP_DIR / f"{template_id}{_ACTIVE_POINTER_SUFFIX}"
+    return _template_dir(template_id) / f"{template_id}{_ACTIVE_POINTER_SUFFIX}"
 
 
 def _read_active_suffix_token(template_id: str) -> str | None:
@@ -61,18 +68,19 @@ def _read_active_suffix_token(template_id: str) -> str | None:
 def _write_active_suffix_token(template_id: str, suffix_token: str) -> None:
     if not _is_valid_suffix_token(suffix_token):
         raise ValueError(f"invalid suffix token: {suffix_token!r}")
-    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    sidecar = _template_dir(template_id)
+    sidecar.mkdir(parents=True, exist_ok=True)
     _active_pointer_path(template_id).write_text(suffix_token, encoding="utf-8")
 
 
 def _db_path_for_suffix_token(template_id: str, suffix_token: str) -> Path:
-    return TEMP_DIR / f"{template_id}.{suffix_token}"
+    return _template_dir(template_id) / f"{template_id}.{suffix_token}"
 
 
 def list_db_paths(template_id: str, year: int | None = None) -> list[Path]:
     """
     函数名: list_db_paths
-    作用: 列出 temp 下某模板在指定年份的全部数据库文件
+    作用: 列出 templates/{template_id}/ 下某模板在指定年份的全部数据库文件
     输入:
         template_id (str) - 模板 ID（与 xlsx stem 规范化后一致）
         year (int | None) - 年份，默认当前年
@@ -81,10 +89,11 @@ def list_db_paths(template_id: str, year: int | None = None) -> list[Path]:
     """
     if year is None:
         year = _current_year()
-    if not TEMP_DIR.is_dir():
+    sidecar = _template_dir(template_id)
+    if not sidecar.is_dir():
         return []
     paths: list[Path] = []
-    for candidate in TEMP_DIR.glob(f"{template_id}.*"):
+    for candidate in sidecar.glob(f"{template_id}.*"):
         if candidate.name.endswith(_ACTIVE_POINTER_SUFFIX):
             continue
         token = _suffix_token_from_path(candidate)
@@ -109,7 +118,7 @@ def default_db_path(template_id: str) -> Path:
     输入:
         template_id (str) - 模板唯一 ID
     输出:
-        Path - temp/{template_id}.{Letter}{Year}
+        Path - templates/{template_id}/{template_id}.{Letter}{Year}
     """
     year = _current_year()
     active = _read_active_suffix_token(template_id)
@@ -154,6 +163,22 @@ def allocate_next_db_path(template_id: str) -> Path:
     return _db_path_for_suffix_token(template_id, suffix_token)
 
 
+def _sqlite_safe_int(value: int) -> int:
+    """拒绝超出 SQLite INTEGER 有符号 64 位范围的值。"""
+    if value < _SQLITE_INT_MIN or value > _SQLITE_INT_MAX:
+        raise ValueError(
+            f"ID {value} exceeds SQLite INTEGER range "
+            f"[{_SQLITE_INT_MIN}, {_SQLITE_INT_MAX}]"
+        )
+    return value
+
+
+def _auto_records_id() -> int:
+    # uuid 高 64 位常超过有符号 INTEGER 上限；保留低 63 位正整数
+    rid = uuid.uuid4().int & _SQLITE_INT_MAX
+    return rid or 1
+
+
 def _normalize_id(value: Any) -> int:
     """
     函数名: _normalize_id
@@ -166,15 +191,15 @@ def _normalize_id(value: Any) -> int:
     if isinstance(value, bool):
         raise ValueError("ID cannot be boolean")
     if isinstance(value, int):
-        return value
+        return _sqlite_safe_int(value)
     if isinstance(value, float):
-        return int(value)
+        return _sqlite_safe_int(int(value))
     text = str(value).strip()
     if not text:
         raise ValueError("ID cannot be empty")
     if "." in text:
-        return int(float(text))
-    return int(text)
+        return _sqlite_safe_int(int(float(text)))
+    return _sqlite_safe_int(int(text))
 
 
 def _has_valid_id_value(value: Any) -> bool:
@@ -202,7 +227,8 @@ def _build_payload_from_toml(
     for rule in cfg.field_rules:
         label = rule.Input_label
         if label in incoming and _has_valid_id_value(incoming[label]):
-            payload[label] = _json_safe_value(incoming[label])
+            raw = incoming[label]
+            payload[label] = _json_safe_value(_apply_regex(raw, rule.regex))
         else:
             payload[label] = ""
     return payload
@@ -221,7 +247,7 @@ def _resolve_records_id(cfg: GetTomlValues, incoming: dict[str, Any]) -> int:
     label = resolve_db_id(cfg)
     if label is not None and label in incoming and _has_valid_id_value(incoming[label]):
         return _normalize_id(incoming[label])
-    return uuid.uuid4().int >> 64
+    return _auto_records_id()
 
 
 def _json_safe_value(value: Any) -> Any:
@@ -262,7 +288,7 @@ class SecureSQLite:
     def __init__(self, db_path: Path) -> None:
         """
         函数名: __init__
-        作用: 打开或创建 temp 下 {template_id}.{Letter}{Year} 并确保表结构存在
+        作用: 打开或创建 templates/{template_id}/ 下 {template_id}.{Letter}{Year} 并确保表结构存在
         输入:
             db_path (Path) - 数据库文件路径
         输出:
@@ -429,5 +455,5 @@ class UiProvider:
         for rule in self.cfg.field_rules:
             if rule.index < 0:
                 continue
-            fields[rule.Input_label] = parts[rule.index]
+            fields[rule.Input_label] = _apply_regex(parts[rule.index], rule.regex)
         return fields

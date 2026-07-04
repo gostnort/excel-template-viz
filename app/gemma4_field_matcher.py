@@ -13,7 +13,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 
-from app.services.cpu_features import (
+from app.cpu_features import (
     LLAMA_CPP_CPU_WHEEL_INDEX,
     LLAMA_CPP_VERSION_AVX2,
     LLAMA_CPP_VERSION_AVX512,
@@ -21,7 +21,15 @@ from app.services.cpu_features import (
     llama_cpp_install_command,
     recommended_llama_cpp_version,
 )
-from app.services.paste_parse_config import RESERVED_TOP_KEYS
+
+# Legacy paste.yaml top-level keys (paste_parse_config removed; TOML owns field rules).
+RESERVED_TOP_KEYS = frozenset({
+    "determiner",
+    "fields_per_row",
+    "work_sheet",
+    "print_sheet",
+    "sections",
+})
 
 logger = logging.getLogger(__name__)
 

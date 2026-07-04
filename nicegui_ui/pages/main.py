@@ -1,79 +1,105 @@
 from nicegui import ui, app
 
+from nicegui_ui.components.general import Auth
+
+
+def _sidebar_pref(key: str, default):
+    return app.storage.user.get(Auth.pref_key(key), app.storage.user.get(key, default))
+
+
+def _set_sidebar_pref(key: str, value) -> None:
+    app.storage.user[Auth.pref_key(key)] = value
+    app.storage.user[key] = value
+
+
 def render_shell():
     # 消除多余内边距
     ui.query('body').classes('p-0 m-0 overflow-hidden')
-    
     # 初始化侧边栏状态
-    sidebar_width = app.storage.user.get('sidebar_width', 240)
-    is_collapsed = app.storage.user.get('sidebar_collapsed', False)
-    
-    init_limits = '[0, 400]' if is_collapsed else '[150, 400]'
+    sidebar_width = _sidebar_pref('sidebar_width', 240)
+    is_collapsed = _sidebar_pref('sidebar_collapsed', False)
+    init_limits = (0, 400) if is_collapsed else (150, 400)
     init_value = 0 if is_collapsed else sidebar_width
-    
-    with ui.splitter(value=init_value).props(f'unit=px limits="{init_limits}"').classes('w-full h-screen') as splitter:
+    with ui.splitter(value=init_value, limits=init_limits).props('unit=px').classes('shell-splitter w-full h-screen') as splitter:
         
         def toggle_sidebar(e=None):
             if splitter.value > 0:
                 # 折叠
-                app.storage.user['sidebar_width'] = splitter.value
-                app.storage.user['sidebar_collapsed'] = True
-                splitter.props('limits=[0, 400]')
+                _set_sidebar_pref('sidebar_width', splitter.value)
+                _set_sidebar_pref('sidebar_collapsed', True)
+                splitter.props['limits'] = (0, 400)
                 splitter.value = 0
             else:
                 # 展开
-                app.storage.user['sidebar_collapsed'] = False
-                splitter.props('limits=[150, 400]')
-                splitter.value = app.storage.user.get('sidebar_width', 240)
-                
+                _set_sidebar_pref('sidebar_collapsed', False)
+                splitter.props['limits'] = (150, 400)
+                splitter.value = _sidebar_pref('sidebar_width', 240)
         def on_splitter_change(e):
-            val = e.value
+            val = splitter.value
+            if val is None or val <= 0:
+                return
             if val > 0:
-                if app.storage.user.get('sidebar_collapsed'):
-                    app.storage.user['sidebar_collapsed'] = False
-                    splitter.props('limits=[150, 400]')
+                if _sidebar_pref('sidebar_collapsed', False):
+                    _set_sidebar_pref('sidebar_collapsed', False)
+                    splitter.props['limits'] = (150, 400)
                 if val >= 150:
-                    app.storage.user['sidebar_width'] = val
-                    
+                    _set_sidebar_pref('sidebar_width', val)
         splitter.on('update:model-value', on_splitter_change)
-        
-        with splitter.separator:
-            # 扩大双击热区，通过透明背景覆盖在原生分割线上
-            ui.element('div').classes('w-4 h-full bg-transparent cursor-col-resize').style('margin-left: -6px; z-index: 100;').on('dblclick', toggle_sidebar)
-
+        splitter.on('dblclick', toggle_sidebar)
+        def bind_separator_dblclick() -> None:
+            sid = splitter.id
+            ui.run_javascript(f'''
+                (() => {{
+                    const cmp = getElement({sid});
+                    if (!cmp || cmp.__sepDblBound) return;
+                    const root = cmp.$el;
+                    const sep = root?.querySelector('.q-splitter__separator');
+                    if (!sep) return;
+                    cmp.__sepDblBound = true;
+                    sep.addEventListener('dblclick', () => cmp.$emit('dblclick', {{}}));
+                }})();
+            ''')
+        ui.timer(0.15, bind_separator_dblclick, once=True)
         # 左侧边栏 (Sidebar)
         with splitter.before:
-            with ui.column().classes('w-full h-full p-2 border-r overflow-x-hidden overflow-y-auto').style('will-change: width'):
-                ui.label('模板: 未选择').classes('text-lg font-bold mb-2')
-                ui.separator()
-                
-                # 模板列表
-                from app.services.core_registry import SortTemplates
-                registry = SortTemplates()
-                
-                with ui.list().classes('w-full'):
-                    # sort_templates_timeline 存储的是 display_name
-                    # TemplateIDs 的 key 是 id，我们需要构建反向映射
-                    display_to_id = {v: k for k, v in registry.template_display_names.items()}
-                    
-                    for display_name in registry.sort_templates_timeline:
-                        t_id = display_to_id.get(display_name)
-                        if not t_id:
-                            continue
-                            
-                        def on_click(e, tid=t_id):
-                            print(f"Clicked on {tid}", flush=True)
-                            from nicegui_ui.components.activation import activate_template
-                            path = registry.TemplateIDs.get(tid)
-                            print(f"Path for {tid}: {path}", flush=True)
-                            if path:
-                                res = activate_template(tid, path)
-                                print(f"Activate result: {res}", flush=True)
-                                if res:
+            with ui.column().classes('sidebar w-full h-full border-r overflow-hidden').style('will-change: width'):
+                @ui.refreshable
+                def render_template_header():
+                    from nicegui_ui.components.general import SessionRegistry
+                    session = SessionRegistry.for_current()
+                    with ui.element('div').classes('sidebar-header w-full flex-shrink-0'):
+                        if session.template_id:
+                            ui.label(f'已选择 {session.template_id}')
+                        else:
+                            ui.label('模板: 未选择')
+                render_template_header()
+                with ui.element('div').classes('sidebar-body w-full flex-1 overflow-y-auto overflow-x-hidden'):
+                    # 模板列表
+                    from app.core_registry import SortTemplates
+                    registry = SortTemplates()
+                    with ui.list().classes('w-full'):
+                        # sort_templates_timeline 存储的是 display_name
+                        # TemplateIDs 的 key 是 id，我们需要构建反向映射
+                        display_to_id = {v: k for k, v in registry.template_display_names.items()}
+                        for display_name in registry.sort_templates_timeline:
+                            t_id = display_to_id.get(display_name)
+                            if not t_id:
+                                continue
+                            def on_click(e, tid=t_id):
+                                from nicegui_ui.components.for_main import ForMain
+                                path = registry.TemplateIDs.get(tid)
+                                if path:
+                                    ForMain.load_template(tid, path)
+                                    render_template_header.refresh()
                                     from nicegui_ui.pages.tab_input import render_input_tab
+                                    from nicegui_ui.pages.tab_toml import render_toml_tab
+                                    from nicegui_ui.pages.tab_db import render_db_tab
+                                    from nicegui_ui.pages.tab_google import render_google_tab
                                     render_input_tab.refresh()
-                                    
-                        ui.item(display_name).classes('cursor-pointer hover:bg-gray-100').props('clickable v-ripple').on('click', lambda e, tid=t_id: on_click(e, tid))
+                                    render_toml_tab.refresh()
+                                    render_db_tab.refresh()
+                                    render_google_tab.refresh()
+                            ui.item(display_name).classes('template-item cursor-pointer').props('clickable v-ripple').on('click', lambda e, tid=t_id: on_click(e, tid))
 
         # 右侧主工作区 (Main Tabs)
         with splitter.after:

@@ -4,9 +4,12 @@ import argparse
 import json
 import logging
 import re
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter, range_boundaries
+from PIL import Image, ImageDraw, ImageFont
 from .core_toml import GetTomlValues, TomlDefault, _validate_id_rules, offset_cell
 
 
@@ -115,6 +118,84 @@ def _find_row_by_lookup_keys(
     return None
 
 
+def _cell_display_text(value: Any) -> str:
+    """单元格显示文本（用于打印区指纹与渲染）。"""
+    if value is None:
+        return ""
+    if isinstance(value, float) and value == int(value):
+        return str(int(value))
+    return str(value).strip()
+
+
+def _split_print_area_raw(raw: str, default_sheet: str) -> list[tuple[str, str]]:
+    """将 ws.print_area 拆成 (sheet_name, A1_range) 列表。"""
+    parts = [part.strip() for part in str(raw).split(",") if part.strip()]
+    parsed: list[tuple[str, str]] = []
+    for part in parts:
+        if "!" in part:
+            sheet_part, area_part = part.rsplit("!", 1)
+            sheet_name = sheet_part.strip().strip("'\"")
+            area_text = area_part.replace("$", "")
+        else:
+            sheet_name = default_sheet
+            area_text = part.replace("$", "")
+        parsed.append((sheet_name, area_text))
+    return parsed
+
+
+def _read_area_cell_grid(ws: Any, area: str) -> list[list[str]]:
+    """读取单个 A1 区域内的单元格显示文本网格。"""
+    min_col, min_row, max_col, max_row = range_boundaries(area)
+    grid: list[list[str]] = []
+    for row_idx in range(min_row, max_row + 1):
+        row_cells: list[str] = []
+        for col_idx in range(min_col, max_col + 1):
+            row_cells.append(_cell_display_text(ws.cell(row=row_idx, column=col_idx).value))
+        grid.append(row_cells)
+    return grid
+
+
+def _area_content_key(cells: list[list[str]]) -> tuple[str, ...]:
+    """可比较的打印区内容指纹。"""
+    return tuple(cell for row in cells for cell in row)
+
+
+def _area_preview_text(cells: list[list[str]], limit: int = 30) -> str:
+    """从非空单元格拼短预览，供下拉标签使用。"""
+    parts: list[str] = []
+    for row in cells:
+        for cell in row:
+            if not cell:
+                continue
+            parts.append(cell)
+            joined = " ".join(parts)
+            if len(joined) >= limit:
+                return joined[:limit]
+    return " ".join(parts)[:limit]
+
+
+def _area_display_label(sheet_name: str, area: str, cells: list[list[str]]) -> str:
+    """人类可读打印区标签。"""
+    preview = _area_preview_text(cells)
+    base = f"{sheet_name}: {area}"
+    if preview:
+        return f"{base} ({preview})"
+    return base
+
+
+def _column_pixel_width(ws: Any, col_idx: int, scale: float) -> int:
+    """openpyxl 列宽 → 像素（近似 Excel 默认）。"""
+    letter = get_column_letter(col_idx)
+    dim = ws.column_dimensions.get(letter)
+    width = dim.width if dim is not None and dim.width is not None else 8.43
+    return max(24, int(width * 7 * scale))
+
+
+def _row_pixel_height(ws: Any, row_idx: int, scale: float) -> int:
+    """openpyxl 行高 → 像素。"""
+    dim = ws.row_dimensions.get(row_idx)
+    height = dim.height if dim is not None and dim.height is not None else 15.0
+    return max(16, int(height * scale * 1.33))
 
 
 class Template2DB:
@@ -214,11 +295,11 @@ class ExcelWriter:
 
 
     def _worksheet_name(self, workbook_path: Path) -> str:
-        """解析 cfg.worksheet 或回退 active sheet。"""
+        """解析 cfg.work_sheet 或回退 active sheet。"""
         wb = load_workbook(workbook_path, read_only=True)
         try:
-            if self.cfg.worksheet and self.cfg.worksheet in wb.sheetnames:
-                return self.cfg.worksheet
+            if self.cfg.work_sheet and self.cfg.work_sheet in wb.sheetnames:
+                return self.cfg.work_sheet
             return wb.active.title
         finally:
             wb.close()
@@ -401,32 +482,120 @@ class ExcelWriter:
             wb.close()
 
 
-    def get_print_areas(self, excel_path: Path) -> dict[str, str | None]:
+    def get_print_areas(self, excel_path: Path) -> list[dict[str, Any]]:
         """
         函数名: get_print_areas
-        作用: 读取各 sheet 的 print_area 元数据（不在 TOML 定位模型内，仅读元数据）
+        作用: 读取 print_sheet 上全部 print_area，按单元格内容去重
         输入:
             excel_path (Path) - xlsx
         输出:
-            dict[str, str | None] - 工作表名 → 区域字符串
+            list[dict] - 唯一区域；键 label / area / sheet / content_key / cells
         """
-        # 非 read_only 打开：ReadOnlyWorksheet 无 print_area 属性
-        wb = load_workbook(excel_path)
+        # 非 read_only：ReadOnlyWorksheet 无 print_area
+        wb = load_workbook(excel_path, data_only=True)
         try:
-            result: dict[str, str | None] = {}
-            for name in wb.sheetnames:
-                raw = wb[name].print_area
-                if raw is None:
-                    result[name] = None
-                else:
-                    text = str(raw)
-                    # 去掉工作表前缀与 $ 绝对引用
-                    if "!" in text:
-                        text = text.split("!", 1)[1]
-                    result[name] = text.replace("$", "")
-            return result
+            sheet_name: str | None = None
+            if self.cfg.print_sheet and self.cfg.print_sheet in wb.sheetnames:
+                sheet_name = self.cfg.print_sheet
+            elif self.cfg.work_sheet and self.cfg.work_sheet in wb.sheetnames:
+                sheet_name = self.cfg.work_sheet
+            elif wb.active:
+                sheet_name = wb.active.title
+            if not sheet_name or sheet_name not in wb.sheetnames:
+                return []
+            ws = wb[sheet_name]
+            raw = ws.print_area
+            if raw is None:
+                return []
+            ranges = _split_print_area_raw(str(raw), sheet_name)
+            seen_keys: set[tuple[str, ...]] = set()
+            unique: list[dict[str, Any]] = []
+            for range_sheet, area in ranges:
+                if range_sheet not in wb.sheetnames:
+                    continue
+                range_ws = wb[range_sheet]
+                cells = _read_area_cell_grid(range_ws, area)
+                content_key = _area_content_key(cells)
+                if content_key in seen_keys:
+                    continue
+                seen_keys.add(content_key)
+                unique.append(
+                    {
+                        "label": _area_display_label(range_sheet, area, cells),
+                        "area": area,
+                        "sheet": range_sheet,
+                        "content_key": content_key,
+                        "cells": cells,
+                    }
+                )
+            return unique
         finally:
             wb.close()
+
+
+    def render_print_area_image(
+        self,
+        excel_path: Path,
+        sheet_name: str,
+        area: str,
+        scale: float = 2.5,
+    ) -> Image.Image:
+        """
+        函数名: render_print_area_image
+        作用: 将单个打印区渲染为内存 PIL 图像（不写磁盘）
+        输入:
+            excel_path (Path) - xlsx
+            sheet_name (str) - 工作表名
+            area (str) - A1 区域
+            scale (float) - 像素缩放（越大越清晰）
+        输出:
+            Image.Image - RGB 图像
+        """
+        wb = load_workbook(excel_path, data_only=True)
+        try:
+            ws = wb[sheet_name]
+            min_col, min_row, max_col, max_row = range_boundaries(area)
+            col_widths = [_column_pixel_width(ws, c, scale) for c in range(min_col, max_col + 1)]
+            row_heights = [_row_pixel_height(ws, r, scale) for r in range(min_row, max_row + 1)]
+            img_w = sum(col_widths) + 2
+            img_h = sum(row_heights) + 2
+            image = Image.new("RGB", (img_w, img_h), "white")
+            draw = ImageDraw.Draw(image)
+            try:
+                font = ImageFont.truetype("arial.ttf", max(10, int(11 * scale)))
+            except OSError:
+                font = ImageFont.load_default()
+            y_cursor = 1
+            for row_offset, row_idx in enumerate(range(min_row, max_row + 1)):
+                x_cursor = 1
+                row_h = row_heights[row_offset]
+                for col_offset, col_idx in enumerate(range(min_col, max_col + 1)):
+                    col_w = col_widths[col_offset]
+                    x0, y0 = x_cursor, y_cursor
+                    x1, y1 = x_cursor + col_w, y_cursor + row_h
+                    draw.rectangle((x0, y0, x1, y1), outline="#cccccc", fill="white")
+                    text = _cell_display_text(ws.cell(row=row_idx, column=col_idx).value)
+                    if text:
+                        draw.text((x0 + 4, y0 + 2), text, fill="black", font=font)
+                    x_cursor += col_w
+                y_cursor += row_h
+            return image
+        finally:
+            wb.close()
+
+
+    def render_print_area_png_bytes(
+        self,
+        excel_path: Path,
+        sheet_name: str,
+        area: str,
+        scale: float = 2.5,
+    ) -> bytes:
+        """render_print_area_image 的 PNG 字节流（内存，不落盘）。"""
+        image = self.render_print_area_image(excel_path, sheet_name, area, scale=scale)
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+        return buffer.getvalue()
 
 
 

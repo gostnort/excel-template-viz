@@ -7,8 +7,8 @@
 **设计依据**：
 - 架构蓝图：`docs/data_sheet_core_design.md`
 - **字段语义、标签/值格定位、`input_area` 印证**：`docs/toml_config_design.md`（**权威**；含 `value_from_label` / `value_offset` / `[[input_section]]` / `verify_toml`）
-- TOML 解析与校验：`app/services/core_toml.py`（`GetTomlValues`、`TomlGenerator`、`verify_toml`）
-- 模板路径约定：`app/services/core_registry.py`（`TEMPLATES_DIR`）
+- TOML 解析与校验：`app/core_toml.py`（`GetTomlValues`、`TomlGenerator`、`verify_toml`）
+- 模板路径约定：`app/core_registry.py`（`TEMPLATES_DIR`）
 - **落库 JSON 键仅为 `Input_label`**；`field` 不落库（见下文落库策略）
 
 **为何拆成两模块**：
@@ -16,7 +16,7 @@
 | 分层 | 模块 | 关注点 |
 |------|------|--------|
 | 存储 + UI 供给 | `core_store.py` | UI 纯字符串入 DB；`determiner` 拆分；Gradio 读 DB |
-| Excel 转换 | `core_transform.py` | 外部数据源读取；`worksheet` 上按定位写回值格 |
+| Excel 转换 | `core_transform.py` | 外部数据源读取；`work_sheet` 上按定位写回值格 |
 | TOML 与坐标校验 | `core_toml.py`（非本计划交付范围，但为上下游契约） | Load/Save；`verify_toml`；`offset_cell` |
 
 - **UI 只依赖 store 层**：textbox 纯字符串直接落库；`UiProvider` 从 DB 供给 labels + data。
@@ -27,10 +27,10 @@
 - 本计划**交付** `core_store.py` 与 `core_transform.py`；不另建 `tests/`
 - 仅 `import` 其他 `core_*.py` 及标准库；`core_transform` 另用 `openpyxl`
 - 不引用 `section_detector`、`excel_parser`、`excel_print`、`paste_parse_config` 等既有服务
-- 字段语义与 **worksheet 上标签→值格→`input_area`** 印证，严格遵循 `toml_config_design.md`
+- 字段语义与 **work_sheet 上标签→值格→`input_area`** 印证，严格遵循 `toml_config_design.md`
 - **`index`**：仅用于 UI textbox 按 `determiner` 拆分后的段序；**不是** Excel 列号，**不参与** `input_section` 的 k 组平移
 - 四个类之外不新增类；不设编排类
-- TOML **只处理**顶层 `worksheet` 指定的那一张表；**与 Print_sheet 及其他工作表无关**（打印区域读取若存在，不纳入 TOML 定位模型）
+- TOML **只处理**顶层 `work_sheet` 指定的那一张表；`print_sheet` 仅用于 UI 打印，不纳入 TOML 定位模型
 
 ## 落库策略：`insert_or_update` 以 TOML 覆盖 JSON
 
@@ -66,7 +66,7 @@ insert_or_update(incoming, cfg):
 
 | 键 | 作用 |
 |----|------|
-| `Input_label` | 在 `worksheet` 上**全表扫描**（每字段从 (1,1) 重扫）找标签格；**落库 JSON 键名**；`get_labels()` 用 |
+| `Input_label` | 在 `work_sheet` 上**全表扫描**（每字段从 (1,1) 重扫）找标签格；**落库 JSON 键名**；`get_labels()` 用 |
 | `value_from_label` | `up` / `down` / `left` / `right`：从标签格推算 **instance 0 填写值格**的方向 |
 | `value_offset` | 与 `value_from_label` 配合的步长（格数） |
 | `index` | **仅路径 A**：`determiner` 拆分后的段序（0-based）；`-1` 表示不参与 textbox 拆分 |
@@ -78,7 +78,7 @@ insert_or_update(incoming, cfg):
 
 **标签与 `input_area` 无关联**：找标签**只认** `Input_label` 文本；`input_area` **不参与**找标签。
 
-1. 在 `worksheet` 指定表上，对每个 `Input_label` 扫描得标签格 `(label_row, label_col)`（trim 后完全相等；0 个或多个匹配 → `verify_toml` 失败）。
+1. 在 `work_sheet` 指定表上，对每个 `Input_label` 扫描得标签格 `(label_row, label_col)`（trim 后完全相等；0 个或多个匹配 → `verify_toml` 失败）。
 2. 值格：`(value_row, value_col) = offset_cell(label_row, label_col, value_from_label, value_offset)`。
 3. **instance 0** 的值格**必须**落在 `[[input_section]].input_area` 矩形内，否则记入 `out_of_area_labels`。
 4. **标签格坐标固定**；`move_to` / `offset` **只平移**第 k≥1 组的**填写值格**，不平移标签。
@@ -116,6 +116,20 @@ Gradio 提供一个 **textbox**，用户输入**一整段纯字符串**，原样
 
 `core_store`：`split_by_determiner` → `record_from_textbox` → `incoming`（局部 `dict[Input_label]`）→ `insert_or_update(incoming, cfg)`
 
+#### UI 主键 blur 自动查源（NiceGUI）
+
+`id=true` 字段（由 `resolve_db_id(cfg)` 推断主键 `Input_label`，如 `P.O. No.`）在 **失去焦点** 时触发外部数据源查行，**无需额外按钮**：
+
+1. **模板激活**：若 TOML `[[sources]]` 含 Google Sheet URL 且 `credentials/` 已授权，`AutoConnect.run()` 自动 `connect()`，会话内保留 `SheetOperation`（`session.google_op`）。
+2. **blur 顺序**（`nicegui_ui/components/id_lookup.py`）：
+   - `suppress_id_search` 为真 → 消费并跳过（粘贴/表格选行后避免重复查）。
+   - `db.query_by_id` 若已有本地行 → `ui.dialog`：`从数据源重新读取`（`fetch_from_source`）或 `从数据库读取`。
+   - 否则 → `fetch_from_source`：优先 `google_op.build_import_rows([id])`（内存中已加载的 Sheet）；若无 Google 连接则 `Template2DB.fetch_row_by_id`（本地 xlsx 路径）。
+3. **合并规则**：查源结果与 `template_defaults` 合并后写入 `session.draft`（与 Google Tab 导入选中行一致）。
+4. **查行键**：与路径 B 相同——`id_lookup_keys`（`field` 优先，否则 `Input_label`），全局 OR。
+
+本地 `records.id` 仍由 `resolve_db_id` + `incoming` 推导；查源只填充 `draft`，不直接写 DB（「下一行」「另存为」时才 `persist_fields`）。
+
 ### 路径 B：外部数据源表 → 标准记录（`Template2DB` 主责）
 
 从 `[[sources]]` 配置的文件 / Google Sheet 读取标准数据库结构工作表。
@@ -136,7 +150,8 @@ Gradio 提供一个 **textbox**，用户输入**一整段纯字符串**，原样
 
 | 键 | 使用方 | 作用 |
 |----|--------|------|
-| `worksheet` | `core_toml` / `core_transform` | **唯一**参与扫描与读写的模板表名 |
+| `work_sheet` | `core_toml` / `core_transform` | **唯一**参与扫描与读写的模板表名 |
+| `print_sheet` | `core_transform` / UI 打印行 | UI 打印区解析与内存渲染的工作表（非 `work_sheet`） |
 | `input_section` | `core_toml` / `core_transform` | 单条；instance 0 值区 + 多组值格平移 |
 | `sources` | `Template2DB` | `source_file` 别名 → 路径 |
 | `determiner` | `core_store` | textbox 拆分 |
@@ -157,7 +172,7 @@ Gradio 提供一个 **textbox**，用户输入**一整段纯字符串**，原样
 
 ## 模块结构
 
-### `app/services/core_store.py` — UI 字符串与 DB
+### `app/core_store.py` — UI 字符串与 DB
 
 | 类 | 职责 |
 |----|------|
@@ -181,14 +196,14 @@ Gradio 提供一个 **textbox**，用户输入**一整段纯字符串**，原样
   - 使用当前年份作为扩展名的一部分
 例如：模板名字是"sample_template.xlsx"，今年是2026年。所以默认的数据库名字就是`sample_template.A2026`。如果用户手工继续创建，但是在同一年，那就是`sample_template.B2026`;如果用户在2027年手工通过UI想创建新的数据库，那就是`sample_template.A2027`.
 
-数据库放置在`temp`文件夹中。最新的数据总是写入创建的扩展名数据库中。
+数据库与 TOML 配置放在同一 sidecar 目录：`templates/{template_id}/`（例如 `templates/ginger_lots/ginger_lots.A2026` 与 `ginger_lots.toml` 同级）。当前写入目标由同目录下的 `{template_id}.active` 指针文件记录扩展名 token（如 `A2026`）。**不再使用** `temp/` 存放数据库。
 
-### `app/services/core_transform.py` — 数据源读取与 Excel
+### `app/core_transform.py` — 数据源读取与 Excel
 
 | 类 | 职责 |
 |----|------|
 | `Template2DB` | 外部数据源 → `incoming`（`dict[Input_label]`，可缺键） |
-| `ExcelWriter` | 按 `verify_toml` 的 `located` + k 组平移读写 **值格**；另存；`get_print_areas`（Print_sheet，非 TOML 定位范围） |
+| `ExcelWriter` | 按 `verify_toml` 的 `located` + k 组平移读写 **值格**；另存；`get_print_areas`（`print_sheet`，非 TOML 定位范围） |
 
 不 import `core_store`。
 
@@ -238,7 +253,8 @@ rows = ui.get_data()
 records (id INTEGER PRIMARY KEY, data TEXT NOT NULL)
 ```
 
-- 文件路径：`temp/{template_id}.{Letter}{Year}`（见上文 db 命名规则）
+- 文件路径：`templates/{template_id}/{template_id}.{Letter}{Year}`（见上文 db 命名规则；与 `{template_id}.toml` 同目录）
+- 当前库指针：`templates/{template_id}/{template_id}.active`（内容为 `A2026` 等 token）
 - 禁止后缀：`.db`、`.sqlite`、`.sql`
 
 ### `records.id`（行主键）
@@ -246,7 +262,7 @@ records (id INTEGER PRIMARY KEY, data TEXT NOT NULL)
 - **查询与 UPSERT 以 SQLite 列 `records.id` 为准**（不依赖解析 `data` 内的键）。
 - 生效的 **`db_id`**（`Input_label`）由 `core_toml.resolve_db_id(cfg)` 解析：单条 `id=true` 时自动推断；多条 `id=true` 时取顶层 `db_id`；无 `id=true` 时为 `null`。
 - 若 `resolve_db_id(cfg)` 非空，且本次 `incoming` 中该 **`Input_label` 有有效值**，则 `records.id` 取该值（规范化后）。
-- 若 `resolve_db_id(cfg)` 为 `null`，或本次未提供有效业务 ID，则 `records.id` 由数据库**自动生成**（如 `uuid.uuid4().int >> 64`）。
+- 若 `resolve_db_id(cfg)` 为 `null`，或本次未提供有效业务 ID，则 `records.id` 由 `_auto_records_id()` 自动生成（uuid 低 63 位，适配 SQLite INTEGER）。
 - `db_id` 所指的 `Input_label`（如 `ID#`）**同样写入** `data` JSON，与 `records.id` 在有业务 ID 时数值一致。
 
 ### `data` JSON（业务列）
@@ -284,8 +300,46 @@ records (id INTEGER PRIMARY KEY, data TEXT NOT NULL)
 |------|------|
 | 定位前提 | 调用方已 `verify_toml` 通过；使用 `located[Input_label]` 的 instance 0 值格坐标 |
 | 读填写值 | 对 instance k，在 instance 0 值格上应用 k 次 `input_section.move_to`/`offset` 后读单元格 |
+| 批量读实例 | `read_instances(excel_path)`：从 instance 0 起逐组读 `located` 值格，遇全空组停止；供输入 Tab **装载文件** 回填 `session_rows` |
 | 写回 | 向同上坐标写入；**不用 `index` 当列号**；**不用**「区域内表头行匹配 `Input_label`」作主路径 |
-| 打印区域 | `ws.print_area`（多在 Print_sheet；**不在** TOML `worksheet` 定位模型内） |
+| 打印区域 | `print_sheet` 上全部 `ws.print_area`（逗号分隔多区）；`get_print_areas()` 读格值指纹去重；**不在** TOML `work_sheet` 定位模型内 |
+| 打印渲染 | `render_print_area_image()`：openpyxl 读区 + Pillow 内存绘图；**不**启动 Excel / `os.startfile` |
+
+**装载文件 → 编辑 → 另存为**（输入 Tab）：
+
+```
+exports/.../*.xlsx ──► ExcelWriter.read_instances ──► session_rows（替换或追加，受 input_capacity 限制）
+                                                              │
+                                                              ▼
+                                                    用户编辑 / 下一行
+                                                              │
+                                                              ▼
+                                              ExcelWriter.write_back ──► exports/.../新时间戳.xlsx
+```
+
+**打印（输入 Tab，无 Excel）**：
+
+```
+exports/.../*.xlsx
+    │
+    ▼
+ExcelWriter.get_print_areas(path)
+    │  parse print_sheet.ws.print_area（可多段 A1 范围）
+    │  每段读单元格显示文本 → content_key
+    │  相同 content_key 只保留一条 → UI 下拉
+    ▼
+用户选 label → handle_print
+    │
+    ▼
+ExcelWriter.render_print_area_png_bytes(path, sheet, area)  → PNG bytes（内存）
+    │
+    ▼
+_open_print_preview：ui.image(data URL) 对话框
+    ├─ 「打印」→ ui.run_javascript('window.print()')（浏览器打印，跨平台）
+    └─ 「下载 PNG」→ ui.download(bytes)，不写临时 xlsx/图像文件
+```
+
+约束：**禁止** pywin32 / `os.startfile(..., 'print')` / win32com Excel / subprocess 调 Excel；打印逻辑不参与 TOML 定位。渲染仅用 openpyxl + Pillow（pandas 不参与绘图）。
 
 `ExcelWriter` 应对齐：`offset_cell` 语义与 `core_toml` 共用；k 组值格平移与 `input_section` 一致。过渡实现若仍含 `detect_areas` / `read_area_rows`（旧 `sections` 表头模型），视为**待废弃**，以本文与 `toml_config_design.md` 为准。
 

@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
 
 
@@ -242,7 +242,7 @@ class SortTemplates:
 
     def _assign_ID(self, template_file_path: Path) -> str:
         """
-        为模板文件赋予稳定 ID，例如 templates/{id}/{id}.paste.yaml。
+        为模板文件赋予稳定 ID（全小写 + 下划线，见 templates/{id}/{id}.toml）。
         规则：ID是全小写，只用下划线，且去掉扩展名
         input: template_file_path: templates/sales-order template.xlsx
         output: ID: "sales_order_template"

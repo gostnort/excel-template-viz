@@ -58,14 +58,30 @@
       min-height: 36px;
     }
     .ghost-note { font-size: 11px; color: #888; margin: 0 0 16px 4px; }
-    /* 标签 + 输入 */
-    .field-row {
-      display: grid; grid-template-columns: 140px 1fr; gap: 12px;
-      align-items: center; margin-bottom: 10px;
+    /* 动态字段：弹性多列容器（默认 3 列）；每格内标签在左、输入在右 */
+    .field-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px 20px;
+      width: 100%;
+      max-width: 100%;
     }
-    .field-label { text-align: right; }
+    .field-cell {
+      display: grid;
+      grid-template-columns: 100px minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+      min-width: 0;
+    }
+    .field-label { text-align: right; white-space: nowrap; }
     .field-label.primary::after { content: " ★主键"; font-size: 11px; color: #555; }
-    .input-box { border: 1px solid #000; padding: 6px 8px; min-height: 32px; }
+    .input-box {
+      border: 1px solid #000; padding: 6px 8px; min-height: 32px;
+      min-width: 0; width: 100%;
+    }
+    .field-grid-hint {
+      font-size: 11px; color: #666; margin: 0 0 10px 2px;
+    }
     /* 本次输入列表 */
     .session-list { margin-top: 18px; }
     .session-list .title { font-weight: bold; margin-bottom: 6px; }
@@ -134,37 +150,40 @@
       <div class="ghost-input">粘贴整行数据…</div>
       <div class="ghost-note">隐藏样式输入框：切换焦点后按分隔符拆分，自动填入下方各项</div>
 
-      <!-- 标签 + 输入 -->
-      <div class="field-row">
-        <span class="field-label primary">ID#</span>
-        <div class="input-box">8129 ←切换焦点：库有旧数据则询问来源</div>
+      <!-- 动态字段：默认 3 列弹性网格，宽屏有效利用横向空间 -->
+      <p class="field-grid-hint">字段区使用 <code>.field-grid</code>（CSS Grid，默认 3 列）；每项 <code>.field-cell</code> 内标签左、输入右。窄屏可降为 2 列 / 1 列。</p>
+      <div class="field-grid">
+        <div class="field-cell">
+          <span class="field-label primary">ID#</span>
+          <div class="input-box">8129</div>
+        </div>
+        <div class="field-cell">
+          <span class="field-label">姓名</span>
+          <div class="input-box">Clark Kent</div>
+        </div>
+        <div class="field-cell">
+          <span class="field-label">报告日期</span>
+          <div class="input-box">1978/02/29</div>
+        </div>
+        <div class="field-cell">
+          <span class="field-label">近期问题</span>
+          <div class="input-box">recreate himself…</div>
+        </div>
+        <div class="field-cell">
+          <span class="field-label">处理意见</span>
+          <div class="input-box"></div>
+        </div>
+        <div class="field-cell">
+          <span class="field-label">生效日期</span>
+          <div class="input-box"></div>
+        </div>
+        <div class="field-cell">
+          <span class="field-label">签字</span>
+          <div class="input-box"></div>
+        </div>
       </div>
       <div class="modal-hint">
-        （库内已有该 ID 时弹窗）从数据源重新读取 &nbsp;|&nbsp; 从数据库读取
-      </div>
-      <div class="field-row">
-        <span class="field-label">姓名</span>
-        <div class="input-box">Clark Kent</div>
-      </div>
-      <div class="field-row">
-        <span class="field-label">近期问题</span>
-        <div class="input-box">recreate himself…</div>
-      </div>
-      <div class="field-row">
-        <span class="field-label">报告日期</span>
-        <div class="input-box">1978/02/29</div>
-      </div>
-      <div class="field-row">
-        <span class="field-label">处理意见</span>
-        <div class="input-box"></div>
-      </div>
-      <div class="field-row">
-        <span class="field-label">生效日期</span>
-        <div class="input-box"></div>
-      </div>
-      <div class="field-row">
-        <span class="field-label">签字</span>
-        <div class="input-box"></div>
+        ID# 切换焦点：库有旧数据则询问来源 — 从数据源重新读取 &nbsp;|&nbsp; 从数据库读取
       </div>
 
       <!-- 本次输入列表（最后一个 input 下、分隔线之上） -->
@@ -180,8 +199,13 @@
           </tbody>
         </table>
         <div class="list-btns">
-          <div class="btn">清空</div>
-          <div class="btn">删除</div>
+          <div class="list-btns-start">
+            <div class="btn">装载文件</div>
+          </div>
+          <div class="list-btns-end">
+            <div class="btn">清空</div>
+            <div class="btn">单个删除</div>
+          </div>
         </div>
       </div>
 
@@ -211,7 +235,7 @@
   线框 · 主界面（输入）<br>
   左：模板侧边栏（拖拽调宽 / 单击折叠 / 宽度记忆）<br>
   中：竖向拖拽条（悬停可见）<br>
-  右：四 Tab（输入 / 输入配置 / 存储配置 / Google 连接）<br>
+  右：四 Tab；输入 Tab 字段区默认 3 列 <code>.field-grid</code><br>
   详见 docs/nicegui_ui/nicegui_ui_plan.md
 </div>
 

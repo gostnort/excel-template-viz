@@ -9,10 +9,12 @@ credentials/
 *-service-account*.json
 oauth_token.json
 client_secret*.json
-app/oauth/
 app/models/*
 
-# 本地模板副本（排除用户模板文件，只保留 readme.txt）
+# NiceGUI 用户会话存储（运行时生成，勿提交）
+.nicegui/
+
+# 本地模板数据（仅保留 README.txt 入库）
 templates/*
 !templates/README.txt
 

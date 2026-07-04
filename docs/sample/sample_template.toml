@@ -1,6 +1,7 @@
 # 支持 \t(tab) 等转义字符和其他单字符分隔符
 determiner = "\t"       
-worksheet = "Input_sheet"
+work_sheet = "Input_sheet"
+print_sheet = "Print_sheet"
 
 # 外部数据源；路径可为本地文件、网页链接或 Google Sheet
 # 首次生成时写入空值 ""，真实路径由专用配置页写入后再落盘

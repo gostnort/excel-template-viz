@@ -53,7 +53,7 @@ a stable, maintainable NiceGUI UI that replaces the Gradio UI layer.
 
 ### 2.3 Use `app.storage.user` for persistent UI preferences
 
-- Use `pref_key(name)` from `nicegui_ui.components.auth` (e.g. `user:admin:sidebar_width`).
+- Use `Auth.pref_key(name)` from `nicegui_ui.components.general` (e.g. `user:admin:sidebar_width`).
 - Sidebar width, collapsed state, last selected DB suffix.
 - Requires `storage_secret` in `ui.run()`.
 

@@ -19,7 +19,15 @@
     .section { border: 1px solid #000; margin-bottom: 14px; }
     .section-title { border-bottom: 1px solid #000; padding: 6px 10px; font-weight: bold; background: #f5f5f5; }
     .section-body { padding: 10px; }
-    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; }
+    .section-body.sheet-panel { position: relative; }
+    .sheet-toolbar-bar {
+      display: flex; width: 100%; align-items: center; margin-top: 8px; flex-wrap: nowrap;
+    }
+    .sheet-toolbar-bar .toolbar-main {
+      display: flex; flex-wrap: nowrap; gap: 10px; align-items: center;
+    }
+    .sheet-toolbar-bar .toolbar-trash-anchor { margin-left: auto; flex-shrink: 0; }
+    .btn.linkish { min-width: auto; width: auto; padding: 0 10px; font-weight: normal; font-size: 12px; }
     .row:last-child { margin-bottom: 0; }
     .field-label { min-width: 88px; }
     .ctrl { border: 1px solid #000; padding: 6px 8px; min-height: 32px; display: inline-flex; align-items: center; }
@@ -54,85 +62,71 @@
 
   <div class="tab-body">
     <div class="section">
-      <div class="section-title">OAuth 授权</div>
+      <div class="section-title">授权与连接</div>
       <div class="section-body">
         <div class="row">
-          <span class="field-label">客户端 JSON</span>
-          <div class="file-pick">选择 oauth_client.json …</div>
-          <div class="btn">上传</div>
-        </div>
-        <div class="row">
-          <span class="field-label">授权状态</span>
-          <div class="ctrl medium status-ok">✅ 已授权</div>
-          <div class="btn">授权 Google 账号</div>
-        </div>
-        <p class="hint">首次授权打开浏览器；之后复用 token 文件。未授权时本 Tab 表格不可用。</p>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">连接状态（模板激活时自动连接）</div>
-      <div class="section-body">
-        <div class="row">
-          <span class="field-label">Google 连接</span>
-          <div class="ctrl medium status-ok">已连接 · source1 / Sheet1 · 3 行</div>
-        </div>
-        <div class="row">
-          <span class="field-label">主 ID 表</span>
-          <div class="ctrl wide">source1 / Sheet1（TOML 第一个 id=true）</div>
+          <div class="btn">选择授权文件</div>
+          <div class="btn primary">连接</div>
+          <div class="btn">删除</div>
         </div>
         <p class="hint">
-          每次切换模板：先 disconnect 旧连接，再按新 TOML [[sources]] 自动 connect（已授权且 URL 可用时）。<br>
-          sources 仅在「输入配置」Tab 维护；切换模板不保留上一模板的 sheet 内存。
+          <strong>选择授权文件</strong>：系统文件对话框选择 OAuth 客户端 JSON → 写入 <code>credentials/oauth_client.json</code>，「连接」变为可用。<br>
+          <strong>连接</strong>：首次可能打开浏览器完成 OAuth；成功后 <code>AutoConnect(conn).run(cfg)</code> 加载 TOML 中 id 所在工作表（无 id 则第一个 field_rules 需要的工作表）并刷新下方 HTML5 表。<br>
+          <strong>删除</strong>：<code>cancel_auth()</code>，移除授权文件并清空连接。<br>
+          模板激活后若已存在授权文件，自动调用 <code>core_connect.AutoConnect.run()</code>，无需再点「连接」。
         </p>
       </div>
     </div>
 
     <div class="section">
-      <div class="section-title">主 ID 工作表（多选 + 预览，同一张 HTML5 表）</div>
+      <div class="section-title">主 ID 工作表</div>
       <div class="section-body">
         <table class="t">
           <thead>
             <tr>
               <th class="chkcol">☐</th>
-              <th>ID</th>
-              <th>姓名</th>
-              <th>部门</th>
+              <th>PO</th>
+              <th>recv. date</th>
+              <th>Container</th>
               <th>…</th>
             </tr>
           </thead>
           <tbody>
             <tr class="selected">
               <td class="chkcol">☑</td>
-              <td>8129</td>
-              <td>Clark Kent</td>
-              <td>Metropolis</td>
+              <td>10034</td>
+              <td>3/15/2025</td>
+              <td>…</td>
               <td>…</td>
             </tr>
             <tr class="selected">
               <td class="chkcol">☑</td>
-              <td>250</td>
-              <td>狗蛋</td>
-              <td>执法堂</td>
+              <td>9982</td>
+              <td>3/14/2025</td>
+              <td>…</td>
               <td>…</td>
             </tr>
             <tr>
               <td class="chkcol">☐</td>
-              <td>301</td>
+              <td>9971</td>
               <td>…</td>
               <td>…</td>
               <td>…</td>
             </tr>
           </tbody>
         </table>
-        <div class="row" style="margin-top:8px">
-          <div class="btn">全选</div>
-          <div class="btn">取消全选</div>
-          <div class="btn primary">导入选中行</div>
+        <div class="sheet-toolbar-bar">
+          <div class="toolbar-main">
+            <div class="btn">全选</div>
+            <div class="btn">取消全选</div>
+            <div class="btn primary">导入选中行</div>
+          </div>
+          <div class="btn linkish toolbar-trash-anchor">屏蔽所选数据</div>
         </div>
         <p class="hint">
-          表格数据 = <code>fetch_fields</code> 的 <code>sheet_rows</code> 浅拷贝（主 ID 表原始列）。<br>
-          勾选行高亮；「导入选中行」→ 对选中 ID 调用 <code>fetch_fields</code> → <code>ui.persist_fields</code> 写入 DB → 追加 <code>session_rows</code> →「输入」Tab 本次已录入列表同步可见。
+          数据来自 <code>session.google_table</code>；已入库 ID 由 <code>db.query_by_id</code> 判定并隐藏；<code>trash_ids</code> 来自 <code>templates/{id}/{id}.history.json</code>（无 <code>processed_ids</code>），用于避免大量无关行涌入主 ID 表。<br>
+          勾选行载入「输入」Tab <code>draft</code>；「导入选中行」合并 <code>template_defaults</code> 后 persist。<br>
+          右下角 <strong>屏蔽所选数据</strong>：将当前勾选的可见行主 ID 追加到 <code>trash_ids</code> 并写回 history 文件，对应行随即从表中隐藏。
         </p>
       </div>
     </div>
@@ -140,10 +134,9 @@
 </div>
 
 <div class="legend">
-  线框 · Google 连接（google_config）<br>
-  sources 仅在输入配置 Tab · 切换模板 disconnect→connect<br>
-  单表多选+预览 · 导入选中行 → DB + session_rows<br>
-  详见 docs/nicegui_ui/nicegui_ui_plan.md
+  线框 · Google 连接<br>
+  选择授权文件 · 连接 · 删除 · AutoConnect.run()<br>
+  tab_google 仅 HTML5 表 · 详见 docs/connect_google.md
 </div>
 
 </body>

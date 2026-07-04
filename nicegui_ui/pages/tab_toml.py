@@ -1,5 +1,5 @@
 from nicegui import ui
-from nicegui_ui.components.session import SessionRegistry
+from nicegui_ui.components.general import SessionRegistry
 
 @ui.refreshable
 def render_toml_tab():
@@ -36,7 +36,7 @@ def render_toml_tab():
         with ui.element('div').classes('section'):
             ui.label('高级（TOML 全文）').classes('section-title')
             with ui.element('div').classes('section-body'):
-                from app.services.core_toml import _core_toml_path
+                from app.core_toml import _core_toml_path
                 toml_path = _core_toml_path(session.template_id) if session.template_id else None
                 try:
                     with open(toml_path, 'r', encoding='utf-8') as f:
@@ -62,13 +62,13 @@ def render_toml_tab():
 
 def trigger_toml_save(session):
     try:
-        from app.services.core_toml import load_toml, verify_toml
+        from app.core_toml import load_toml, verify_toml
         session.cfg = load_toml(session.template_id)
         session.verify_report = verify_toml(session.template_path, session.cfg)
         
         if session.verify_report.get('ok'):
-            from app.services.core_store import SecureSQLite, default_db_path, UiProvider
-            from app.services.core_transform import Template2DB, ExcelWriter
+            from app.core_store import SecureSQLite, default_db_path, UiProvider
+            from app.core_transform import Template2DB, ExcelWriter
             
             session.located = session.verify_report.get('located', {})
             db_path = default_db_path(session.template_id)
@@ -79,7 +79,7 @@ def trigger_toml_save(session):
                 
             session.db = SecureSQLite(db_path)
             session.ui_provider = UiProvider(session.cfg, session.db)
-            session.t2db = Template2DB(session.cfg, session.db)
+            session.t2db = Template2DB(session.cfg)
             session.writer = ExcelWriter(session.cfg, session.located)
             
             session.input_capacity = session.writer.max_instance_count(session.template_path)

@@ -11,7 +11,7 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter, range_boundaries
 from tomlkit import aot, document, string, table
 
-from app.services.core_registry import TEMPLATES_DIR
+from app.core_registry import TEMPLATES_DIR
 
 
 CORE_CONFIG_SUFFIX = ".toml"
@@ -269,6 +269,21 @@ def _optional_string(value: Any) -> str | None:
     return str(value).strip()
 
 
+def _resolve_work_sheet(raw: dict[str, Any]) -> str | None:
+    """
+    函数名: _resolve_work_sheet
+    作用: 解析顶层 work_sheet；兼容旧键 worksheet
+    输入:
+        raw (dict[str, Any]) - tomlkit 解析得到的字典
+    输出:
+        str | None - 数据录入工作表名
+    """
+    work_sheet = _optional_string(raw.get("work_sheet"))
+    if work_sheet:
+        return work_sheet
+    return _optional_string(raw.get("worksheet"))
+
+
 def _parse_sources(raw_sources: Any) -> list[dict[str, str | None]]:
     """
     函数名: _parse_sources
@@ -353,7 +368,7 @@ def _field_from_dict(raw: Any) -> TomlDefault | None:
 def _config_from_dict(raw: dict[str, Any]) -> GetTomlValues | None:
     """
     函数名: _config_from_dict
-    作用: 由解析后的 TOML 字典构造 GetTomlValues；缺 worksheet/input_section/fields 则失败
+    作用: 由解析后的 TOML 字典构造 GetTomlValues；缺 work_sheet/input_section/fields 则失败
     输入:
         raw (dict[str, Any]) - tomlkit 解析得到的字典
     输出:
@@ -367,9 +382,10 @@ def _config_from_dict(raw: dict[str, Any]) -> GetTomlValues | None:
             if rule:
                 field_rules.append(rule)
     input_section = _input_section_from_dict(raw.get("input_section"))
-    worksheet = _optional_string(raw.get("worksheet"))
-    # 三项必备：worksheet、单条 input_section、至少一条 fields
-    if not worksheet or input_section is None or not field_rules:
+    work_sheet = _resolve_work_sheet(raw)
+    print_sheet = _optional_string(raw.get("print_sheet"))
+    # 三项必备：work_sheet、单条 input_section、至少一条 fields
+    if not work_sheet or input_section is None or not field_rules:
         return None
     determiner = str(raw.get("determiner", DEFAULT_DETERMINER)) or DEFAULT_DETERMINER
     db_id = _optional_string(raw.get("db_id"))
@@ -377,7 +393,8 @@ def _config_from_dict(raw: dict[str, Any]) -> GetTomlValues | None:
         determiner=determiner,
         sources=_parse_sources(raw.get("sources")),
         field_rules=field_rules,
-        worksheet=worksheet,
+        work_sheet=work_sheet,
+        print_sheet=print_sheet,
         input_section=input_section,
         db_id=db_id,
     )
@@ -388,14 +405,18 @@ def _dict_to_toml(config: dict[str, Any]) -> str:
     函数名: _dict_to_toml
     作用: 把配置字典序列化为严格 TOML 1.0 文本；未映射可选键写空串 ""，不写 null
     输入:
-        config (dict[str, Any]) - 含 determiner/worksheet/sources/input_section/fields
+        config (dict[str, Any]) - 含 determiner/work_sheet/print_sheet/sources/input_section/fields
     输出:
         str - 序列化后的 TOML 文本（以换行结尾）
     """
-    # ---- 顶层标量：determiner 与 worksheet ----
+    # ---- 顶层标量：determiner、work_sheet、print_sheet ----
     doc = document()
     doc["determiner"] = str(config.get("determiner", DEFAULT_DETERMINER))
-    doc["worksheet"] = str(config.get("worksheet", ""))
+    work_sheet = config.get("work_sheet", config.get("worksheet", ""))
+    doc["work_sheet"] = str(work_sheet or "")
+    print_sheet = config.get("print_sheet")
+    if print_sheet is not None and str(print_sheet).strip():
+        doc["print_sheet"] = str(print_sheet).strip()
     db_id = config.get("db_id")
     if db_id is not None and str(db_id).strip():
         doc["db_id"] = str(db_id).strip()
@@ -711,6 +732,27 @@ def _make_report(
     ).to_dict()
 
 
+def _validate_field_regexes(cfg: GetTomlValues) -> list[str]:
+    """
+    函数名: _validate_field_regexes
+    作用: 校验各 [[fields]].regex 是否为合法 Python 正则；失败时带上 Input_label
+    输入:
+        cfg (GetTomlValues) - 已加载配置
+    输出:
+        list[str] - 错误信息列表，每项含 Input_label
+    """
+    errors: list[str] = []
+    for rule in cfg.field_rules:
+        pattern = rule.regex
+        if _is_unmapped(pattern):
+            continue
+        try:
+            re.compile(str(pattern))
+        except re.error as exc:
+            errors.append(f"{rule.Input_label}: 正则表达式无效 ({pattern!r}): {exc}")
+    return errors
+
+
 def load_toml(template_id: str) -> GetTomlValues | None:
     """
     函数名: load_toml
@@ -748,19 +790,22 @@ def verify_toml(template_path: Path, cfg: GetTomlValues) -> dict[str, Any]:
     located: dict[str, dict[str, int]] = {}
     errors: list[str] = []
     id_info = _validate_id_rules(cfg)  # TOML 层 id 规则，不依赖 xlsx
-    if not cfg.worksheet:
-        return _make_report(False, [], [], [], {}, ["worksheet is required"], id_info)
+    regex_errors = _validate_field_regexes(cfg)
+    errors.extend(regex_errors)
+    if not cfg.work_sheet:
+        errors.append("work_sheet is required")
+        return _make_report(False, [], [], [], {}, errors, id_info)
     wb = load_workbook(template_path, read_only=True, data_only=True)
     try:
-        if cfg.worksheet not in wb.sheetnames:
-            return _make_report(
-                False, [], [], [], {}, [f"worksheet not found: {cfg.worksheet}"], id_info
-            )
-        ws = wb[cfg.worksheet]
+        if cfg.work_sheet not in wb.sheetnames:
+            errors.append(f"work_sheet not found: {cfg.work_sheet}")
+            return _make_report(False, [], [], [], {}, errors, id_info)
+        ws = wb[cfg.work_sheet]
         try:
             input_area = _parse_area(cfg.input_section.input_area)
         except ValueError as exc:
-            return _make_report(False, [], [], [], {}, [f"invalid input_area: {exc}"], id_info)
+            errors.append(f"invalid input_area: {exc}")
+            return _make_report(False, [], [], [], {}, errors, id_info)
         label_map, duplicate_texts = _scan_worksheet_labels_diagonal(ws)
         for rule in cfg.field_rules:
             if rule.Input_label not in label_map:
@@ -801,18 +846,20 @@ def ensure_exists(
 ) -> bool:
     """
     函数名: ensure_exists
-    作用: TOML 不存在时按标准范式生成默认配置
+    作用: TOML 不存在或无法解析为合法配置时，按标准范式生成默认配置
     输入:
         template_id (str) - 模板唯一标识
         template_path (Path) - 模板 xlsx 路径
         worksheet_name (str | None) - 目标工作表名，None 时取 active sheet
     输出:
-        bool - 已存在或生成成功返回 True
+        bool - 已有合法 TOML 或生成成功返回 True
     """
     path = _core_toml_path(template_id)
-    if path.exists():
+    if path.exists() and load_toml(template_id) is not None:
         return True
-    return TomlGenerator().Reset(template_id, template_path, worksheet_name)
+    if not TomlGenerator().Reset(template_id, template_path, worksheet_name):
+        return False
+    return load_toml(template_id) is not None
 
 
 
@@ -857,9 +904,21 @@ class TomlGenerator:
         resolved_name, ws, wb = self._worksheet(template_path, worksheet_name)
         try:
             headers = _headers_from_first_row(ws)  # 第 1 行非空标签
+            if not headers:
+                # active/指定表无表头时，改用首个第 1 行有标签的工作表
+                for name in wb.sheetnames:
+                    if name == resolved_name:
+                        continue
+                    alt_ws = wb[name]
+                    alt_headers = _headers_from_first_row(alt_ws)
+                    if alt_headers:
+                        resolved_name = name
+                        ws = alt_ws
+                        headers = alt_headers
+                        break
             fields = [
-                TomlDefault(Input_label=label, index=idx).to_dict()  # index 取列序 base 0
-                for idx, (_col, label) in enumerate(headers)
+                TomlDefault(Input_label=label, index=-1).to_dict()  # 默认不参与文本拆分，见 toml_config_design
+                for _idx, (_col, label) in enumerate(headers)
             ]
             # input_area 取标签覆盖的列范围、固定第 2 行
             if headers:
@@ -871,7 +930,8 @@ class TomlGenerator:
             input_area = f"{get_column_letter(start_col)}2:{get_column_letter(end_col)}2"
             return {
                 "determiner": DEFAULT_DETERMINER,
-                "worksheet": resolved_name,
+                "work_sheet": resolved_name,
+                "print_sheet": "",
                 "sources": [dict(item) for item in DEFAULT_SOURCES],
                 "input_section": InputSection(input_area=input_area).to_dict(),
                 "fields": fields,
@@ -927,7 +987,8 @@ class GetTomlValues:
         determiner: str = DEFAULT_DETERMINER,
         sources: list[dict[str, str | None]] | None = None,
         field_rules: list[TomlDefault] | None = None,
-        worksheet: str | None = None,
+        work_sheet: str | None = None,
+        print_sheet: str | None = None,
         input_section: InputSection | None = None,
         db_id: str | None = None,
     ) -> None:
@@ -938,7 +999,8 @@ class GetTomlValues:
             determiner (str) - 文本拆分分隔符
             sources (list[dict[str, str | None]] | None) - 数据源别名列表
             field_rules (list[TomlDefault] | None) - 字段规则列表
-            worksheet (str | None) - 目标工作表名
+            work_sheet (str | None) - 数据录入 / TOML 定位工作表名
+            print_sheet (str | None) - UI 打印区选择所用工作表名
             input_section (InputSection | None) - 单条区段
             db_id (str | None) - 本地 records 主键对应的 Input_label；多 id 时必填
         输出:
@@ -947,7 +1009,8 @@ class GetTomlValues:
         self.determiner = determiner
         self.sources = sources if sources is not None else [dict(item) for item in DEFAULT_SOURCES]
         self.field_rules = field_rules if field_rules is not None else []
-        self.worksheet = worksheet
+        self.work_sheet = work_sheet
+        self.print_sheet = print_sheet
         self.input_section = input_section if input_section is not None else InputSection("A2:A2")
         self.db_id = db_id
 
@@ -982,7 +1045,7 @@ class GetTomlValues:
                 parsed = tomlkit.loads(cleaned)
             except tomlkit.exceptions.ParseError as exc:
                 raise ValueError(f"Invalid TOML: {exc}") from exc
-            # 结构须符合当前设计（有 worksheet/input_section/fields）
+            # 结构须符合当前设计（有 work_sheet/input_section/fields）
             if not isinstance(parsed, dict) or _config_from_dict(parsed) is None:
                 raise ValueError("TOML must match the current core_toml design")
             cleaned = TomlGenerator().ConfigToToml(parsed)  # 归一化后再写
@@ -1010,11 +1073,12 @@ class GetTomlValues:
         输入:
             无
         输出:
-            dict[str, Any] - 含 determiner/worksheet/sources/input_section/fields
+            dict[str, Any] - 含 determiner/work_sheet/print_sheet/sources/input_section/fields
         """
         return {
             "determiner": self.determiner,
-            "worksheet": self.worksheet,
+            "work_sheet": self.work_sheet,
+            "print_sheet": self.print_sheet,
             "db_id": self.db_id,
             "sources": [dict(item) for item in self.sources],
             "input_section": self.input_section.to_dict(),
@@ -1035,7 +1099,8 @@ def main() -> None:
     # ---- 1. 纯内存配置 → TOML 文本（不依赖任何 xlsx）----
     print("=== 1. memory serialization ===")
     demo = GetTomlValues(
-        worksheet="Input_sheet",
+        work_sheet="Input_sheet",
+        print_sheet="Print_sheet",
         field_rules=[
             TomlDefault(Input_label="ID#", index=0, field="ID", source_file="source1",
                         source_sheet="sheet1", id=True),
@@ -1046,7 +1111,7 @@ def main() -> None:
     )
     print(TomlGenerator().ConfigToToml(demo.ToDict()))
     # ---- 2. 样例模板：默认生成 + 文本回环解析 ----
-    repo_root = Path(__file__).resolve().parents[2]  # app/services/core_toml.py 上溯到仓库根
+    repo_root = Path(__file__).resolve().parents[1]
     sample_xlsx = repo_root / "docs" / "sample" / "sample_template.xlsx"
     if not sample_xlsx.is_file():
         print(f"[skip] 样例模板不存在: {sample_xlsx}")
@@ -1061,7 +1126,7 @@ def main() -> None:
     # ---- 3. verify_toml report ----
     print("=== 3. verify_toml report ===")
     cfg = reparsed if reparsed else demo
-    report = verify_toml(sample_xlsx, cfg)  # 在 worksheet 上搜标签并校验值格
+    report = verify_toml(sample_xlsx, cfg)  # 在 work_sheet 上搜标签并校验值格
     print(f"ok: {report['ok']}")
     print(f"missing_labels: {report['missing_labels']}")
     print(f"duplicate_labels: {report['duplicate_labels']}")
@@ -1091,7 +1156,7 @@ def main() -> None:
         ),
     ]
     cfg3 = GetTomlValues(
-        worksheet=cfg.worksheet,
+        work_sheet=cfg.work_sheet,
         field_rules=base_rules,
         input_section=InputSection(input_area="A2:G2", move_to="down", offset=1),
         sources=[dict(item) for item in cfg.sources],
@@ -1110,7 +1175,7 @@ def main() -> None:
         ),
     ]
     multi_cfg = GetTomlValues(
-        worksheet=cfg.worksheet,
+        work_sheet=cfg.work_sheet,
         field_rules=multi_rules,
         input_section=InputSection(input_area="A2:G2", move_to="down", offset=1),
         sources=[dict(item) for item in cfg.sources],
@@ -1128,7 +1193,7 @@ def main() -> None:
         ),
     ]
     dup_cfg = GetTomlValues(
-        worksheet=cfg.worksheet,
+        work_sheet=cfg.work_sheet,
         field_rules=dup_rules,
         input_section=InputSection(input_area="A2:G2", move_to="down", offset=1),
         sources=[dict(item) for item in cfg.sources],

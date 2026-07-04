@@ -29,7 +29,7 @@ alwaysApply: true
 
 ### Project layout
 
-- Production and install-time logic belongs under `app/` (e.g. `app/services/core_services.py`).
+- Production and install-time logic belongs under `app/` (e.g. `app/core_store.py`).
 - `tests/` is gitignored and never shipped; keep only pytest regressions there, importing from `app/`.
 - `plans` is put the temparay plans for engineering implementation
 
