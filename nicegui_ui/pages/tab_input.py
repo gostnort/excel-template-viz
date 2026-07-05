@@ -65,6 +65,77 @@ def _reset_draft_after_session_change(session) -> None:
         session.draft.update(session.template_defaults)
 
 
+def _clear_session_row_selection(session) -> None:
+    session.selected_session_index = None
+    session.selected_session_indices.clear()
+
+
+def _load_session_row_into_draft(session, idx: int) -> None:
+    session.selected_session_index = idx
+    session.draft = session.session_rows[idx].copy()
+    session.draft.pop('_index', None)
+    session.suppress_id_search = True
+    render_dynamic_fields.refresh()
+    render_session_table.refresh()
+
+
+@ui.refreshable
+def render_session_table(session, labels: list[str]) -> None:
+    """本次已录入：HTML5 表格 + 勾选列 + 行点击载入 draft。"""
+    checked = session.selected_session_indices
+    with ui.element('table').classes('records w-full'):
+        with ui.element('thead'):
+            with ui.element('tr'):
+                with ui.element('th').classes('chkcol'):
+                    ui.label('')
+                for lbl in labels:
+                    with ui.element('th'):
+                        ui.label(lbl)
+        with ui.element('tbody'):
+            if not session.session_rows:
+                with ui.element('tr'):
+                    with ui.element('td').props(f'colspan={len(labels) + 1}'):
+                        ui.label('（尚无录入行）').classes('text-gray-500')
+            for idx, row in enumerate(session.session_rows):
+                row_class = 'selected' if session.selected_session_index == idx else ''
+                with ui.element('tr').classes(row_class):
+                    with ui.element('td').classes('chkcol'):
+                        def on_toggle(event, row_idx: int = idx) -> None:
+                            if event.value:
+                                session.selected_session_indices.add(row_idx)
+                            else:
+                                session.selected_session_indices.discard(row_idx)
+                            render_session_table.refresh()
+                        ui.checkbox(
+                            value=idx in checked,
+                            on_change=on_toggle,
+                        ).props('dense')
+                    for lbl in labels:
+                        with ui.element('td').on(
+                            'click',
+                            lambda _e=None, row_idx=idx: _load_session_row_into_draft(session, row_idx),
+                        ):
+                            ui.label(str(row.get(lbl, '') or ''))
+
+
+def handle_delete_checked_session_rows(session) -> None:
+    """删除勾选的 session_rows 行（含空行/部分填写行）；仅内存列表，不写 DB。"""
+    indices = sorted(session.selected_session_indices, reverse=True)
+    if not indices:
+        ui.notify('请先勾选要删除的行', type='warning')
+        return
+    deleted = 0
+    for idx in indices:
+        if 0 <= idx < len(session.session_rows):
+            session.session_rows.pop(idx)
+            deleted += 1
+    _clear_session_row_selection(session)
+    session.current_instance_index = len(session.session_rows)
+    _reset_draft_after_session_change(session)
+    render_input_tab.refresh()
+    ui.notify(f'已删除 {deleted} 行', type='positive')
+
+
 def _apply_loaded_rows(session, rows: list[dict], replace: bool) -> int:
     """
     将装载的行写入 session_rows；返回实际写入行数。
@@ -80,6 +151,7 @@ def _apply_loaded_rows(session, rows: list[dict], replace: bool) -> int:
         session.session_rows.extend(cleaned[:remaining])
         allowed = cleaned[:remaining]
     session.selected_session_index = None
+    session.selected_session_indices.clear()
     session.current_instance_index = len(session.session_rows)
     _reset_draft_after_session_change(session)
     return len(allowed)
@@ -150,7 +222,7 @@ def handle_clear_session(session) -> None:
         ui.notify('列表已为空', type='info')
         return
     session.session_rows.clear()
-    session.selected_session_index = None
+    _clear_session_row_selection(session)
     session.current_instance_index = 0
     _reset_draft_after_session_change(session)
     render_input_tab.refresh()
@@ -243,48 +315,18 @@ def render_input_tab():
         
         # 本次已录入表格
         with ui.element('div').classes('session-list'):
+            ui.label('本次已录入（勾选后删除；点击数据格载入上方编辑）').classes('title')
             ui.label(f'当前 {session.current_instance_index + 1} / 容量 {session.input_capacity}（容量 = writer.max_instance_count(模板)，到达上界时不再清空输入）').classes('ghost-note')
-            columns = [{'name': lbl, 'label': lbl, 'field': lbl} for lbl in labels]
-            for i, row in enumerate(session.session_rows):
-                row['_index'] = i
-                
-            def on_table_select(event) -> None:
-                if event.selection:
-                    sel = event.selection[0]
-                    idx = sel['_index']
-                    session.selected_session_index = idx
-                    session.draft = session.session_rows[idx].copy()
-                    session.draft.pop('_index', None)
-                    session.suppress_id_search = True
-                    render_dynamic_fields.refresh()
-                else:
-                    session.selected_session_index = None
-                    session.draft.clear()
-                    if getattr(session, 'template_defaults', None):
-                        session.draft.update(session.template_defaults)
-                    render_dynamic_fields.refresh()
-            table = ui.table(
-                columns=columns,
-                rows=session.session_rows,
-                row_key='_index',
-                selection='single',
-            ).classes('w-full').style('border-radius: 0; box-shadow: none; border: 1px solid #000;')
-            table.on_select(on_table_select)
-            
+            render_session_table(session, labels)
             with ui.element('div').classes('list-btns'):
                 with ui.element('div').classes('list-btns-start'):
                     ui.label('装载文件').classes('btn excel').on('click', lambda: open_load_file_dialog(session))
                 with ui.element('div').classes('list-btns-end'):
                     ui.label('清空').classes('btn').on('click', lambda: handle_clear_session(session))
-                    def on_delete_selected():
-                        if session.selected_session_index is not None:
-                            session.session_rows.pop(session.selected_session_index)
-                            session.selected_session_index = None
-                            session.current_instance_index = len(session.session_rows)
-                            render_input_tab.refresh()
-                        else:
-                            ui.notify('请先选择要删除的行', type='warning')
-                    ui.label('单个删除').classes('btn').on('click', on_delete_selected)
+                    ui.label('删除选中').classes('btn').on(
+                        'click',
+                        lambda: handle_delete_checked_session_rows(session),
+                    )
 
         ui.element('hr').classes('sep')
 

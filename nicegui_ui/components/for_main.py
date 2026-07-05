@@ -47,6 +47,7 @@ class ForMain:
         state.draft.clear()
         state.session_rows.clear()
         state.selected_session_index = None
+        state.selected_session_indices.clear()
         state.exported_files = []
         state.last_export_path = None
         ForMain._clear_engines(state)

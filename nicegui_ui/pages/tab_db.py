@@ -47,6 +47,8 @@ def render_db_tab():
                         session.ui_provider = UiProvider(session.cfg, session.db)
                         session.draft.clear()
                         session.session_rows.clear()
+                        session.selected_session_index = None
+                        session.selected_session_indices.clear()
                         session.current_instance_index = 0
                         ui.notify('已切换数据库', type='positive')
                         render_db_tab.refresh()
@@ -71,6 +73,8 @@ def render_db_tab():
                             
                             session.draft.clear()
                             session.session_rows.clear()
+                            session.selected_session_index = None
+                            session.selected_session_indices.clear()
                             session.current_instance_index = 0
                             
                             ui.notify(f'已创建并切换到新库: {new_path.name}', type='positive')

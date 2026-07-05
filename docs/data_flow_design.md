@@ -311,11 +311,20 @@ records (id INTEGER PRIMARY KEY, data TEXT NOT NULL)
 exports/.../*.xlsx ──► ExcelWriter.read_instances ──► session_rows（替换或追加，受 input_capacity 限制）
                                                               │
                                                               ▼
-                                                    用户编辑 / 下一行
+                                                    用户编辑 / 下一行 / 删除选中
                                                               │
                                                               ▼
                                               ExcelWriter.write_back ──► exports/.../新时间戳.xlsx
 ```
+
+**删除选中行**（输入 Tab，`session_rows` 内存列表）：
+
+1. 「本次已录入」表格首列为勾选框；可勾选一行或多行（**含空行或部分填写行**）。
+2. 点「删除选中」按行下标从 `session.session_rows` 移除（**不写 SQLite**；仅影响本次会话待导出列表）。
+3. 清空 `selected_session_indices` 与 `selected_session_index`；`current_instance_index = len(session_rows)`；`draft` 重置为 `template_defaults`。
+4. 点击数据格（非勾选列）仍将该行载入 `draft` 供编辑；与 Google Tab 主 ID 表勾选模式一致（`nicegui_ui/pages/tab_google.py`）。
+
+若行曾通过「下一行」或「另存为」调用 `persist_fields` 写入 DB，删除 `session_rows` **不会**回滚库内记录；库内删除属存储配置 Tab 范畴（未改 `core_store.py`）。
 
 **打印（输入 Tab，无 Excel）**：
 

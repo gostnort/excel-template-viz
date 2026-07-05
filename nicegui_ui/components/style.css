@@ -113,7 +113,12 @@ html, body {
 /* 右侧主区 */
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; height: 100%; overflow: hidden; }
 .tabs { display: flex; border-bottom: 2px solid #000; flex-shrink: 0; background: #fff; min-height: 40px; box-sizing: border-box; align-items: stretch; }
-.tab { padding: 10px 24px; border-right: 1px solid #000; font-weight: bold; cursor: pointer; display: flex; align-items: center; box-sizing: border-box; }
+.tab {
+  width: 126px; min-width: 126px; max-width: 126px;
+  padding: 10px 0; border-right: 1px solid #000; font-weight: bold; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; box-sizing: border-box;
+  text-align: center;
+}
 .tab.active { background: #eee; }
 .tab-body { flex: 1; overflow: auto; padding: 16px 20px; }
 
@@ -137,6 +142,7 @@ html, body {
   gap: 12px 20px;
   width: 100%;
   max-width: 100%;
+  margin-top: 5px;
 }
 .field-cell {
   display: grid;
@@ -160,11 +166,11 @@ html, body {
 .field-label.primary::after { content: " ★主键"; font-size: 11px; color: #555; }
 /* Primary key (id=true): Google yellow on input control — same as .btn.google */
 .field-cell.id-field .input-box .q-field__control {
-  background: #F4B400;
-  border-color: #c89400;
+  background: #fdfdb4;
+  border-color: #d4d480;
 }
 .field-cell.id-field .input-box.q-field--focused .q-field__control {
-  background: #FFC107;
+  background: #faf8a0;
 }
 .field-cell.id-field .input-box .q-field__native {
   color: #1a1a1a;
@@ -307,15 +313,15 @@ table.records tbody tr.selected, table.t tbody tr.selected { background: #e8e8e8
 }
 /* Google: folder yellow — 4-color gradient is hard to read on 36×110px labels */
 .btn.google {
-  background: #F4B400;
-  border-color: #c89400;
+  background: #fdfdb4;
+  border-color: #d4d480;
   color: #1a1a1a;
 }
-.btn.google:hover:not(.disabled) { background: #FFC107; }
+.btn.google:hover:not(.disabled) { background: #faf8a0; }
 .btn.google.disabled {
   color: #888;
   border-color: #999;
-  background: #f5ecd0;
+  background: #f5f5e8;
   cursor: not-allowed;
 }
 
@@ -340,6 +346,8 @@ table.records tbody tr.selected, table.t tbody tr.selected { background: #e8e8e8
 .btn.linkish { font-weight: normal; font-size: 12px; }
 .section-body { padding: 10px; }
 .section-body.sheet-panel { position: relative; }
+.sheet-table-scroll { overflow-x: auto; width: 100%; }
+.sheet-table-scroll table.t { width: max-content; min-width: 100%; }
 .sheet-toolbar-bar {
   display: flex;
   width: 100%;

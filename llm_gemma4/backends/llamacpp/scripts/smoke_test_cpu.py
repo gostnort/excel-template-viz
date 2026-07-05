@@ -1,0 +1,28 @@
+"""Smoke test: llama.cpp CPU profile (requires GGUF + CPU wheel)."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+
+from llm_gemma4.hf_download import gguf_present
+from llm_gemma4.backends.llamacpp.backend import smoke_generate
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--prompt", default="Reply with one word: OK")
+    args = parser.parse_args(argv)
+    if not gguf_present():
+        print("SKIP: GGUF missing. Run: python -m llm_gemma4 download --profile cpu")
+        return 0
+    try:
+        smoke_generate("cpu", args.prompt)
+    except Exception as exc:
+        print(f"FAIL: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

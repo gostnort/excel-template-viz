@@ -1,0 +1,7 @@
+profile = "cuda"
+model_path = "models/gemma4/gemma-4-E4B_q4_0-it.gguf"
+n_ctx = 8192
+n_gpu_layers = -1
+thinking_budget = 1024
+temperature = 0.0
+compress_model_summary = true

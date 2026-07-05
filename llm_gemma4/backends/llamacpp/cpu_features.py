@@ -1,4 +1,5 @@
 """CPU SIMD feature detection for llama-cpp-python wheel selection."""
+
 import ctypes
 import platform
 import sys
@@ -12,7 +13,6 @@ LLAMA_CPP_CPU_WHEEL_INDEX = "https://abetlen.github.io/llama-cpp-python/whl/cpu"
 _cpuid_leaf_fn: Callable[[int, int], tuple[int, int, int, int]] | None = None
 _cpuid_leaf_fn_initialized = False
 
-# x64 CPUID stub: void cpuid(uint32_t leaf, uint32_t subleaf, uint32_t* out)
 _CPUID_X64_CODE = bytes([
     0x53,
     0x8B, 0xC1,
@@ -33,13 +33,11 @@ PF_AVX512F_INSTRUCTIONS_AVAILABLE = 41
 
 
 def _is_x86() -> bool:
-    """True when running on an x86 or x86-64 host."""
     machine = platform.machine().lower()
     return machine in {"amd64", "x86_64", "i386", "x86", "ia32"}
 
 
 def _init_cpuid_leaf_fn() -> None:
-    """Bind a platform-specific CPUID reader once."""
     global _cpuid_leaf_fn, _cpuid_leaf_fn_initialized
     if _cpuid_leaf_fn_initialized:
         return
@@ -54,7 +52,6 @@ def _init_cpuid_leaf_fn() -> None:
 
 
 def _cpuid_leaf_windows(leaf: int, subleaf: int = 0) -> tuple[int, int, int, int]:
-    """Run CPUID on Windows x64 via VirtualAlloc executable stub."""
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.VirtualAlloc.restype = ctypes.c_void_p
     kernel32.VirtualAlloc.argtypes = [
@@ -94,7 +91,6 @@ def _cpuid_leaf_windows(leaf: int, subleaf: int = 0) -> tuple[int, int, int, int
 
 
 def _flags_from_windows_kernel() -> dict[str, bool]:
-    """Query SIMD support via kernel32 IsProcessorFeaturePresent (CPUID-backed)."""
     kernel32 = ctypes.windll.kernel32
 
     def _has(feature_id: int) -> bool:
@@ -115,7 +111,6 @@ def _flags_from_windows_kernel() -> dict[str, bool]:
 
 
 def _flags_from_proc_cpuinfo() -> dict[str, bool]:
-    """Parse SIMD flags from Linux /proc/cpuinfo."""
     proc_cpuinfo = Path("/proc/cpuinfo")
     if not proc_cpuinfo.is_file():
         return {}
@@ -136,7 +131,6 @@ def _flags_from_proc_cpuinfo() -> dict[str, bool]:
 
 
 def cpuid_leaf(leaf: int, subleaf: int = 0) -> tuple[int, int, int, int]:
-    """Return EAX, EBX, ECX, EDX for one CPUID leaf (mockable in tests)."""
     _init_cpuid_leaf_fn()
     if _cpuid_leaf_fn is None:
         return (0, 0, 0, 0)
@@ -144,7 +138,6 @@ def cpuid_leaf(leaf: int, subleaf: int = 0) -> tuple[int, int, int, int]:
 
 
 def _flags_from_cpuid() -> dict[str, bool]:
-    """Parse AVX / AVX2 / AVX512F from standard CPUID leaves."""
     max_leaf = cpuid_leaf(0)[0]
     if max_leaf < 1:
         return {
@@ -170,12 +163,6 @@ def _flags_from_cpuid() -> dict[str, bool]:
 
 
 def detect_simd_features() -> dict[str, bool | str]:
-    """
-    Detect AVX / AVX2 / AVX512F via CPUID (Windows) or /proc/cpuinfo (Linux).
-
-    Returns:
-        Dict with avx, avx2, avx512f, avx512 booleans and a source string.
-    """
     if not _is_x86():
         return {
             "avx": False,
@@ -216,7 +203,6 @@ def detect_simd_features() -> dict[str, bool | str]:
 
 
 def recommended_llama_cpp_version() -> str:
-    """Return 0.3.29 when AVX512F is present, else 0.3.28."""
     features = detect_simd_features()
     if features.get("avx512f") or features.get("avx512"):
         return LLAMA_CPP_VERSION_AVX512
@@ -228,7 +214,6 @@ def llama_cpp_install_command(
     *,
     python_executable: str | None = None,
 ) -> str:
-    """Return a pip install command for the CPU wheel index."""
     chosen = version or recommended_llama_cpp_version()
     python = python_executable or sys.executable
     if " " in python and not (python.startswith('"') and python.endswith('"')):

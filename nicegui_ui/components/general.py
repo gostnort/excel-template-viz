@@ -65,6 +65,7 @@ class SessionState:
     template_defaults: dict[str, Any] = field(default_factory=dict)
     session_rows: list[dict[str, Any]] = field(default_factory=list)
     selected_session_index: int | None = None
+    selected_session_indices: set[int] = field(default_factory=set)
     suppress_id_search: bool = False
     pending_id_value: int | None = None
     exported_files: list[Path] = field(default_factory=list)

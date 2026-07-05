@@ -26,7 +26,7 @@ NiceGUI 应用：将 Excel 模板（如 Ginger Lots）可视化为 Web 表单，
 | `nicegui_ui/pages/tab_toml.py` | 「输入配置」Tab：TOML 编辑与校验 |
 | `nicegui_ui/pages/tab_db.py` | 「存储配置」Tab：库切换、全部数据表、覆盖录入 |
 | `nicegui_ui/pages/tab_google.py` | 「Google 连接」Tab：OAuth、主 ID 表、导入/屏蔽 |
-| `nicegui_ui/components/activation.py` | 模板激活全链路（TOML 加载 → verify → 重建引擎） |
+| `nicegui_ui/components/for_main.py` | 模板加载全链路（TOML → verify → 重建引擎）、主键 ID 查询 |
 | `nicegui_ui/components/session.py` | `SessionRegistry` / `SessionState` 按 principal 隔离 |
 | `app/core_registry.py` | 扫描 `templates/*.xlsx`，模板时间线排序 |
 | `app/core_toml.py` | TOML 加载/校验/生成；`resolve_db_id`、`verify_toml` |
@@ -132,9 +132,9 @@ flowchart LR
 
 | 指标 | 数值 |
 |------|------|
-| `app/` Python 模块 | 8（含 `download_gemma4_model.py`） |
-| `nicegui_ui/` Python 模块 | ~10（pages + components，未纳入本次 CSV） |
-| CodeGraph CLI 实体 | **137**（`plans/codegraph.csv`，2026-07-04） |
+| `app/` Python 模块 | 9（含 `download_gemma4_model.py`） |
+| `nicegui_ui/` Python 模块 | ~12（pages + components，未纳入本次 CSV） |
+| CodeGraph CLI 实体 | **147**（`plans/codegraph.csv`，2026-07-04） |
 | 活跃 Speckit 计划 | `nicegui_ui_migration`、`llm_field_matching_optimization` |
 | LLM | Gemma 4 E4B Q4_0 GGUF（llama-cpp-python，CPU） |
 

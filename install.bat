@@ -4,6 +4,21 @@ echo Excel Template Viz - Gradio Version
 echo Installation Script
 echo ========================================
 echo.
+set LLM_MODE=cpu
+:parse_llm_args
+if "%~1"=="" goto :llm_args_done
+if /I "%~1"=="--llm" (
+    set LLM_MODE=%~2
+    shift
+    shift
+    goto :parse_llm_args
+)
+shift
+goto :parse_llm_args
+:llm_args_done
+echo LLM wheel mode: %LLM_MODE% (cpu default; use --llm cuda for NVIDIA)
+
+echo.
 
 REM Check Python version and recommend Python 3.10 for best compatibility
 echo Checking Python version...
@@ -77,19 +92,35 @@ echo Upgrading pip...
 echo.
 echo Detecting CPU SIMD features for llama-cpp-python wheel...
 set PYTHONPATH=%CD%
-for /f "delims=" %%V in ('python -c "from app.cpu_features import recommended_llama_cpp_version; print(recommended_llama_cpp_version())"') do set LLAMA_CPP_VERSION=%%V
+for /f "delims=" %%V in ('python -c "from llm_gemma4.backends.llamacpp.cpu_features import recommended_llama_cpp_version; print(recommended_llama_cpp_version())"') do set LLAMA_CPP_VERSION=%%V
 echo Recommended llama-cpp-python version: %LLAMA_CPP_VERSION%
-echo Installing llama-cpp-python %LLAMA_CPP_VERSION% (CPU wheel)...
-set LLAMA_CPP_CPU_INDEX=https://abetlen.github.io/llama-cpp-python/whl/cpu
-pip install llama-cpp-python==%LLAMA_CPP_VERSION% --extra-index-url %LLAMA_CPP_CPU_INDEX%
-if errorlevel 1 (
-    echo WARNING: CPU wheel index install failed; retrying from PyPI...
-    pip install llama-cpp-python==%LLAMA_CPP_VERSION%
+if /I "%LLM_MODE%"=="cuda" (
+    echo Installing llama-cpp-python %LLAMA_CPP_VERSION% (CUDA cu124 wheel)...
+    set LLAMA_CPP_CUDA_INDEX=https://abetlen.github.io/llama-cpp-python/whl/cu124
+    pip install llama-cpp-python==%LLAMA_CPP_VERSION% --extra-index-url %LLAMA_CPP_CUDA_INDEX%
     if errorlevel 1 (
-        echo ERROR: Failed to install llama-cpp-python
-        echo See QUICKSTART.md for CPU / wheel compatibility.
+        echo ERROR: Failed to install llama-cpp-python CUDA wheel
         pause
         exit /b 1
+    )
+    echo Installing NVIDIA CUDA 12 runtime DLLs (for ggml-cuda on Windows)...
+    pip install nvidia-cuda-runtime-cu12 nvidia-cublas-cu12
+    if errorlevel 1 (
+        echo WARNING: nvidia CUDA pip packages failed; you may need CUDA DLLs on PATH
+    )
+) else (
+    echo Installing llama-cpp-python %LLAMA_CPP_VERSION% (CPU wheel)...
+    set LLAMA_CPP_CPU_INDEX=https://abetlen.github.io/llama-cpp-python/whl/cpu
+    pip install llama-cpp-python==%LLAMA_CPP_VERSION% --extra-index-url %LLAMA_CPP_CPU_INDEX%
+    if errorlevel 1 (
+        echo WARNING: CPU wheel index install failed; retrying from PyPI...
+        pip install llama-cpp-python==%LLAMA_CPP_VERSION%
+        if errorlevel 1 (
+            echo ERROR: Failed to install llama-cpp-python
+            echo See QUICKSTART.md for CPU / wheel compatibility.
+            pause
+            exit /b 1
+        )
     )
 )
 

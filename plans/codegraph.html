@@ -975,7 +975,7 @@ body {
       "type": "module",
       "collapsed": false,
       "fullPath": "app\\core_store.py",
-      "lines": 389
+      "lines": 390
     },
     {
       "id": "core_store.py:_resolve_records_id",
@@ -984,6 +984,22 @@ body {
       "parent": "core_store.py",
       "lines": 14,
       "entityType": "function"
+    },
+    {
+      "id": "core_store.py:_build_payload_from_toml",
+      "label": "_build_payload_from_toml",
+      "type": "entity",
+      "parent": "core_store.py",
+      "lines": 21,
+      "entityType": "function"
+    },
+    {
+      "id": "core_store.py:UiProvider",
+      "label": "UiProvider",
+      "type": "entity",
+      "parent": "core_store.py",
+      "lines": 81,
+      "entityType": "class"
     },
     {
       "id": "core_store.py:_suffix_token_from_path",
@@ -1074,14 +1090,6 @@ body {
       "entityType": "function"
     },
     {
-      "id": "core_store.py:_build_payload_from_toml",
-      "label": "_build_payload_from_toml",
-      "type": "entity",
-      "parent": "core_store.py",
-      "lines": 20,
-      "entityType": "function"
-    },
-    {
       "id": "core_store.py:SecureSQLite",
       "label": "SecureSQLite",
       "type": "entity",
@@ -1162,19 +1170,11 @@ body {
       "entityType": "function"
     },
     {
-      "id": "core_store.py:UiProvider",
-      "label": "UiProvider",
-      "type": "entity",
-      "parent": "core_store.py",
-      "lines": 81,
-      "entityType": "class"
-    },
-    {
       "id": "core_toml.py",
       "type": "module",
       "collapsed": false,
       "fullPath": "app\\core_toml.py",
-      "lines": 866
+      "lines": 902
     },
     {
       "id": "core_toml.py:InputSection",
@@ -1197,7 +1197,7 @@ body {
       "label": "TomlGenerator",
       "type": "entity",
       "parent": "core_toml.py",
-      "lines": 103,
+      "lines": 116,
       "entityType": "class"
     },
     {
@@ -1205,7 +1205,7 @@ body {
       "label": "GetTomlValues",
       "type": "entity",
       "parent": "core_toml.py",
-      "lines": 61,
+      "lines": 64,
       "entityType": "class"
     },
     {
@@ -1273,6 +1273,14 @@ body {
       "entityType": "class"
     },
     {
+      "id": "core_toml.py:_resolve_work_sheet",
+      "label": "_resolve_work_sheet",
+      "type": "entity",
+      "parent": "core_toml.py",
+      "lines": 13,
+      "entityType": "function"
+    },
+    {
       "id": "core_toml.py:_parse_sources",
       "label": "_parse_sources",
       "type": "entity",
@@ -1285,7 +1293,7 @@ body {
       "label": "_config_from_dict",
       "type": "entity",
       "parent": "core_toml.py",
-      "lines": 24,
+      "lines": 25,
       "entityType": "function"
     },
     {
@@ -1301,7 +1309,7 @@ body {
       "label": "_dict_to_toml",
       "type": "entity",
       "parent": "core_toml.py",
-      "lines": 57,
+      "lines": 61,
       "entityType": "function"
     },
     {
@@ -1349,7 +1357,7 @@ body {
       "label": "ensure_exists",
       "type": "entity",
       "parent": "core_toml.py",
-      "lines": 19,
+      "lines": 21,
       "entityType": "function"
     },
     {
@@ -1461,15 +1469,7 @@ body {
       "type": "module",
       "collapsed": false,
       "fullPath": "app\\core_transform.py",
-      "lines": 446
-    },
-    {
-      "id": "core_transform.py:_",
-      "label": "_",
-      "type": "entity",
-      "parent": "core_transform.py",
-      "lines": 0,
-      "entityType": "function"
+      "lines": 598
     },
     {
       "id": "core_transform.py:Template2DB",
@@ -1484,8 +1484,16 @@ body {
       "label": "ExcelWriter",
       "type": "entity",
       "parent": "core_transform.py",
-      "lines": 227,
+      "lines": 315,
       "entityType": "class"
+    },
+    {
+      "id": "core_transform.py:_",
+      "label": "_",
+      "type": "entity",
+      "parent": "core_transform.py",
+      "lines": 0,
+      "entityType": "function"
     },
     {
       "id": "core_transform.py:_lookup_row_value",
@@ -1512,6 +1520,22 @@ body {
       "entityType": "function"
     },
     {
+      "id": "core_transform.py:_read_area_cell_grid",
+      "label": "_read_area_cell_grid",
+      "type": "entity",
+      "parent": "core_transform.py",
+      "lines": 10,
+      "entityType": "function"
+    },
+    {
+      "id": "core_transform.py:_area_display_label",
+      "label": "_area_display_label",
+      "type": "entity",
+      "parent": "core_transform.py",
+      "lines": 7,
+      "entityType": "function"
+    },
+    {
       "id": "core_transform.py:_cell_empty",
       "label": "_cell_empty",
       "type": "entity",
@@ -1533,6 +1557,54 @@ body {
       "type": "entity",
       "parent": "core_transform.py",
       "lines": 27,
+      "entityType": "function"
+    },
+    {
+      "id": "core_transform.py:_cell_display_text",
+      "label": "_cell_display_text",
+      "type": "entity",
+      "parent": "core_transform.py",
+      "lines": 7,
+      "entityType": "function"
+    },
+    {
+      "id": "core_transform.py:_split_print_area_raw",
+      "label": "_split_print_area_raw",
+      "type": "entity",
+      "parent": "core_transform.py",
+      "lines": 14,
+      "entityType": "function"
+    },
+    {
+      "id": "core_transform.py:_area_content_key",
+      "label": "_area_content_key",
+      "type": "entity",
+      "parent": "core_transform.py",
+      "lines": 3,
+      "entityType": "function"
+    },
+    {
+      "id": "core_transform.py:_area_preview_text",
+      "label": "_area_preview_text",
+      "type": "entity",
+      "parent": "core_transform.py",
+      "lines": 12,
+      "entityType": "function"
+    },
+    {
+      "id": "core_transform.py:_column_pixel_width",
+      "label": "_column_pixel_width",
+      "type": "entity",
+      "parent": "core_transform.py",
+      "lines": 6,
+      "entityType": "function"
+    },
+    {
+      "id": "core_transform.py:_row_pixel_height",
+      "label": "_row_pixel_height",
+      "type": "entity",
+      "parent": "core_transform.py",
+      "lines": 5,
       "entityType": "function"
     },
     {
@@ -2257,6 +2329,36 @@ body {
     },
     {
       "source": "core_store.py",
+      "target": "core_store.py:_build_payload_from_toml",
+      "type": "module-entity"
+    },
+    {
+      "source": "core_store.py:_build_payload_from_toml",
+      "target": "core_connect.py:_apply_regex",
+      "type": "dependency"
+    },
+    {
+      "source": "core_store.py:_build_payload_from_toml",
+      "target": "core_store.py:_has_valid_id_value",
+      "type": "dependency"
+    },
+    {
+      "source": "core_store.py:_build_payload_from_toml",
+      "target": "core_store.py:_json_safe_value",
+      "type": "dependency"
+    },
+    {
+      "source": "core_store.py",
+      "target": "core_store.py:UiProvider",
+      "type": "module-entity"
+    },
+    {
+      "source": "core_store.py:UiProvider",
+      "target": "core_connect.py:_apply_regex",
+      "type": "dependency"
+    },
+    {
+      "source": "core_store.py",
       "target": "core_store.py:_suffix_token_from_path",
       "type": "module-entity"
     },
@@ -2482,21 +2584,6 @@ body {
     },
     {
       "source": "core_store.py",
-      "target": "core_store.py:_build_payload_from_toml",
-      "type": "module-entity"
-    },
-    {
-      "source": "core_store.py:_build_payload_from_toml",
-      "target": "core_store.py:_has_valid_id_value",
-      "type": "dependency"
-    },
-    {
-      "source": "core_store.py:_build_payload_from_toml",
-      "target": "core_store.py:_json_safe_value",
-      "type": "dependency"
-    },
-    {
-      "source": "core_store.py",
       "target": "core_store.py:SecureSQLite",
       "type": "module-entity"
     },
@@ -2581,11 +2668,6 @@ body {
       "type": "module-entity"
     },
     {
-      "source": "core_store.py",
-      "target": "core_store.py:UiProvider",
-      "type": "module-entity"
-    },
-    {
       "source": "core_toml.py",
       "target": "core_toml.py:InputSection",
       "type": "module-entity"
@@ -2657,6 +2739,11 @@ body {
     },
     {
       "source": "core_toml.py:TomlGenerator",
+      "target": "core_toml.py:_headers_from_first_row",
+      "type": "dependency"
+    },
+    {
+      "source": "core_toml.py:TomlGenerator",
       "target": "core_toml.py:_dict_to_toml",
       "type": "dependency"
     },
@@ -2687,12 +2774,12 @@ body {
     },
     {
       "source": "core_toml.py:GetTomlValues",
-      "target": "core_toml.py:TomlGenerator",
+      "target": "core_toml.py:load_toml",
       "type": "dependency"
     },
     {
       "source": "core_toml.py:GetTomlValues",
-      "target": "core_toml.py:load_toml",
+      "target": "core_toml.py:TomlGenerator",
       "type": "dependency"
     },
     {
@@ -3017,6 +3104,21 @@ body {
     },
     {
       "source": "core_toml.py",
+      "target": "core_toml.py:_resolve_work_sheet",
+      "type": "module-entity"
+    },
+    {
+      "source": "core_toml.py:_resolve_work_sheet",
+      "target": "core_toml.py:_optional_string",
+      "type": "dependency"
+    },
+    {
+      "source": "core_toml.py:_resolve_work_sheet",
+      "target": "core_toml.py:_optional_string",
+      "type": "dependency"
+    },
+    {
+      "source": "core_toml.py",
       "target": "core_toml.py:_parse_sources",
       "type": "module-entity"
     },
@@ -3048,6 +3150,11 @@ body {
     {
       "source": "core_toml.py:_config_from_dict",
       "target": "core_toml.py:_input_section_from_dict",
+      "type": "dependency"
+    },
+    {
+      "source": "core_toml.py:_config_from_dict",
+      "target": "core_toml.py:_resolve_work_sheet",
       "type": "dependency"
     },
     {
@@ -3202,6 +3309,16 @@ body {
     },
     {
       "source": "core_toml.py:ensure_exists",
+      "target": "core_toml.py:load_toml",
+      "type": "dependency"
+    },
+    {
+      "source": "core_toml.py:ensure_exists",
+      "target": "core_toml.py:load_toml",
+      "type": "dependency"
+    },
+    {
+      "source": "core_toml.py:ensure_exists",
       "target": "core_toml.py:TomlGenerator",
       "type": "dependency"
     },
@@ -3272,51 +3389,6 @@ body {
     },
     {
       "source": "core_transform.py",
-      "target": "core_transform.py:_",
-      "type": "module-entity"
-    },
-    {
-      "source": "core_transform.py:_",
-      "target": "core_store.py:default_db_path",
-      "type": "dependency"
-    },
-    {
-      "source": "core_transform.py:_",
-      "target": "core_store.py:SecureSQLite",
-      "type": "dependency"
-    },
-    {
-      "source": "core_transform.py:_",
-      "target": "core_store.py:UiProvider",
-      "type": "dependency"
-    },
-    {
-      "source": "core_transform.py:_",
-      "target": "core_toml.py:_config_from_dict",
-      "type": "dependency"
-    },
-    {
-      "source": "core_transform.py:_",
-      "target": "core_toml.py:verify_toml",
-      "type": "dependency"
-    },
-    {
-      "source": "core_transform.py:_",
-      "target": "core_transform.py:Template2DB",
-      "type": "dependency"
-    },
-    {
-      "source": "core_transform.py:_",
-      "target": "core_transform.py:ExcelWriter",
-      "type": "dependency"
-    },
-    {
-      "source": "core_transform.py:_",
-      "target": "core_transform.py:main",
-      "type": "dependency"
-    },
-    {
-      "source": "core_transform.py",
       "target": "core_transform.py:Template2DB",
       "type": "module-entity"
     },
@@ -3371,6 +3443,86 @@ body {
       "type": "dependency"
     },
     {
+      "source": "core_transform.py:ExcelWriter",
+      "target": "core_transform.py:_cell_display_text",
+      "type": "dependency"
+    },
+    {
+      "source": "core_transform.py:ExcelWriter",
+      "target": "core_transform.py:_split_print_area_raw",
+      "type": "dependency"
+    },
+    {
+      "source": "core_transform.py:ExcelWriter",
+      "target": "core_transform.py:_read_area_cell_grid",
+      "type": "dependency"
+    },
+    {
+      "source": "core_transform.py:ExcelWriter",
+      "target": "core_transform.py:_area_content_key",
+      "type": "dependency"
+    },
+    {
+      "source": "core_transform.py:ExcelWriter",
+      "target": "core_transform.py:_area_display_label",
+      "type": "dependency"
+    },
+    {
+      "source": "core_transform.py:ExcelWriter",
+      "target": "core_transform.py:_column_pixel_width",
+      "type": "dependency"
+    },
+    {
+      "source": "core_transform.py:ExcelWriter",
+      "target": "core_transform.py:_row_pixel_height",
+      "type": "dependency"
+    },
+    {
+      "source": "core_transform.py",
+      "target": "core_transform.py:_",
+      "type": "module-entity"
+    },
+    {
+      "source": "core_transform.py:_",
+      "target": "core_toml.py:_config_from_dict",
+      "type": "dependency"
+    },
+    {
+      "source": "core_transform.py:_",
+      "target": "core_toml.py:verify_toml",
+      "type": "dependency"
+    },
+    {
+      "source": "core_transform.py:_",
+      "target": "core_store.py:default_db_path",
+      "type": "dependency"
+    },
+    {
+      "source": "core_transform.py:_",
+      "target": "core_store.py:SecureSQLite",
+      "type": "dependency"
+    },
+    {
+      "source": "core_transform.py:_",
+      "target": "core_store.py:UiProvider",
+      "type": "dependency"
+    },
+    {
+      "source": "core_transform.py:_",
+      "target": "core_transform.py:Template2DB",
+      "type": "dependency"
+    },
+    {
+      "source": "core_transform.py:_",
+      "target": "core_transform.py:ExcelWriter",
+      "type": "dependency"
+    },
+    {
+      "source": "core_transform.py:_",
+      "target": "core_transform.py:main",
+      "type": "dependency"
+    },
+    {
       "source": "core_transform.py",
       "target": "core_transform.py:_lookup_row_value",
       "type": "module-entity"
@@ -3402,6 +3554,26 @@ body {
     },
     {
       "source": "core_transform.py",
+      "target": "core_transform.py:_read_area_cell_grid",
+      "type": "module-entity"
+    },
+    {
+      "source": "core_transform.py:_read_area_cell_grid",
+      "target": "core_transform.py:_cell_display_text",
+      "type": "dependency"
+    },
+    {
+      "source": "core_transform.py",
+      "target": "core_transform.py:_area_display_label",
+      "type": "module-entity"
+    },
+    {
+      "source": "core_transform.py:_area_display_label",
+      "target": "core_transform.py:_area_preview_text",
+      "type": "dependency"
+    },
+    {
+      "source": "core_transform.py",
       "target": "core_transform.py:_cell_empty",
       "type": "module-entity"
     },
@@ -3413,6 +3585,36 @@ body {
     {
       "source": "core_transform.py",
       "target": "core_transform.py:_find_row_by_id",
+      "type": "module-entity"
+    },
+    {
+      "source": "core_transform.py",
+      "target": "core_transform.py:_cell_display_text",
+      "type": "module-entity"
+    },
+    {
+      "source": "core_transform.py",
+      "target": "core_transform.py:_split_print_area_raw",
+      "type": "module-entity"
+    },
+    {
+      "source": "core_transform.py",
+      "target": "core_transform.py:_area_content_key",
+      "type": "module-entity"
+    },
+    {
+      "source": "core_transform.py",
+      "target": "core_transform.py:_area_preview_text",
+      "type": "module-entity"
+    },
+    {
+      "source": "core_transform.py",
+      "target": "core_transform.py:_column_pixel_width",
+      "type": "module-entity"
+    },
+    {
+      "source": "core_transform.py",
+      "target": "core_transform.py:_row_pixel_height",
       "type": "module-entity"
     },
     {
@@ -3852,6 +4054,16 @@ body {
     },
     {
       "source": "__init__.py",
+      "target": "core_store.py",
+      "type": "module-module"
+    },
+    {
+      "source": "core_connect.py",
+      "target": "core_toml.py",
+      "type": "module-module"
+    },
+    {
+      "source": "download_gemma4_model.py",
       "target": "core_transform.py",
       "type": "module-module"
     },
@@ -3866,37 +4078,12 @@ body {
       "type": "module-module"
     },
     {
-      "source": "__init__.py",
-      "target": "core_store.py",
-      "type": "module-module"
-    },
-    {
-      "source": "core_transform.py",
+      "source": "core_store.py",
       "target": "core_connect.py",
       "type": "module-module"
     },
     {
-      "source": "gemma4_field_matcher.py",
-      "target": "cpu_features.py",
-      "type": "module-module"
-    },
-    {
-      "source": "download_gemma4_model.py",
-      "target": "gemma4_field_matcher.py",
-      "type": "module-module"
-    },
-    {
-      "source": "core_connect.py",
-      "target": "core_toml.py",
-      "type": "module-module"
-    },
-    {
-      "source": "__init__.py",
-      "target": "core_toml.py",
-      "type": "module-module"
-    },
-    {
-      "source": "core_transform.py",
+      "source": "core_store.py",
       "target": "core_toml.py",
       "type": "module-module"
     },
@@ -3907,17 +4094,37 @@ body {
     },
     {
       "source": "download_gemma4_model.py",
-      "target": "core_transform.py",
+      "target": "gemma4_field_matcher.py",
       "type": "module-module"
     },
     {
-      "source": "core_store.py",
-      "target": "core_toml.py",
+      "source": "gemma4_field_matcher.py",
+      "target": "cpu_features.py",
+      "type": "module-module"
+    },
+    {
+      "source": "__init__.py",
+      "target": "core_transform.py",
       "type": "module-module"
     },
     {
       "source": "core_transform.py",
       "target": "core_registry.py",
+      "type": "module-module"
+    },
+    {
+      "source": "__init__.py",
+      "target": "core_toml.py",
+      "type": "module-module"
+    },
+    {
+      "source": "core_transform.py",
+      "target": "core_connect.py",
+      "type": "module-module"
+    },
+    {
+      "source": "core_transform.py",
+      "target": "core_toml.py",
       "type": "module-module"
     }
   ],

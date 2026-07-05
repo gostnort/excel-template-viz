@@ -215,7 +215,8 @@ def render_google_tab():
                     作用: 选择授权文件 → 写入 credentials/oauth_client.json
                     """
                     try:
-                        conn.save_oauth_client(event.content.read())
+                        content = await event.file.read()
+                        conn.save_oauth_client(content)
                         ui.notify('授权文件已保存', type='positive')
                         render_google_tab.refresh()
                     except Exception as exc:
@@ -289,11 +290,12 @@ def render_google_tab():
         with ui.element('div').classes('section'):
             ui.label('主 ID 工作表').classes('section-title')
             with ui.element('div').classes('section-body sheet-panel'):
-                table = getattr(session, 'google_table', None)
-                if table and table.rows is not None:
-                    _render_sheet_table(session, table)
-                else:
-                    _render_empty_table()
+                with ui.element('div').classes('sheet-table-scroll'):
+                    table = getattr(session, 'google_table', None)
+                    if table and table.rows is not None:
+                        _render_sheet_table(session, table)
+                    else:
+                        _render_empty_table()
                 with ui.element('div').classes('sheet-toolbar-bar'):
                     with ui.element('div').classes('toolbar-main'):
                         def handle_select_all() -> None:

@@ -1,0 +1,1 @@
+openvino-genai>=2025.3.0
