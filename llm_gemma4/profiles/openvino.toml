@@ -1,8 +1,0 @@
-profile = "openvino"
-model_dir = "models/gemma4-openvino-int4"
-device = "GPU"
-n_ctx = 8192
-thinking_budget = 512
-temperature = 0.0
-allow_cpu_fallback = true
-compress_model_summary = false
