@@ -5,6 +5,7 @@ echo Installation Script
 echo ========================================
 echo.
 set LLM_MODE=cpu
+set SKIP_OCR=0
 :parse_llm_args
 if "%~1"=="" goto :llm_args_done
 if /I "%~1"=="--llm" (
@@ -13,10 +14,20 @@ if /I "%~1"=="--llm" (
     shift
     goto :parse_llm_args
 )
+if /I "%~1"=="--skip-ocr" (
+    set SKIP_OCR=1
+    shift
+    goto :parse_llm_args
+)
 shift
 goto :parse_llm_args
 :llm_args_done
 echo LLM wheel mode: %LLM_MODE% (cpu default; use --llm cuda for NVIDIA)
+if "%SKIP_OCR%"=="1" (
+    echo OCR install: SKIPPED (--skip-ocr)
+) else (
+    echo OCR install: enabled by default ^(pass --skip-ocr to skip^)
+)
 
 echo.
 
@@ -132,6 +143,42 @@ if errorlevel 1 (
     echo ERROR: Failed to install dependencies
     pause
     exit /b 1
+)
+
+echo.
+if not exist temp mkdir temp
+if "%SKIP_OCR%"=="1" (
+    echo Skipping PaddleOCR install (--skip-ocr).
+    echo You can install later with:
+    echo   pip install -r paddle_ocr/requirements.txt
+    echo   python paddle_ocr/main.py download
+    echo   python paddle_ocr/main.py smoke
+) else (
+    echo Installing PaddleOCR platform dependencies...
+    pip install -r paddle_ocr/requirements.txt >> temp\install_paddle_ocr.log 2>&1
+    if errorlevel 1 (
+        echo WARNING: paddle_ocr requirements failed. See temp\install_paddle_ocr.log
+        echo Re-run install.bat, or continue with --skip-ocr, or install manually.
+    ) else (
+        echo Downloading OCR models into paddle_ocr/models ...
+        python paddle_ocr/main.py download >> temp\install_paddle_ocr.log 2>&1
+        if errorlevel 1 (
+            echo WARNING: OCR model download failed once; retrying...
+            python paddle_ocr/main.py download >> temp\install_paddle_ocr.log 2>&1
+            if errorlevel 1 (
+                echo WARNING: OCR model download failed. See temp\install_paddle_ocr.log
+                echo Re-run: python paddle_ocr/main.py download
+            )
+        )
+        echo Running OCR smoke test...
+        python paddle_ocr/main.py smoke >> temp\install_paddle_ocr.log 2>&1
+        if errorlevel 1 (
+            echo WARNING: OCR smoke failed. See temp\install_paddle_ocr.log
+            echo Re-run: python paddle_ocr/main.py smoke
+        ) else (
+            echo OCR smoke passed.
+        )
+    )
 )
 
 echo.

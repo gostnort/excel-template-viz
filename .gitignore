@@ -33,6 +33,10 @@ Thumbs.db
 
 models/*
 
+# PaddleOCR weights (keep paddle_ocr/models/.gitkeep only)
+paddle_ocr/models/**
+!paddle_ocr/models/.gitkeep
+
 # llama-cpp wheel probe artifacts (manual install debugging)
 **/_wheel_probe*/
 

@@ -1,0 +1,1 @@
+# Keep directory in git; weights are downloaded by `python paddle_ocr/main.py download`

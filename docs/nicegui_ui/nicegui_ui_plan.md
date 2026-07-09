@@ -119,6 +119,27 @@ Four tabs, fixed order:
   * **NiceGUI:** `@ui.refreshable def input_fields(): ...` creating one `ui.input` per label; call `input_fields.refresh()` when `draft` or template changes.
   * **Primary key:** field where `[[fields]].id = true` shows `★主键` in label.
 
+* **Input context menu (右键 / 长按)** — canonical UI spec for camera / OCR lives here; OCR platform API is [`embed_paddle_ocr.md`](../embed_paddle_ocr.md).
+
+  * **Scope:** every dynamic `ui.input` / `ui.textarea` from `ui.get_labels()` on the Input tab (including primary-key field). Desktop: `contextmenu`; mobile: long-press (~500–600 ms). Use document-level event delegation; record active field context: `input_label`, `template_id`, `record_id`, DOM ref via `SessionRegistry.for_current()`.
+
+  * **Menu items:**
+
+    | Item | UI orchestration | Calls |
+    |------|------------------|-------|
+    | **拍照** | Open hidden `<input type="file" accept="image/*" capture="environment">` (mobile camera; desktop = file picker). On file ready → persist only. | `core_store.save_image(...)` only. **Do not** call `paddle_ocr`. |
+    | **OCR** | Acquire image (see below) → preview overlay + drag crop rect (**default = full image**) → on confirm run recognition → fill active input → `on_change` / existing blur chain. | `paddle_ocr.main.recognize(image_bytes, crop_box=...)` only for inference. Optional: `core_store.update_image_ocr(...)` if an `image_id` exists. |
+
+  * **OCR image acquisition (UI responsibility):** (1) image user just picked in this OCR flow; (2) user picks from history for this `input_label`; (3) **if none**, open camera / file picker immediately — never show “请先拍照”. OCR does **not** require a prior **拍照** action.
+
+  * **Errors:** show `ui.notify(result.message)` from `paddle_ocr` or store; never surface HTTP status codes or raw exceptions to the user.
+
+  * **Loading:** disable menu actions / show loading while capture or OCR runs.
+
+  * **Suggested code:** `nicegui_ui/components/input_context_menu.py` wired from `tab_input.py` after `@ui.refreshable input_fields` builds inputs.
+
+  * **Gate:** implement only after `python paddle_ocr/main.py smoke` passes (see `embed_paddle_ocr.md` §7–§8). UI imports `paddle_ocr` facade only — never `paddleocr` directly.
+
 * **ID blur lookup**
   * Only the primary-key `ui.input` gets `on('blur', on_id_blur)`.
   * If `suppress_id_search`: consume flag and return.
@@ -280,6 +301,7 @@ Future permission limits: adjust grants on `user:admin` (or other accounts), not
 | `core_toml.py` | Load/Save/`verify_toml` | scan xlsx labels, guess coordinates |
 | `core_store.py` | DB CRUD, text split | merge legacy JSON |
 | `core_transform.py` | `max_instance_count`, `write_back`, print areas, source fetch | compute Excel coordinates in UI |
+| `paddle_ocr/` (`main.py`) | `recognize`, `health_check` from Input context menu **OCR** item | camera UI, crop overlay, `save_image`, SQLite, Excel export |
 
 ### 4.3 Template activation flow (unchanged semantics)
 
@@ -359,6 +381,7 @@ NiceGUI tradeoffs:
 5. **DB tab:** switch/create DB, full-data table, 覆盖保存.
 6. **Google tab:** OAuth + import table (can follow after core four tabs work).
 7. **Print / export polish:** print area dropdown, `ui.download.file` fallback, `native=True` evaluation on Windows.
+8. **Input context menu (拍照 / OCR):** after `paddle_ocr` CLI smoke passes — global right-click / long-press on all input fields; **拍照** → `core_store.save_image`; **OCR** → crop UI → `paddle_ocr.main.recognize` → fill field (see §3.1).
 
 Do not modify `app/services/*` during UI migration unless a missing core API is confirmed and documented first.
 
@@ -432,6 +455,7 @@ Use `ui.download.file` for exported xlsx when not printing. Use `ui.notify` for 
 8. TOML save rebuilds engines and clears input session state.
 9. DB tab switches DB only when 切换 is enabled; table shows live SQLite data.
 10. All business rules delegate coordinate math to `core_transform` / `located`.
+11. Input context menu: **拍照** persists via `core_store` only; **OCR** calls `paddle_ocr.main.recognize` after CLI gate; no “请先拍照” blocker; crop defaults to full image; errors use Chinese `message` via `ui.notify`.
 
 ---
 
@@ -443,4 +467,6 @@ Use `ui.download.file` for exported xlsx when not printing. Use `ui.notify` for 
 | `docs/nicegui_ui/nicegui_ui_*.html` | wireframes only |
 | `plans/nicegui_ui_migration/` | Speckit plan / spec / tasks / constitution |
 | `nicegui_ui/` | sole runtime UI package |
+| `docs/embed_paddle_ocr.md` | OCR platform API; UI menu spec is **here** (§3.1) |
+| `paddle_ocr/` | self-contained OCR; no UI; called by NiceGUI after CLI smoke |
 | `webui/`, `docs/gradio_ui/`, Gradio deps | removed — do not restore |
