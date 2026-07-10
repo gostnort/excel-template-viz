@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from paddle_ocr.runtime import OcrLine
-
 
 def HtmlTableToRows(html: str) -> list[dict[str, Any]]:
     """Parse PPStructure `pred_html` into [{row, cells}, ...].
@@ -159,85 +157,32 @@ def HasContent(result: dict[str, Any]) -> bool:
 
 
 
-def _as_list(value: Any) -> list[Any]:
-    if value is None:
-        return []
-    if hasattr(value, "tolist"):
-        try:
-            return list(value.tolist())
-        except Exception:
-            pass
-    if isinstance(value, (list, tuple)):
-        return list(value)
-    return []
-
-
-
-def extract_lines(predict_result: Any) -> list[OcrLine]:
-    """Parse field-OCR predict() output into OcrLine rows (legacy/debug)."""
-    items: list[Any]
-    if predict_result is None:
-        return []
-    if isinstance(predict_result, list):
-        items = predict_result
-    else:
-        items = [predict_result]
-    lines: list[OcrLine] = []
+def FieldPredictToStringJson(raw: Any) -> dict[str, Any]:
+    """Map PaddleOCR field predict() to minimal string1 JSON."""
+    from paddle_ocr import config
+    texts: list[str] = []
+    items = raw if isinstance(raw, list) else [raw]
     for item in items:
-        lines.extend(_lines_from_one(item))
-    return lines
-
-
-
-def _lines_from_one(item: Any) -> list[OcrLine]:
-    data = _result_to_mapping(item)
-    texts = _as_list(data.get("rec_texts") or data.get("texts"))
-    scores = _as_list(data.get("rec_scores") or data.get("scores"))
-    polys = _as_list(data.get("rec_polys") or data.get("dt_polys") or data.get("boxes"))
-    if not texts and "ocr_result" in data:
-        return extract_lines(data["ocr_result"])
-    out: list[OcrLine] = []
-    for i, text in enumerate(texts):
-        t = "" if text is None else str(text)
-        conf = 0.0
-        if i < len(scores):
-            try:
-                conf = float(scores[i])
-            except (TypeError, ValueError):
-                conf = 0.0
-        box: list[Any] = []
-        if i < len(polys):
-            box = _as_list(polys[i])
-        out.append(OcrLine(text=t, confidence=conf, box=box))
+        data = item
+        if hasattr(item, "json"):
+            payload = item.json
+            data = payload() if callable(payload) else payload
+        if isinstance(data, dict) and "res" in data and isinstance(data["res"], dict):
+            data = data["res"]
+        if not isinstance(data, dict):
+            continue
+        rec = data.get("rec_texts") or data.get("texts") or []
+        if hasattr(rec, "tolist"):
+            rec = rec.tolist()
+        for text in rec:
+            line = "" if text is None else str(text).strip()
+            if line:
+                texts.append(line)
+    out: dict[str, Any] = {"ok": True, "mode": "fast"}
+    if texts:
+        out["string1"] = "\n".join(texts)
+        out["message"] = config.MSG_OK
+    else:
+        out["message"] = config.MSG_EMPTY
     return out
 
-
-
-def _result_to_mapping(item: Any) -> dict[str, Any]:
-    if isinstance(item, dict):
-        return item
-    for attr in ("json", "res", "data"):
-        if hasattr(item, attr):
-            val = getattr(item, attr)
-            if callable(val):
-                try:
-                    val = val()
-                except TypeError:
-                    pass
-            if isinstance(val, dict):
-                if "res" in val and isinstance(val["res"], dict):
-                    return val["res"]
-                return val
-    mapping: dict[str, Any] = {}
-    for key in ("rec_texts", "rec_scores", "rec_polys", "dt_polys", "texts", "scores", "boxes"):
-        if hasattr(item, key):
-            mapping[key] = getattr(item, key)
-    return mapping
-
-
-
-def join_text(lines: list[OcrLine]) -> str:
-    """Engine original text, reading order, newline-joined; no business cleanup."""
-    parts = [ln.text for ln in lines if ln.text is not None]
-    kept = [p for p in parts if str(p).strip() != ""]
-    return "\n".join(kept)

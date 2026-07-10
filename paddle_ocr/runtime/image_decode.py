@@ -124,3 +124,14 @@ def prepare_for_predict(img: np.ndarray) -> np.ndarray:
     if not img.flags["C_CONTIGUOUS"]:
         img = np.ascontiguousarray(img)
     return img
+
+
+
+def load_for_ocr(
+    pic: bytes | Path | str | np.ndarray,
+    rectangle: tuple[int, int, int, int] | None,
+) -> np.ndarray:
+    """Decode path/bytes, apply OpenCV ROI, return contiguous BGR for predict."""
+    img = decode_image(pic)
+    img = apply_crop_box(img, rectangle)
+    return prepare_for_predict(img)

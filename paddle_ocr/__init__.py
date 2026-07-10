@@ -1,6 +1,6 @@
 """Self-contained PaddleOCR platform (no UI, no SQLite)."""
 
-from paddle_ocr.main import HealthCheck, PaddleOcr, health_check, recognize
+from paddle_ocr.main import HealthCheck, PaddleOcr, PaddleOcrTasks
 
 
-__all__ = ["PaddleOcr", "HealthCheck", "recognize", "health_check"]
+__all__ = ["PaddleOcr", "PaddleOcrTasks", "HealthCheck"]

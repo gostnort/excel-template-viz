@@ -151,8 +151,7 @@ if "%SKIP_OCR%"=="1" (
     echo Skipping PaddleOCR install (--skip-ocr).
     echo You can install later with:
     echo   pip install -r paddle_ocr/requirements.txt
-    echo   python paddle_ocr/main.py download
-    echo   python paddle_ocr/main.py smoke
+    echo   python paddle_ocr/main.py
 ) else (
     echo Installing PaddleOCR platform dependencies...
     pip install -r paddle_ocr/requirements.txt >> temp\install_paddle_ocr.log 2>&1
@@ -160,23 +159,13 @@ if "%SKIP_OCR%"=="1" (
         echo WARNING: paddle_ocr requirements failed. See temp\install_paddle_ocr.log
         echo Re-run install.bat, or continue with --skip-ocr, or install manually.
     ) else (
-        echo Downloading OCR models into paddle_ocr/models ...
-        python paddle_ocr/main.py download >> temp\install_paddle_ocr.log 2>&1
+        echo Running OCR CLI gate (health, download, sample PaddleOcr)...
+        python paddle_ocr/main.py >> temp\install_paddle_ocr.log 2>&1
         if errorlevel 1 (
-            echo WARNING: OCR model download failed once; retrying...
-            python paddle_ocr/main.py download >> temp\install_paddle_ocr.log 2>&1
-            if errorlevel 1 (
-                echo WARNING: OCR model download failed. See temp\install_paddle_ocr.log
-                echo Re-run: python paddle_ocr/main.py download
-            )
-        )
-        echo Running OCR smoke test...
-        python paddle_ocr/main.py smoke >> temp\install_paddle_ocr.log 2>&1
-        if errorlevel 1 (
-            echo WARNING: OCR smoke failed. See temp\install_paddle_ocr.log
-            echo Re-run: python paddle_ocr/main.py smoke
+            echo WARNING: OCR CLI gate failed. See temp\install_paddle_ocr.log
+            echo Re-run: python paddle_ocr/main.py
         ) else (
-            echo OCR smoke passed.
+            echo OCR CLI gate passed.
         )
     )
 )
