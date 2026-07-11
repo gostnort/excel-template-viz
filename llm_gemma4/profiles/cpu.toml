@@ -1,0 +1,6 @@
+# docs/embed_gemma4.md §1.2
+litert_backend = "cpu"
+mtp = false
+thinking_budget = 512
+compress_trigger_ratio = 0.65
+compress_model_summary = false

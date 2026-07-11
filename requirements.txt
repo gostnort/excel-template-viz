@@ -18,15 +18,10 @@ tomlkit>=0.13
 
 Pillow>=10.0
 
-# LLM dependencies - llama.cpp for GGUF inference (CPU wheel)
-# Windows CPU wheel compatibility (install.bat auto-detects via llm_gemma4/backends/llamacpp/cpu_features.py):
-#   0.3.28  - CPUs WITHOUT AVX512 (Ryzen 5600X, Core 7 150U, most laptops)
-#   0.3.29+ - CPUs WITH AVX512F (Zen 4+, Xeon/workstation); 0xc000001d on non-AVX512
-# Manual install (uses CPU detection):
-#   python -c "from llm_gemma4.backends.llamacpp.cpu_features import llama_cpp_install_command; print(llama_cpp_install_command())"
-# Full table: QUICKSTART.md § LLM Dependencies
-# install.bat pins the correct version before pip install -r requirements.txt
-llama-cpp-python==0.3.28
+# llm_gemma4 (Gemma 4 E4B, docs/embed_gemma4.md): pulls in litert-lm-api==0.14.0 +
+# litert-lm-builder==0.14.0. Pinned exactly -- 0.13.x lacks max_output_tokens on
+# Conversation.send_message() and several other APIs this platform relies on.
+litert-lm==0.14.0
 huggingface-hub>=1.2.0,<2.0.0
 psutil>=5.9.0
 

@@ -1,0 +1,6 @@
+# docs/embed_gemma4.md §1.2 (profile name kept for continuity; backend is LiteRT GPU, not OpenVINO IR)
+litert_backend = "gpu"
+mtp = true
+thinking_budget = 512
+compress_trigger_ratio = 0.65
+compress_model_summary = false
