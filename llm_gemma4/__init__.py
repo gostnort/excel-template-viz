@@ -7,7 +7,14 @@ their own application packages (e.g. paddle_ocr/runtime/semantic_gate.py).
 
 from __future__ import annotations
 
-__all__ = ["ConversationOnce"]
+__all__ = [
+    "ConversationOnce",
+    "StartGemma",
+    "EndGemma",
+    "Pic2Str",
+]
+
+_LAZY_NAMES = frozenset(__all__)
 
 
 def __getattr__(name: str):
@@ -23,7 +30,7 @@ def __getattr__(name: str):
         name (str): 被访问的属性名。
     输出: 对应属性值；未知属性名抛 AttributeError。
     """
-    if name == "ConversationOnce":
-        from llm_gemma4.__main__ import ConversationOnce
-        return ConversationOnce
+    if name in _LAZY_NAMES:
+        import llm_gemma4.__main__ as _main
+        return getattr(_main, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

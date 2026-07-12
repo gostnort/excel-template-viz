@@ -10,9 +10,15 @@ from __future__ import annotations
 
 import sys
 import threading
+from pathlib import Path
 
 from llm_gemma4.backends.base import LlmBackend
 
+# 单一单例：Engine 构造时恒带 vision_backend（实测 2026-07-12，见
+# docs/embed_gemma4.md §3.1d——带 vision_backend 的 Engine 相比纯文本 Engine
+# 显存涨幅 ~0.4GB(4.0GB vs 3.6GB)，可忽略；不值得为省这点显存维护两个
+# Engine（此前的 _vision_backend 双单例设计已废弃，ConversationOnce/Pic2Str
+# 现在共用同一个 Engine，StartGemma() 一次预热两者都受益）。
 _backend: LlmBackend | None = None
 _backend_lock = threading.Lock()
 
@@ -52,12 +58,49 @@ def ConversationOnce(
     return result.text
 
 
+def Pic2Str(
+    image: str | Path | bytes,
+    prompt: str,
+    *,
+    system: str | None = None,
+    max_tokens: int | None = None,
+    temperature: float = 0.0,
+) -> str:
+    """
+    函数名: Pic2Str
+    作用: 通用图片→文本接口。给 Gemma4 喂一张图片 + 一段文本提示，原样返回模型
+        生成的文本。与 ConversationOnce 共用同一个模块级单例 _backend（见
+        _get_backend；Engine 构造时恒带 vision_backend，已实测：真实
+        gemma-4-E4B-it.litertlm + Backend.CPU() 可以正常读图，2026-07-12）。
+        本函数不做任何业务语义解析——是否要求模型输出 JSON/TOML 等结构化文本、
+        拿到文本后怎么解析/校验，由调用方自己决定，不属于本平台职责（同
+        ConversationOnce 不含业务域 prompt 的原则）。识别质量、要不要用这个
+        接口替代/辅助现有 OCR 流程，也是调用方的判断，本函数只保证接口能通。
+    输入:
+        image (str | Path | bytes): 图片文件路径，或已编码的原始图片字节
+            （jpg/png 等，非解码后的像素数组）。
+        prompt (str): 提示词，可在其中要求模型输出特定格式（如 JSON/TOML）。
+        system (str | None): 可选系统提示词，同 ConversationOnce 的 system。
+        max_tokens (int | None): 不传时按硬件自决默认值（同 ConversationOnce）。
+        temperature (float): 采样温度，默认 0（确定性输出）。
+    输出:
+        str: 模型生成的文本。Gemma4 不可用、模型不支持视觉、或推理失败时抛异常。
+    """
+    result = _get_backend().generate_vision(
+        image, prompt, system=system, max_tokens=max_tokens, temperature=temperature
+    )
+    return result.text
+
+
 def _get_backend() -> LlmBackend:
     """
     函数名: _get_backend
     作用: 取模块级单例 backend，首次调用才真正构建；后续调用直接复用同一个
         Engine（GPU 加载成本一次性，复用才划算，见 docs/embed_gemma4.md §1.1）。
-        这个单例只在当前进程存活期间有效，不会跨进程持久化——见 §3.1b 末段。
+        Engine 构造时恒带 vision_backend（enable_vision=True）——实测显存涨幅
+        只有 ~0.4GB（4.0GB vs 纯文本 3.6GB，2026-07-12），不值得为此再维护一个
+        独立的视觉单例；ConversationOnce 与 Pic2Str 共用这一个 Engine。这个单例
+        只在当前进程存活期间有效，不会跨进程持久化——见 §3.1b 末段。
     输入: 无。
     输出:
         LlmBackend: 已初始化（或已缓存）的底座 backend 实例。
@@ -70,7 +113,7 @@ def _get_backend() -> LlmBackend:
                 # backends.factory 之间出现循环导入。
                 from llm_gemma4.backends.factory import create_backend
 
-                _backend = create_backend()
+                _backend = create_backend(enable_vision=True)
     return _backend
 
 
@@ -79,11 +122,13 @@ def StartGemma() -> None:
     函数名: StartGemma
     作用: 主动加载并常驻 Gemma4——按当前探测到的硬件能力选 NPU/GPU/CPU
         （复用 _get_backend 的同一套单例、同一套探测逻辑，见 §1.1/§1.3），
-        不等到第一次 ConversationOnce() 调用才隐式触发冷启动。给想自己控制
-        "冷启动成本在什么时候扛"的调用方用（例如服务进程启动阶段提前加载），
-        跟 ConversationOnce() 共用同一个模块级单例：调用顺序不影响后续复用，
-        StartGemma() 之后的 ConversationOnce() 直接吃现成的 Engine，不会重复
-        加载。已加载时重复调用是空操作（幂等）。
+        不等到第一次 ConversationOnce()/Pic2Str() 调用才隐式触发冷启动。给想
+        自己控制"冷启动成本在什么时候扛"的调用方用（例如服务进程启动阶段提前
+        加载），跟 ConversationOnce()/Pic2Str() 共用同一个模块级单例：调用顺序
+        不影响后续复用，StartGemma() 之后两者都直接吃现成的 Engine，不会重复
+        加载。已加载时重复调用是空操作（幂等）。这一份 Engine 恒带
+        vision_backend（见 _get_backend），所以 StartGemma() 一次预热同时覆盖
+        文本与视觉两条路径。
         `_get_backend()` 本身只构造轻量的 LiteRtBackend 包装对象，真正重的
         Engine 构造是惰性的、原本要等第一次 generate() 才触发（见
         backends/litert/backend.py `_ensure_engine`）——所以这里必须显式调

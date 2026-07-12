@@ -8,7 +8,10 @@ calls, stateful `open_session()`/`send_turn()` for the multi-turn wizard.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Protocol, Sequence
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,21 @@ class LlmBackend(Protocol):
 
     def open_session(self, session_id: str) -> LlmSession: ...
     """Stateful multi-turn: same session_id reuses the same Conversation."""
+
+    def generate_vision(
+        self,
+        image: "str | Path | bytes",
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float = 0.0,
+    ) -> GenerateResult: ...
+    """Stateless single call with one image attached (docs §3.1d): opens a
+    temporary Conversation, sends one multimodal turn, closes it. Only
+    meaningful on an instance constructed for vision (see `create_backend
+    (enable_vision=True)`); a plain text-only instance may raise here instead
+    of silently ignoring the image."""
 
     def warm(self) -> None: ...
     """Force any lazy construction (e.g. the real Engine) to happen now

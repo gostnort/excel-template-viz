@@ -6,8 +6,8 @@ import threading
 from typing import Any
 
 from paddle_ocr import config
+from paddle_ocr.engines.pp_ocr.backend import GetFieldStripBackend
 from paddle_ocr.models_catalog import required_models_present
-from paddle_ocr.runtime.field_backend import GetFieldStripBackend
 from paddle_ocr.runtime.image_decode import CropBoxError, ImageDecodeError, load_for_ocr
 from paddle_ocr.runtime.infer_lock import INFER_LOCK
 from paddle_ocr.runtime.postprocess import HasContent, StructureResultToJson

@@ -31,7 +31,10 @@ def _decode_heic_bytes(data: bytes) -> np.ndarray:
     # Optional dependency; ImportError means OCR install incomplete.
     import pillow_heif
     heif = pillow_heif.open_heif(data, convert_hdr_to_8bit=True, bgr_mode=True)
-    arr = np.asarray(heif)
+    # 中文注释：np.array(heif) 显式 copy——np.asarray(heif) 返回的是 pillow_heif 内部
+    # 缓冲的 view，heif 对象函数返回后被 GC，view 悬空，后续读像素（array_equal /
+    # predict / crop）会触发 0xC0000005 访问冲突。copy 让 ndarray 自持数据。
+    arr = np.array(heif, copy=True)
     if arr.ndim == 2:
         import cv2
         arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
@@ -46,6 +49,64 @@ def _decode_with_cv2(data: bytes) -> np.ndarray | None:
     buf = np.frombuffer(data, dtype=np.uint8)
     img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
     return img
+
+
+_HEIC_SUFFIXES = (".heic", ".heif")
+
+
+def is_heic(image: bytes | Path | str) -> bool:
+    """
+    函数名: is_heic
+    作用: 判断输入是否为 HEIC/HEIF 图片——路径先看后缀，再看 ISO BMFF ftyp brand
+        （heic/heif/mif1/msf1/heim/heis/hevx）；字节直接看 ftyp brand。是
+        `decode_image` 内部 HEIC 分支的公开入口，也供调用方在解码前预判格式。
+    输入:
+        image (bytes|Path|str): 图片原始字节或文件路径。
+    输出:
+        bool: True=HEIC/HEIF。
+    """
+    if isinstance(image, (str, Path)):
+        if Path(image).suffix.lower() in _HEIC_SUFFIXES:
+            return True
+        path = Path(image)
+        if not path.is_file():
+            return False
+        data = path.read_bytes()
+    elif isinstance(image, (bytes, bytearray, memoryview)):
+        data = bytes(image)
+    else:
+        return False
+    return _is_heic_bytes(data)
+
+
+def decode_heic(image: bytes | Path | str) -> np.ndarray:
+    """
+    函数名: decode_heic
+    作用: 解码 HEIC/HEIF → BGR uint8 ndarray（走 pillow_heif；HDR→8bit、BGR 模式；
+        灰度/RGBA 自动转 BGR）。是 HEIC/HEIF 的专用解码函数，`decode_image` 的
+        HEIC 分支与其共用同一套底层逻辑。pillow_heif 缺失抛 ImportError（OCR 安装不全）。
+    输入:
+        image (bytes|Path|str): HEIC/HEIF 图片原始字节或文件路径。
+    输出:
+        np.ndarray: BGR uint8 ndarray（H×W×3）。
+    """
+    if isinstance(image, (str, Path)):
+        path = Path(image)
+        if not path.is_file():
+            raise ImageDecodeError("missing file")
+        data = path.read_bytes()
+    elif isinstance(image, (bytes, bytearray, memoryview)):
+        data = bytes(image)
+    else:
+        raise ImageDecodeError("unsupported type")
+    if not data:
+        raise ImageDecodeError("empty bytes")
+    try:
+        return _decode_heic_bytes(data)
+    except ImageDecodeError:
+        raise
+    except Exception as exc:
+        raise ImageDecodeError("heic decode failed") from exc
 
 
 def decode_image(image: bytes | Path | str | np.ndarray) -> np.ndarray:
@@ -66,9 +127,10 @@ def decode_image(image: bytes | Path | str | np.ndarray) -> np.ndarray:
         raise ImageDecodeError("unsupported type")
     if not data:
         raise ImageDecodeError("empty bytes")
+    # HEIC/HEIF 分支：后缀或 ftyp brand 命中即走 pillow_heif（公开入口 is_heic/decode_heic）。
     suffix_heic = False
     if isinstance(image, (str, Path)):
-        suffix_heic = Path(image).suffix.lower() in (".heic", ".heif")
+        suffix_heic = Path(image).suffix.lower() in _HEIC_SUFFIXES
     if suffix_heic or _is_heic_bytes(data):
         try:
             return _decode_heic_bytes(data)

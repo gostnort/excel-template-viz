@@ -77,10 +77,15 @@ def StructureResultToJson(raw: Any, *, mode: str = "fast") -> dict[str, Any]:
             content = _block_content(block)
             if "table" in label:
                 rows = HtmlTableToRows(content)
-                if not rows:
-                    # content may be empty; fall through to table_res_list later
+                if rows:
+                    tables.append(rows)
                     continue
-                tables.append(rows)
+                # VL 的 OTSL→HTML 转换可能失败，block_content 留下非空原始文本。
+                # 不丢内容：把非空 table 文本降级成 string*，避免表格被静默丢弃。
+                fallback = content.strip()
+                if fallback and not fallback.startswith("<html") and not fallback.startswith("<table"):
+                    strings.append(fallback)
+                continue
             else:
                 text = content.strip()
                 # Skip raw html leftovers

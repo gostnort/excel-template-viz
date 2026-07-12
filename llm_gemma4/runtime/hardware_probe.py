@@ -69,20 +69,30 @@ def probe_npu_backend() -> "lm.Backend | None":
         return None
 
 
-def build_engine(model_path: str, profile: str) -> tuple["lm.Engine", str]:
+def build_engine(
+    model_path: str, profile: str, *, enable_vision: bool = False
+) -> tuple["lm.Engine", str]:
     """Resolve `profile` into a real, constructed `Engine`.
 
     `profile` in `FORCED_BACKEND_BY_PROFILE` demands exactly that backend and
     lets its error propagate (explicit override, e.g. a test pinning `"cpu"`).
     Any other value (including the "auto" default) runs the NPU -> GPU -> CPU
     cascade and returns the first backend that actually constructs.
+
+    `enable_vision`: also pass the same winning `Backend` as `vision_backend=`
+    (real `gemma-4-E4B-it.litertlm`, CPU, empirically confirmed 2026-07-12: no
+    error, image actually gets read). A plain-text `Engine()` never needs this,
+    so it stays opt-in rather than always-on -- forcing vision on for every
+    caller (judge/correct/wizard) would pay its extra weight-load cost even
+    when nobody sends an image.
     """
     import litert_lm as lm
     _silence_native_logs(lm)
     forced = FORCED_BACKEND_BY_PROFILE.get(profile)
     if forced is not None:
         backend = lm.Backend.CPU() if forced == "cpu" else lm.Backend.GPU()
-        return lm.Engine(model_path, backend=backend), forced
+        vision_kwargs = {"vision_backend": backend} if enable_vision else {}
+        return lm.Engine(model_path, backend=backend, **vision_kwargs), forced
     candidates: list[tuple["lm.Backend | None", str]] = [
         (probe_npu_backend(), "npu"),
         (lm.Backend.GPU(), "gpu"),
@@ -93,7 +103,8 @@ def build_engine(model_path: str, profile: str) -> tuple["lm.Engine", str]:
         if backend is None:
             continue
         try:
-            return lm.Engine(model_path, backend=backend), label
+            vision_kwargs = {"vision_backend": backend} if enable_vision else {}
+            return lm.Engine(model_path, backend=backend, **vision_kwargs), label
         except Exception as exc:
             _log.warning("Engine() failed on %s backend, falling back: %s", label, exc)
             last_error = exc

@@ -1,7 +1,7 @@
 """LiteRtBackend: long-lived Engine + Conversation-per-call `generate()`.
 
 Real API facts this file relies on (verified 2026-07-11 against `litert-lm`
-0.14.0 + gemma-4-E4B-it.litertlm, see docs/embed_gemma4.md ยง1.3/ยง3.1/ยง3.2.1/ยง3.6.1a):
+0.14.0 + gemma-4-E4B-it.litertlm, see docs/embed_gemma4.md ?1.3/?3.1/?3.2.1/?3.6.1a):
   - `Engine(model_path, backend=Backend.CPU()|Backend.GPU()|Backend.NPU())` is the
     long-lived handle; which concrete `Backend` to pass is resolved by
     `runtime/hardware_probe.py`'s NPU -> GPU -> CPU cascade, not hardcoded here.
@@ -18,6 +18,7 @@ from __future__ import annotations
 import inspect
 import threading
 from concurrent.futures import Future
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from llm_gemma4 import config, hf_download
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
 
 
 # Self-determined output-token budget when a caller passes max_tokens=None
-# (docs/embed_gemma4.md ยง3.1a/ยง1.2): GPU decodes ~9x faster than CPU (ยง1.1
+# (docs/embed_gemma4.md ?3.1a/?1.2): GPU decodes ~9x faster than CPU (?1.1
 # breakeven test), so it can afford a larger default reply length for the
 # same wall-clock cost. Reused from the existing cpu/cuda/openvino profile
 # thinking_budget numbers rather than inventing a new table.
@@ -39,9 +40,16 @@ _DEFAULT_MAX_TOKENS_FALLBACK = 512
 
 
 class LiteRtBackend:
-    def __init__(self, profile: str, pending_download: "Future[tuple[bool, str]] | None" = None) -> None:
+    def __init__(
+        self,
+        profile: str,
+        pending_download: "Future[tuple[bool, str]] | None" = None,
+        *,
+        enable_vision: bool = False,
+    ) -> None:
         self._profile = profile
         self._pending_download = pending_download
+        self._enable_vision = enable_vision
         self._engine: "lm.Engine | None" = None
         self._engine_lock = threading.Lock()
         self._backend_label: str | None = None
@@ -74,11 +82,48 @@ class LiteRtBackend:
             create_kwargs["tools"] = [_build_judgment_tool_function(judgment_tool)]
             create_kwargs["automatic_tool_calling"] = False
             create_kwargs["enable_constrained_decoding"] = True
-            # ยง3.6.1a: below this the tool call itself gets truncated mid-generation.
+            # ?3.6.1a: below this the tool call itself gets truncated mid-generation.
             budget = max(budget, config.CONSTRAINED_DECODING_MIN_TOKENS)
         conversation = engine.create_conversation(**create_kwargs)
         try:
             response = conversation.send_message(user_message, max_output_tokens=budget)
+        finally:
+            conversation.close()
+        return _to_generate_result(response)
+
+    def generate_vision(
+        self,
+        image: "str | Path | bytes",
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float = 0.0,
+    ) -> GenerateResult:
+        """Stateless single call with an image attached; only meaningful when
+        this instance was built with `enable_vision=True` (?3.1d) -- otherwise
+        `Engine.create_conversation` still accepts the multimodal message, but
+        `litert_lm` raises inside `send_message` because no vision_backend was
+        ever set on the underlying Engine."""
+        import litert_lm as lm
+        engine = self._ensure_engine()
+        image_content = (
+            lm.Content.ImageBytes(image)
+            if isinstance(image, bytes)
+            else lm.Content.ImageFile(str(Path(image).resolve()))
+        )
+        multimodal_input = lm.Contents.of(image_content, prompt)
+        create_kwargs: dict[str, Any] = {
+            "system_message": system,
+            "sampler_config": lm.SamplerConfig(temperature=temperature),
+        }
+        if max_tokens is not None:
+            budget = max_tokens
+        else:
+            budget = _DEFAULT_MAX_TOKENS_BY_BACKEND.get(self._backend_label, _DEFAULT_MAX_TOKENS_FALLBACK)
+        conversation = engine.create_conversation(**create_kwargs)
+        try:
+            response = conversation.send_message(multimodal_input, max_output_tokens=budget)
         finally:
             conversation.close()
         return _to_generate_result(response)
@@ -94,14 +139,14 @@ class LiteRtBackend:
         self._ensure_engine()
 
     def count_tokens(self, text: str) -> int:
-        # No standalone tokenizer call confirmed in litert_lm 0.14.0 (ยง4.2); this
+        # No standalone tokenizer call confirmed in litert_lm 0.14.0 (?4.2); this
         # estimate is only used before a Conversation exists to query token_count.
         return max(1, len(text) // 3)
 
     def health_check(self) -> HealthReport:
         ready = config.model_exists()
         # Once an Engine has actually been built, report what it really landed
-        # on; before that, only the cheap NPU probe is safe to run (ยง hardware_probe).
+        # on; before that, only the cheap NPU probe is safe to run (? hardware_probe).
         litert_backend = self._backend_label or hardware_probe.planned_backend_hint(self._profile)
         return HealthReport(
             ok=ready,
@@ -121,7 +166,7 @@ class LiteRtBackend:
             self._engine = None
 
     def _ensure_engine(self) -> "lm.Engine":
-        # Blocks here, on first real use, on any in-flight async download โÿÿ
+        # Blocks here, on first real use, on any in-flight async download ÿÿÿ
         # construction (`__init__`) itself never blocks (see hf_download.py).
         if self._engine is not None:
             return self._engine
@@ -132,7 +177,7 @@ class LiteRtBackend:
             if not ok:
                 raise RuntimeError(f"{config.MSG_DOWNLOAD_FAILED} ({message})")
             self._engine, self._backend_label = hardware_probe.build_engine(
-                str(config.model_path()), self._profile
+                str(config.model_path()), self._profile, enable_vision=self._enable_vision
             )
             return self._engine
 
@@ -155,7 +200,7 @@ def _to_generate_result(response: Mapping[str, Any]) -> GenerateResult:
 
 def _build_judgment_tool_function(spec: JudgmentToolSpec):
     """Synthesize a callable whose signature litert_lm's `_FunctionTool` (tools.py)
-    turns into the OpenAPI schema for constrained decoding (ยง3.6.1a)."""
+    turns into the OpenAPI schema for constrained decoding (?3.6.1a)."""
     def _tool(**_kwargs: Any) -> None:
         return None
     parameters = [

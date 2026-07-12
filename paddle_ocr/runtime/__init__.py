@@ -1,1 +1,1 @@
-"""paddle_ocr runtime: structure backend, decode, postprocess."""
+"""paddle_ocr runtime: shared hot-path helpers (decode, postprocess, grid, lock)."""
