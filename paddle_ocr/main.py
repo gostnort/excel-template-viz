@@ -7,9 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from paddle_ocr import config
-from paddle_ocr.models_catalog import models_dir_nonempty
-from paddle_ocr.runtime.llm_refine import LlmRefine, ShouldTryLlm
-from paddle_ocr.runtime.postprocess import HasContent
+from paddle_ocr.models_catalog import required_models_present
 from paddle_ocr.runtime.structure_backend import GetStructureBackend
 
 
@@ -18,28 +16,16 @@ Rectangle = tuple[int, int, int, int] | None
 OcrTask = tuple[PicInput, Rectangle]
 
 
+
 def PaddleOcr(
     pic: PicInput,
     rectangle: Rectangle = None,
 ) -> dict[str, Any]:
     """One picture + optional OpenCV ROI → string*/table* JSON (no HealthCheck)."""
     try:
-        fast = GetStructureBackend().Run(pic, rectangle)
+        return GetStructureBackend().Run(pic, rectangle)
     except Exception:
-        fast = {"ok": False, "message": config.MSG_INFER_FAIL, "mode": "fast"}
-    if not ShouldTryLlm(fast):
-        return fast
-    try:
-        llm = LlmRefine(pic, rectangle, draft=fast)
-    except Exception:
-        llm = {"ok": False, "message": config.MSG_INFER_FAIL, "mode": "llm"}
-    if llm.get("ok") and HasContent(llm):
-        return llm
-    if fast.get("ok") and HasContent(fast):
-        merged = dict(fast)
-        merged["message"] = config.MSG_LLM_PARTIAL
-        return merged
-    return llm
+        return {"ok": False, "message": config.MSG_INFER_FAIL, "mode": "fast"}
 
 
 
@@ -62,7 +48,7 @@ def HealthCheck() -> dict[str, Any]:
 
 def _ensure_models() -> tuple[bool, str]:
     report = HealthCheck()
-    if report.get("ok") and models_dir_nonempty():
+    if report.get("ok") and required_models_present():
         return True, str(report.get("message") or config.MSG_HEALTH_OK)
     from paddle_ocr.scripts.download_models import download_models
     ok, message = download_models()
@@ -71,6 +57,8 @@ def _ensure_models() -> tuple[bool, str]:
     report = HealthCheck()
     if not report.get("ok"):
         return False, str(report.get("message") or config.MSG_NOT_READY)
+    if not required_models_present():
+        return False, config.MSG_MODEL_MISSING
     return True, str(report.get("message") or config.MSG_HEALTH_OK)
 
 

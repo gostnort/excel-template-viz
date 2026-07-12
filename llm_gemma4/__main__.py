@@ -74,6 +74,28 @@ def _get_backend() -> LlmBackend:
     return _backend
 
 
+def StartGemma() -> None:
+    """
+    函数名: StartGemma
+    作用: 主动加载并常驻 Gemma4——按当前探测到的硬件能力选 NPU/GPU/CPU
+        （复用 _get_backend 的同一套单例、同一套探测逻辑，见 §1.1/§1.3），
+        不等到第一次 ConversationOnce() 调用才隐式触发冷启动。给想自己控制
+        "冷启动成本在什么时候扛"的调用方用（例如服务进程启动阶段提前加载），
+        跟 ConversationOnce() 共用同一个模块级单例：调用顺序不影响后续复用，
+        StartGemma() 之后的 ConversationOnce() 直接吃现成的 Engine，不会重复
+        加载。已加载时重复调用是空操作（幂等）。
+        `_get_backend()` 本身只构造轻量的 LiteRtBackend 包装对象，真正重的
+        Engine 构造是惰性的、原本要等第一次 generate() 才触发（见
+        backends/litert/backend.py `_ensure_engine`）——所以这里必须显式调
+        `.warm()` 把那次构造提前逼出来，只调 `_get_backend()` 不够（已实测
+        验证：不调 warm() 时 StartGemma() 本身几乎瞬间返回，冷启动成本原样
+        转嫁到了下一次 ConversationOnce()，没有起到"提前扛"的效果）。
+    输入: 无。
+    输出: 无（副作用：填充模块级 _backend 单例，且其 Engine 已构造完毕）。
+    """
+    _get_backend().warm()
+
+
 def ResetBackend() -> None:
     """
     函数名: ResetBackend
@@ -86,6 +108,19 @@ def ResetBackend() -> None:
         if _backend is not None:
             _backend.close()
             _backend = None
+
+
+def EndGemma() -> None:
+    """
+    函数名: EndGemma
+    作用: 卸载 StartGemma()（或任意一次 ConversationOnce()）加载的 Gemma4，
+        释放其占用的常驻内存/显存。是 ResetBackend 的对外别名——同一份实现，
+        只是名字跟 StartGemma 成对，方便调用方按"启动/关闭"这套心智模型使用，
+        不用记 Reset 这个偏内部测试向的名字。未加载时调用是空操作。
+    输入: 无。
+    输出: 无。
+    """
+    ResetBackend()
 
 
 def _run_from_cli() -> None:

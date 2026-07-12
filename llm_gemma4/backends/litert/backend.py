@@ -90,6 +90,9 @@ class LiteRtBackend:
             self._sessions[session_id] = LiteRtSession(conversation)
         return self._sessions[session_id]
 
+    def warm(self) -> None:
+        self._ensure_engine()
+
     def count_tokens(self, text: str) -> int:
         # No standalone tokenizer call confirmed in litert_lm 0.14.0 (Â§4.2); this
         # estimate is only used before a Conversation exists to query token_count.
@@ -118,7 +121,7 @@ class LiteRtBackend:
             self._engine = None
 
     def _ensure_engine(self) -> "lm.Engine":
-        # Blocks here, on first real use, on any in-flight async download â€”
+        # Blocks here, on first real use, on any in-flight async download âÿÿ
         # construction (`__init__`) itself never blocks (see hf_download.py).
         if self._engine is not None:
             return self._engine

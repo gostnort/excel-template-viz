@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import threading
 from typing import Any
 
@@ -11,7 +10,6 @@ from paddle_ocr.runtime.infer_lock import INFER_LOCK
 from paddle_ocr.runtime.postprocess import FieldPredictToStringJson
 
 
-_log = logging.getLogger(__name__)
 _lock = threading.Lock()
 _instance: "FieldStripBackend | None" = None
 
@@ -30,13 +28,13 @@ class FieldStripBackend:
         config.ensure_pdx_cache_env()
         try:
             from paddleocr import PaddleOCR
+            from paddlex.utils import logging as pdx_logging
+            pdx_logging._logger.disabled = True
         except Exception:
-            _log.exception("PaddleOCR import failed")
             self._init_error = "import"
             return None
         try:
             self._engine = PaddleOCR(
-                lang="ch",
                 text_detection_model_name=config.DEFAULT_FIELD_DET_MODEL,
                 text_recognition_model_name=config.DEFAULT_FIELD_REC_MODEL,
                 use_doc_orientation_classify=False,
@@ -49,7 +47,6 @@ class FieldStripBackend:
             )
             return self._engine
         except Exception:
-            _log.exception("PaddleOCR init failed")
             self._init_error = "init"
             return None
 
@@ -68,7 +65,6 @@ class FieldStripBackend:
                     text_det_limit_side_len=long_side,
                 )
             except Exception:
-                _log.exception("field strip predict failed")
                 return {"ok": False, "message": config.MSG_INFER_FAIL, "mode": "fast"}
         return FieldPredictToStringJson(raw)
 
