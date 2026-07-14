@@ -1,6 +1,9 @@
 from pathlib import Path
 from nicegui import ui, app
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_APP_VERSION = _PROJECT_ROOT.joinpath('VERSION').read_text(encoding='utf-8').strip()
+
 # 加载全局 CSS
 ui.add_css(Path(__file__).parent.joinpath('components', 'style.css').read_text(encoding='utf-8'), shared=True)
 
@@ -20,7 +23,7 @@ if __name__ in {"__main__", "__mp_main__"}:
     ui.run(
         host='127.0.0.1',
         port=8738,
-        title='Excel Template Viz',
+        title=f'Excel Template Viz {_APP_VERSION}',
         storage_secret='local-offline-secret-key-2026',  # 必须项：开启浏览器 Cookie 存储
         reload=False,                                     # 单进程；E2E 测试前避免热重载子进程缓存旧模块
         native=False,                                    # 暂不使用 pywebview 避免多窗口渲染问题

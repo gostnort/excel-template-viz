@@ -1,5 +1,5 @@
 @echo off
-echo Starting Excel Template Viz - NiceGUI...
+echo Starting Excel Template Viz 0.1 (NiceGUI)...
 echo.
 
 REM Activate virtual environment
