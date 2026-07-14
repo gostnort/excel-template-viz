@@ -22,93 +22,67 @@ html, body {
   height: 100vh;
 }
 
-.shell { display: flex; height: 100vh; border: 2px solid #000; }
-
-/* ui.splitter shell — panels flush top, native drag on separator */
-.shell-splitter.q-splitter,
-.shell-splitter.nicegui-splitter {
-  border: none;
-}
-.shell-splitter .q-splitter__panel {
-  overflow: hidden;
-  padding: 0 !important;
-}
-.shell-splitter .q-splitter__separator {
-  width: 6px !important;
-  min-width: 6px !important;
-  background: transparent !important;
-  align-self: stretch;
-}
-.shell-splitter .q-splitter__separator-area {
-  cursor: col-resize !important;
-}
-
-/* 左侧模板侧边栏 */
-.sidebar {
-  border-right: 1px solid #000;
-  display: flex;
-  flex-direction: column;
-  flex-shrink: 0;
-  height: 100%;
-  padding: 0 !important;
-  gap: 0 !important;
+.shell { display: flex; flex-direction: column; height: 100vh; border: 2px solid #000; }
+/* 顶栏：左（已选模板 + 折叠）与右（Tab）同一行 */
+.shell-top {
+  display: flex; flex-shrink: 0;
+  border-bottom: 2px solid #000;
+  min-height: 40px;
 }
 .sidebar-header {
-  padding: 10px 12px;
+  display: flex; align-items: center; gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40vw;
+  padding: 0 8px 0 10px;
   font-weight: bold;
-  border-bottom: 1px solid #000;
+  border-right: 1px solid #000;
   background: #f0f0f0;
-  min-height: 40px;
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
   flex-shrink: 0;
+  overflow: hidden;
 }
-.sidebar-body { min-height: 0; }
+.sidebar-fold-btn {
+  width: 24px; height: 24px; flex-shrink: 0;
+  margin-left: auto;
+  border: none; background: transparent; padding: 0;
+  color: #000; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.sidebar-fold-btn:hover { background: #e0e0e0; border-radius: 3px; }
+.sidebar-fold-btn:active { background: #d0d0d0; }
+.fold-chevron {
+  width: 18px; height: 18px;
+  display: block;
+  transition: transform 0.15s ease;
+}
+.sidebar-fold-btn[aria-expanded="false"] .fold-chevron {
+  transform: scaleX(-1);
+}
+.selected-template-name {
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.shell-body { display: flex; flex: 1; min-height: 0; }
+/* 左侧模板列表（顶栏已移出） */
+.sidebar {
+  width: 100%; height: 100%;
+  display: flex; flex-direction: column;
+  overflow: auto;
+}
+.shell.is-sidebar-collapsed .shell-splitter > .q-splitter__panel.q-splitter__before,
+.shell.is-sidebar-collapsed .shell-splitter > .q-splitter__separator {
+  display: none !important;
+}
 .template-item { padding: 10px 12px; border-bottom: 1px solid #ccc; cursor: pointer; }
-.template-item:hover { background: #f9f9f9; }
 .template-item.active { font-weight: bold; background: #e8e8e8; }
 .template-item.muted { color: #555; }
-
-/* 拖拽 / 折叠条 — hover 指示线由 separator-area 伪元素绘制（保留 Quasar absolute-full 定位） */
-.shell-splitter .q-splitter__separator .q-splitter__separator-area::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  width: 2px;
-  margin-left: -1px;
+/* ui.splitter hover styles */
+.shell-splitter .q-splitter__separator {
   background: transparent;
 }
-.shell-splitter .q-splitter__separator:hover .q-splitter__separator-area::after {
+.shell-splitter .q-splitter__separator:hover {
   background: #999;
 }
-.resize-rail {
-  width: 6px;
-  flex-shrink: 0;
-  position: relative;
-  cursor: col-resize;
-  background: transparent;
-  height: 100%;
-}
-.resize-rail::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  width: 2px;
-  margin-left: -1px;
-  background: transparent;
-}
-.resize-rail:hover::after { background: #999; }
-.resize-rail .fold-hint {
-  position: absolute; top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 10px; writing-mode: vertical-rl; opacity: 0; pointer-events: none;
-}
-.resize-rail:hover .fold-hint { opacity: 0.6; }
 
 /* 右侧主区 */
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; height: 100%; overflow: hidden; }
@@ -124,25 +98,30 @@ html, body {
 
 /* 幽灵输入框 */
 .ghost-input {
-  border: none; border-bottom: 1px dashed #bbb;
-  padding: 8px 4px; margin-bottom: 6px; color: #666; font-style: italic;
+  border: none;
+  padding: 0; margin-bottom: 0; color: #666; font-style: italic;
   min-height: 36px;
   width: 100%;
   outline: none;
   background: transparent;
 }
-.ghost-input:focus { border-bottom-color: #000; color: #000; }
+.ghost-input:focus { color: #000; }
 .ghost-note { font-size: 11px; color: #888; margin: 0 0 16px 4px; }
 
 /* 标签 + 输入 */
 /* 动态字段：默认 3 列网格 */
 .field-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
   gap: 12px 20px;
   width: 100%;
   max-width: 100%;
   margin-top: 5px;
+}
+.mobile-menu-btn { display: none !important; }
+@media (max-width: 639px) {
+  .field-grid { grid-template-columns: 1fr; }
+  .mobile-menu-btn { display: inline-flex !important; }
 }
 .field-cell {
   display: grid;
@@ -197,23 +176,28 @@ html, body {
 }
 .ghost-input.q-field .q-field__control {
   min-height: 36px !important;
-  height: 36px !important;
+  height: auto !important; /* Allow autogrow */
   padding: 0 4px !important;
   border: none !important;
-  border-bottom: 1px dashed #bbb !important;
   background: transparent;
 }
 .ghost-input.q-field--focused .q-field__control {
-  border-bottom-color: #000 !important;
+  border: none !important;
   padding: 0 4px !important;
+}
+textarea.q-field__native {
+  line-height: 1.2;
 }
 .field-cell .input-box .q-field__control,
 .dropdown.q-field .q-field__control {
   min-height: 36px !important;
-  height: 36px !important;
   padding: 0 8px !important;
   border: 1px solid #000 !important;
   background: #fff;
+}
+/* Ensure dropdowns remain fixed height, but textareas can grow */
+.dropdown.q-field .q-field__control {
+  height: 36px !important;
 }
 .field-cell .input-box.q-field--focused .q-field__control,
 .dropdown.q-field--focused .q-field__control {
@@ -226,6 +210,8 @@ html, body {
   padding-top: 0 !important;
   padding-bottom: 0 !important;
   min-height: 36px;
+}
+.dropdown.q-field .q-field__control-container {
   height: 36px;
 }
 .field-cell .input-box input.q-field__native,
@@ -236,8 +222,13 @@ html, body {
   padding: 0 !important;
   margin: 0 !important;
   min-height: 36px !important;
-  height: 36px !important;
   line-height: 36px !important;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.dropdown.q-field .q-field__native {
+  height: 36px !important;
 }
 .field-cell .input-box .q-field__marginal,
 .dropdown.q-field .q-field__marginal {
@@ -341,8 +332,8 @@ table.records tbody tr.selected, table.t tbody tr.selected { background: #e8e8e8
 /* Sections for other tabs */
 .section { border: 1px solid #000; margin-bottom: 14px; }
 .section-title { border-bottom: 1px solid #000; padding: 6px 10px; font-weight: bold; background: #f5f5f5; user-select: none; cursor: default; }
-.row.toolbar-split { justify-content: space-between; align-items: center; }
-.row.toolbar-left, .row.toolbar-right { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 0; }
+.form-row.toolbar-split { justify-content: space-between; align-items: center; }
+.form-row.toolbar-left, .form-row.toolbar-right { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 0; }
 .btn.linkish { font-weight: normal; font-size: 12px; }
 .section-body { padding: 10px; }
 .section-body.sheet-panel { position: relative; }
@@ -365,8 +356,8 @@ table.records tbody tr.selected, table.t tbody tr.selected { background: #e8e8e8
   margin-left: auto;
   flex-shrink: 0;
 }
-.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; }
-.row:last-child { margin-bottom: 0; }
+.form-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; }
+.form-row:last-child { margin-bottom: 0; }
 .ctrl { border: 1px solid #000; padding: 6px 8px; min-height: 32px; display: inline-flex; align-items: center; background: #fff;}
 .ctrl.medium { min-width: 180px; }
 .ctrl.wide { min-width: 420px; flex: 1; }
@@ -401,4 +392,18 @@ table.records tbody tr.selected, table.t tbody tr.selected { background: #e8e8e8
   }
   .excel-print-image { max-width: 100%; height: auto; }
   .no-print { display: none !important; }
+}
+
+@media (max-width: 639px) {
+  .field-grid { grid-template-columns: 1fr; }
+}
+
+.shell-splitter.q-splitter .q-splitter__separator {
+  width: 6px;
+  min-width: 6px;
+  cursor: col-resize;
+  background: transparent;
+}
+.shell-splitter.q-splitter .q-splitter__separator:hover {
+  background: #999;
 }

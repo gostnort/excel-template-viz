@@ -1,219 +1,101 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>线框 · 输入配置 toml_config（W5 页内向导）</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: system-ui, "Microsoft YaHei", sans-serif;
-      font-size: 13px; line-height: 1.4; background: #fff; color: #000;
-      height: 100vh; overflow: hidden;
-    }
-    .main { display: flex; flex-direction: column; height: 100vh; border: 2px solid #000; }
-    .tabs { display: flex; border-bottom: 2px solid #000; flex-shrink: 0; }
-    .tab { padding: 10px 24px; border-right: 1px solid #000; font-weight: bold; }
-    .tab.active { background: #eee; }
-    .tab-body { flex: 1; overflow: auto; padding: 16px 20px; }
-    .section { border: 1px solid #000; margin-bottom: 14px; }
-    .section-title { border-bottom: 1px solid #000; padding: 6px 10px; font-weight: bold; background: #f5f5f5; }
-    .section-body { padding: 10px; }
-    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; }
-    .row:last-child { margin-bottom: 0; }
-    .ctrl { border: 1px solid #000; padding: 6px 8px; min-height: 32px; display: inline-flex; align-items: center; }
-    .ctrl.wide { min-width: 260px; }
-    .btn { min-width: 110px; height: 36px; padding: 0 12px; border: 1px solid #000; background: #fff; font-weight: bold; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
-    .btn.primary { background: #fff; }
-    .btn.accent { background: #e8f4ff; }
-    .ctrl.status-ok { background: #f0fff0; min-width: 260px; }
-    .ctrl.status-warn { background: #fff8e6; color: #664; min-width: 260px; flex-direction: column; align-items: flex-start; height: auto; }
-    .toml-editor { border: 1px solid #000; min-height: 320px; padding: 4px; font-family: monospace; font-size: 12px; white-space: pre-wrap; }
-    .note { font-size: 11px; color: #666; margin-top: 6px; }
-    .dialog-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: none; align-items: center; justify-content: center; z-index: 10; }
-    .dialog-overlay.open { display: flex; }
-    .dialog-card { border: 2px solid #000; background: #fff; padding: 16px; max-width: 480px; width: 90%; }
-    .dialog-card h2 { font-size: 16px; margin-bottom: 8px; }
-    .dialog-card p { margin-bottom: 10px; }
-    .wizard-panel { border: 2px solid #000; background: #fff; width: min(720px, 96vw); max-height: 90vh; display: flex; flex-direction: column; }
-    .wizard-header { border-bottom: 1px solid #000; padding: 10px 14px; background: #f5f5f5; }
-    .wizard-status { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 12px; }
-    .badge { border: 1px solid #000; padding: 2px 8px; font-weight: bold; }
-    .badge.run { background: #e8f4ff; }
-    .badge.done { background: #f0fff0; }
-    .spinner { width: 14px; height: 14px; border: 2px solid #000; border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .wizard-stepper { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 14px; border-bottom: 1px solid #000; font-size: 11px; }
-    .chip { border: 1px solid #000; padding: 3px 8px; }
-    .chip.done { background: #f0fff0; }
-    .chip.active { background: #ffe; font-weight: bold; }
-    .chip.pending { color: #888; }
-    .wizard-log { flex: 1; overflow: auto; padding: 10px 14px; min-height: 200px; max-height: 320px; background: #fafafa; font-size: 12px; }
-    .log-line { margin-bottom: 6px; }
-    .log-line.sys { color: #444; }
-    .log-line.guide { color: #000; }
-    .log-line.model { color: #036; }
-    .wizard-action { border-top: 1px solid #000; padding: 12px 14px; background: #fff; }
-    .wizard-action h3 { font-size: 12px; margin-bottom: 8px; color: #444; }
-    .radio-group label { display: block; margin: 6px 0; cursor: pointer; }
-    .wizard-footer { border-top: 1px solid #ccc; padding: 8px 14px; font-size: 11px; color: #666; }
-    .legend { position: fixed; bottom: 8px; right: 8px; font-size: 11px; border: 1px dashed #000; padding: 8px 10px; background: #fff; max-width: 380px; }
-  </style>
-</head>
-<body>
-
-<div class="main">
-  <nav class="tabs">
-    <div class="tab">输入</div>
-    <div class="tab active">输入配置</div>
-    <div class="tab">存储配置</div>
-    <div class="tab">Google 连接</div>
-  </nav>
-
-  <div class="tab-body">
-    <div class="section">
-      <div class="section-title">校验与应用</div>
-      <div class="section-body">
-        <div class="row">
-          <div class="btn primary">校验并应用配置</div>
-          <div class="ctrl wide status-warn">
-            <strong>配置校验失败</strong>
-            <span style="font-size:12px">缺失标签: order, qty</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">AI 配置向导</div>
-      <div class="section-body">
-        <div class="row">
-          <div class="btn primary" id="wizard-btn">AI 配置向导</div>
-          <span class="note">首次配置或校验失败时，在页面内启动 Gemma4 E4B 分步向导（可见状态 + 模型引导）</span>
-        </div>
-        <p class="note">主路径：页内向导面板（§2.2）。不再默认打开黑终端；调试可用面板内「高级 · 终端模式」。</p>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">高级（TOML 全文）</div>
-      <div class="section-body">
-        <div class="toml-editor">[work_sheet]
-List
-
-[[fields]]
-input_label = "ID#"
-...</div>
-        <div class="row" style="margin-top:8px">
-          <div class="btn">保存</div>
-          <div class="btn">重置</div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- 启动选项（IDLE）→ 点击「开始向导」后切换为页内运行面板 -->
-<div class="dialog-overlay open" id="wizard-overlay">
-  <div class="wizard-panel" id="wizard-panel">
-    <div class="wizard-header">
-      <strong>Gemma4 E4B 配置向导</strong> · ginger_lots
-      <div class="wizard-status" style="margin-top:6px">
-        <span class="badge run">● 运行中</span>
-        <span>阶段: <strong id="phase-label">COLLECT_PASTE</strong></span>
-        <span>LLM: cuda</span>
-        <span>调用 3/15</span>
-      </div>
-    </div>
-
-    <div class="wizard-stepper">
-      <span class="chip done">✓ PRECHECK</span>
-      <span class="chip done">✓ GOOGLE</span>
-      <span class="chip done">✓ READ_TOML</span>
-      <span class="chip active">● PASTE</span>
-      <span class="chip pending">○ 字段映射</span>
-      <span class="chip pending">○ 完成</span>
-    </div>
-
-    <div class="wizard-log" id="wizard-log">
-      <div class="log-line sys">[系统] 正在加载模型 Gemma4-E4B (cuda)…</div>
-      <div class="log-line sys">[系统] health_check: ok · n_ctx=8192</div>
-      <div class="log-line guide">[向导] PRECHECK：Playwright 已安装，NiceGUI HTTP 200</div>
-      <div class="log-line guide">[向导] GOOGLE_PROBE：请在「Google 连接」Tab 完成 OAuth</div>
-      <div class="log-line model">[模型] 已读取 TOML 摘要：work_sheet=List，42 字段，3 个 index 待映射</div>
-      <div class="log-line guide">[向导] 请在「输入」Tab 的粘贴区填入样例数据，完成后点击下方按钮</div>
-    </div>
-
-    <div class="wizard-action" id="action-confirm">
-      <h3>需要您完成外部操作</h3>
-      <div class="btn accent" style="min-width:160px">完成并继续</div>
-    </div>
-
-    <div class="wizard-action" id="action-choice" style="display:none">
-      <h3>Google Sheet 是否已连接？</h3>
-      <div class="radio-group">
-        <label><input type="radio" name="g" checked> 是，已连接</label>
-        <label><input type="radio" name="g"> 否，稍后再连</label>
-        <label><input type="radio" name="g"> 跳过 Google 数据源</label>
-      </div>
-      <div class="row" style="margin-top:10px">
-        <div class="btn primary">确认</div>
-      </div>
-    </div>
-
-    <div class="wizard-footer">
-      <a href="#" id="toggle-demo">切换演示：confirm ↔ choice</a>
-      · <a href="#">高级 · 在终端中运行（调试）</a>
-      · <button type="button" class="btn" style="min-width:60px;height:28px;font-size:11px" id="wizard-close">关闭</button>
-    </div>
-  </div>
-</div>
-
-<!-- 备用：纯启动选项对话框（IDLE，默认隐藏） -->
-<div class="dialog-overlay" id="wizard-idle-dialog">
-  <div class="dialog-card">
-    <h2>开始 AI 配置向导</h2>
-    <p>向导将在本页面内分步协助 TOML 配置，模型会解说每一步；需您操作时会出现选项或「完成并继续」。</p>
-    <label style="display:block;margin:8px 0"><input type="checkbox" checked> 启用 LLM 字段映射</label>
-    <label style="display:block;margin:8px 0">推理配置
-      <select style="margin-left:8px"><option>cuda</option><option>cpu</option><option>openvino</option></select>
-    </label>
-    <label style="display:block;margin:8px 0"><input type="checkbox"> 从上次进度继续</label>
-    <div class="row">
-      <div class="btn primary" id="wizard-start">开始向导</div>
-      <div class="btn" id="wizard-cancel">取消</div>
-    </div>
-  </div>
-</div>
-
-<div class="legend">
-  线框 · 输入配置 W5a<br>
-  页内向导：docs/gemma4_e4b_workflow.md §2.2<br>
-  状态 IDLE→LOADING→RUNNING→WAIT_USER→DONE
-</div>
-
-<script>
-  const overlay = document.getElementById('wizard-overlay');
-  const idleDlg = document.getElementById('wizard-idle-dialog');
-  document.getElementById('wizard-btn').onclick = () => {
-    idleDlg.classList.add('open');
-    overlay.classList.remove('open');
-  };
-  document.getElementById('wizard-cancel').onclick = () => idleDlg.classList.remove('open');
-  document.getElementById('wizard-start').onclick = () => {
-    idleDlg.classList.remove('open');
-    overlay.classList.add('open');
-  };
-  document.getElementById('wizard-close').onclick = () => overlay.classList.remove('open');
-  document.getElementById('toggle-demo').onclick = (e) => {
-    e.preventDefault();
-    const c = document.getElementById('action-confirm');
-    const ch = document.getElementById('action-choice');
-    const showChoice = c.style.display !== 'none';
-    c.style.display = showChoice ? 'none' : 'block';
-    ch.style.display = showChoice ? 'block' : 'none';
-  };
-</script>
-
-</body>
-</html>
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>绾挎�� 路 杈撳叆閰嶇疆 toml_config</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, "Microsoft YaHei", sans-serif;
+      font-size: 13px; line-height: 1.4; background: #fff; color: #000;
+      height: 100vh; overflow: hidden;
+    }
+    .shell { display: flex; flex-direction: column; height: 100vh; border: 2px solid #000; }
+    .shell-top { display: flex; flex-shrink: 0; border-bottom: 2px solid #000; min-height: 40px; }
+    .sidebar-header {
+      width: 200px; min-width: 200px; padding: 0 10px; font-weight: bold;
+      border-right: 1px solid #000; background: #f0f0f0;
+      display: flex; align-items: center;
+    }
+    .shell-body { display: flex; flex: 1; min-height: 0; }
+    .sidebar { width: 200px; border-right: 1px solid #000; flex-shrink: 0; }
+    .template-item { padding: 10px 12px; border-bottom: 1px solid #ccc; }
+    .template-item.active { font-weight: bold; background: #e8e8e8; }
+    .resize-rail { width: 6px; flex-shrink: 0; }
+    .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    .tabs { display: flex; flex: 1; background: #f0f0f0; }
+    .tab { padding: 10px 24px; border-right: 1px solid #000; font-weight: bold; }
+    .tab.active { background: #eee; }
+    .tab-body { flex: 1; overflow: auto; padding: 16px 20px; }
+    .section { border: 1px solid #000; margin-bottom: 14px; }
+    .section-title { border-bottom: 1px solid #000; padding: 6px 10px; font-weight: bold; background: #f5f5f5; }
+    .section-body { padding: 10px; }
+    .form-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; }
+    .ctrl { border: 1px solid #000; padding: 6px 8px; min-height: 32px; display: inline-flex; align-items: center; }
+    .ctrl.wide { min-width: 260px; }
+    .ctrl.status-warn { background: #fff8e6; color: #664; min-width: 260px; flex-direction: column; align-items: flex-start; height: auto; }
+    .btn { min-width: 110px; height: 36px; padding: 0 12px; border: 1px solid #000; background: #fff; font-weight: bold; display: inline-flex; align-items: center; justify-content: center; }
+    .toml-editor { border: 1px solid #000; min-height: 320px; padding: 4px; font-family: monospace; font-size: 12px; white-space: pre-wrap; }
+    .legend { position: fixed; bottom: 8px; right: 8px; font-size: 11px; border: 1px dashed #000; padding: 8px 10px; background: #fff; max-width: 360px; }
+  </style>
+</head>
+<body>
+
+<div class="shell">
+  <header class="shell-top">
+    <div class="sidebar-header"><span>閿�鍞�妯℃�?/span></div>
+    <nav class="tabs">
+      <div class="tab">杈撳叆</div>
+      <div class="tab active">杈撳叆閰嶇疆</div>
+      <div class="tab">瀛樺偍閰嶇疆</div>
+      <div class="tab">Google 杩炴帴</div>
+    </nav>
+  </header>
+  <div class="shell-body">
+    <aside class="sidebar">
+      <div class="template-item active">閿�鍞�妯℃�?/div>
+    </aside>
+    <div class="resize-rail"></div>
+    <main class="main">
+      <div class="tab-body">
+        <div class="section">
+          <div class="section-title">鏍￠獙涓庡簲鐢?/div>
+          <div class="section-body">
+            <div class="form-row">
+              <div class="btn">鏍￠獙骞跺簲鐢ㄩ厤缃?/div>
+              <div class="ctrl wide status-warn">
+                <strong>閰嶇疆鏍￠獙澶辫触</strong>
+                <span style="font-size:12px">缂哄け鏍囩��: order, qty</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="section">
+          <div class="section-title">楂樼骇锛圱OML 鍏ㄦ枃锛?/div>
+          <div class="section-body">
+            <div class="toml-editor">[work_sheet]
+List
+
+[[fields]]
+input_label = "ID#"
+...</div>
+            <div class="form-row" style="margin-top:8px">
+              <div class="btn">淇濆瓨</div>
+              <div class="btn">閲嶇疆</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<div class="legend">
+  绾挎�� 路 杈撳叆閰嶇疆 路 shell 涓?index 涓�鑷?br>
+  鏍￠獙骞跺簲鐢?+ TOML 楂樼骇锛圓I 閰嶇疆鍚戝�煎凡绉诲嚭鏈�璁″垝锛?br>
+  璇﹁�� nicegui_ui_plan.md 搂3.3
+</div>
+
+</body>
+</html>

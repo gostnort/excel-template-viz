@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import re
 import sqlite3
 import uuid
+from io import BytesIO
 from pathlib import Path
 from typing import Any
+
+from PIL import Image
 
 from app.core_connect import _apply_regex
 from app.core_registry import TEMPLATES_DIR
@@ -303,7 +307,7 @@ class SecureSQLite:
     def ensure_table(self) -> None:
         """
         函数名: ensure_table
-        作用: 创建 records(id, data) 表（若不存在）
+        作用: 创建 records(id, data) 表与 record_images 表（若不存在）
         输入: 无
         输出: 无
         """
@@ -316,6 +320,42 @@ class SecureSQLite:
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS record_images (
+                image_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_id TEXT NOT NULL,
+                record_id INTEGER NOT NULL,
+                input_label TEXT NOT NULL,
+                image_path TEXT NOT NULL,
+                mime TEXT NOT NULL,
+                width INTEGER,
+                height INTEGER,
+                file_size INTEGER,
+                content_hash TEXT,
+                crop_box TEXT,
+                ocr_text TEXT,
+                ocr_engine TEXT,
+                ocr_version TEXT,
+                ocr_status TEXT,
+                excel_sheet_name TEXT,
+                excel_anchor TEXT,
+                excel_target_cell TEXT,
+                excel_offset_x INTEGER DEFAULT 0,
+                excel_offset_y INTEGER DEFAULT 0,
+                excel_scale_x REAL DEFAULT 1.0,
+                excel_scale_y REAL DEFAULT 1.0,
+                excel_fit_strategy TEXT DEFAULT 'none',
+                excel_render_order INTEGER DEFAULT 0,
+                excel_render_mode TEXT DEFAULT 'overlay',
+                created_at TEXT NOT NULL,
+                updated_at TEXT,
+                is_deleted INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        # 增加查询索引
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_record_images_history ON record_images(template_id, record_id, input_label, created_at DESC)")
         self.conn.commit()
 
     def insert_or_update(self, incoming: dict[str, Any], cfg: GetTomlValues) -> int:
@@ -365,6 +405,222 @@ class SecureSQLite:
         cur = self.conn.cursor()
         cur.execute("SELECT id, data FROM records ORDER BY id")
         return [_row_from_db(row_id, data_text) for row_id, data_text in cur.fetchall()]
+
+    def save_image(
+        self,
+        cfg: GetTomlValues,
+        template_id: str,
+        record_id: int,
+        input_label: str,
+        image_bytes: bytes,
+        mime: str,
+        crop_box: tuple[int, int, int, int] | None = None
+    ) -> dict[str, Any]:
+        """
+        函数名: save_image
+        作用: 持久化原图并写入 record_images 元数据
+        输入:
+            cfg (GetTomlValues): TOML 配置
+            template_id (str): 模板 ID
+            record_id (int): 记录 ID
+            input_label (str): 字段标签
+            image_bytes (bytes): 图片二进制内容
+            mime (str): MIME 类型
+            crop_box (tuple | None): (x, y, w, h) 截图框
+        输出:
+            dict: 成功含 image_id 和 ok=True，失败含 ok=False 和 message
+        """
+        # 校验 label 是否属于配置
+        valid_labels = {rule.Input_label for rule in cfg.field_rules}
+        if input_label not in valid_labels:
+            return {"ok": False, "message": "字段标签无效，无法保存图片。"}
+
+        if not image_bytes:
+            return {"ok": False, "message": "无法读取图片，请重新拍照或选择文件。"}
+
+        try:
+            img = Image.open(BytesIO(image_bytes))
+            width, height = img.size
+        except Exception:
+            return {"ok": False, "message": "无法识别图片格式，请重新拍照。"}
+        
+        file_size = len(image_bytes)
+        content_hash = hashlib.sha256(image_bytes).hexdigest()
+        
+        # 构造存储路径 templates/{template_id}/images/{record_id}/{uuid}.{ext}
+        ext = mime.split("/")[-1] if "/" in mime else "jpg"
+        if ext == "jpeg":
+            ext = "jpg"
+        unique_name = f"{uuid.uuid4().hex}.{ext}"
+        rel_path = f"images/{record_id}/{unique_name}"
+        
+        # 物理路径
+        template_dir = _template_dir(template_id)
+        abs_path = template_dir / rel_path
+        abs_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # 保存文件
+        try:
+            abs_path.write_bytes(image_bytes)
+        except Exception:
+            return {"ok": False, "message": "存储不可用，图片未能保存。"}
+            
+        crop_box_str = json.dumps(list(crop_box)) if crop_box else None
+        created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        
+        cur = self.conn.cursor()
+        try:
+            cur.execute(
+                """
+                INSERT INTO record_images (
+                    template_id, record_id, input_label, image_path, mime,
+                    width, height, file_size, content_hash, crop_box, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    template_id, record_id, input_label, rel_path, mime,
+                    width, height, file_size, content_hash, crop_box_str, created_at
+                )
+            )
+            self.conn.commit()
+            image_id = cur.lastrowid
+            return {"ok": True, "message": "图片已保存。", "image_id": image_id, "image_path": rel_path}
+        except Exception:
+            self.conn.rollback()
+            try:
+                abs_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return {"ok": False, "message": "图片保存失败，请稍后重试。"}
+
+    def get_latest_image(self, template_id: str, record_id: int, input_label: str) -> dict[str, Any] | None:
+        """
+        函数名: get_latest_image
+        作用: 查询指定维度下未删除的最新一张图片记录
+        输入:
+            template_id (str): 模板 ID
+            record_id (int): 记录 ID
+            input_label (str): 字段标签
+        输出:
+            dict | None: 图片元数据记录或 None
+        """
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT image_id, image_path, mime, width, height, ocr_text, ocr_status, crop_box
+            FROM record_images 
+            WHERE template_id=? AND record_id=? AND input_label=? AND is_deleted=0
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (template_id, record_id, input_label)
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "image_id": row[0],
+            "image_path": row[1],
+            "mime": row[2],
+            "width": row[3],
+            "height": row[4],
+            "ocr_text": row[5],
+            "ocr_status": row[6],
+            "crop_box": json.loads(row[7]) if row[7] else None
+        }
+
+    def list_images_by_label(self, template_id: str, record_id: int, input_label: str) -> list[dict[str, Any]]:
+        """
+        函数名: list_images_by_label
+        作用: 查询指定字段标签下的所有图片历史（按时间倒序）
+        输入:
+            template_id (str): 模板 ID
+            record_id (int): 记录 ID
+            input_label (str): 字段标签
+        输出:
+            list[dict]: 图片元数据记录列表
+        """
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT image_id, image_path, mime, width, height, ocr_text, ocr_status, created_at
+            FROM record_images 
+            WHERE template_id=? AND record_id=? AND input_label=? AND is_deleted=0
+            ORDER BY created_at DESC
+            """,
+            (template_id, record_id, input_label)
+        )
+        return [
+            {
+                "image_id": r[0], "image_path": r[1], "mime": r[2], 
+                "width": r[3], "height": r[4], "ocr_text": r[5], 
+                "ocr_status": r[6], "created_at": r[7]
+            }
+            for r in cur.fetchall()
+        ]
+
+    def update_image_ocr(
+        self,
+        image_id: int,
+        ocr_text: str | None,
+        ocr_engine: str | None = None,
+        ocr_version: str | None = None,
+        ocr_status: str | None = None,
+        crop_box: tuple[int, int, int, int] | None = None
+    ) -> dict[str, Any]:
+        """
+        函数名: update_image_ocr
+        作用: 回写图像的 OCR 识别结果，不改动图片内容
+        输入:
+            image_id (int): 图片记录主键
+            ocr_text (str | None): 识别结果原文
+            ocr_engine (str | None): 引擎名
+            ocr_version (str | None): 版本名
+            ocr_status (str | None): 识别状态
+            crop_box (tuple | None): 用于此次识别的截取区域
+        输出:
+            dict: {ok: bool, message: str}
+        """
+        cur = self.conn.cursor()
+        cur.execute("SELECT image_id FROM record_images WHERE image_id=? AND is_deleted=0", (image_id,))
+        if not cur.fetchone():
+            return {"ok": False, "message": "未找到对应图片，无法保存识别结果。"}
+            
+        updated_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        updates = []
+        params = []
+        if ocr_text is not None:  # We'll allow empty string to clear it
+            updates.append("ocr_text=?")
+            params.append(ocr_text)
+        if ocr_engine is not None:
+            updates.append("ocr_engine=?")
+            params.append(ocr_engine)
+        if ocr_version is not None:
+            updates.append("ocr_version=?")
+            params.append(ocr_version)
+        if ocr_status is not None:
+            updates.append("ocr_status=?")
+            params.append(ocr_status)
+        if crop_box is not None:
+            updates.append("crop_box=?")
+            params.append(json.dumps(list(crop_box)))
+            
+        if not updates:
+            return {"ok": True, "message": "无更新内容。"}
+            
+        updates.append("updated_at=?")
+        params.append(updated_at)
+        params.append(image_id)
+        
+        try:
+            cur.execute(
+                f"UPDATE record_images SET {', '.join(updates)} WHERE image_id=?",
+                tuple(params)
+            )
+            self.conn.commit()
+            return {"ok": True, "message": "识别结果已保存。"}
+        except Exception:
+            self.conn.rollback()
+            return {"ok": False, "message": "识别结果保存失败，请稍后重试。"}
 
     def close(self) -> None:
         """

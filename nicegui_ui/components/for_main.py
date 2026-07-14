@@ -43,6 +43,10 @@ class ForMain:
             return
         state.template_id = template_id
         state.template_path = xlsx_path
+        
+        from nicegui import app
+        if hasattr(app.storage, 'user'):
+            state.use_independent_db = app.storage.user.get(f'use_independent_db_{template_id}', True)
         state.current_instance_index = 0
         state.draft.clear()
         state.session_rows.clear()

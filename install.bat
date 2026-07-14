@@ -1,34 +1,28 @@
 @echo off
 echo ========================================
-echo Excel Template Viz - Gradio Version
+echo Excel Template Viz - NiceGUI
 echo Installation Script
 echo ========================================
 echo.
-set LLM_MODE=cpu
 set SKIP_OCR=0
-:parse_llm_args
-if "%~1"=="" goto :llm_args_done
-if /I "%~1"=="--llm" (
-    set LLM_MODE=%~2
-    shift
-    shift
-    goto :parse_llm_args
-)
+:parse_args
+if "%~1"=="" goto :args_done
 if /I "%~1"=="--skip-ocr" (
     set SKIP_OCR=1
     shift
-    goto :parse_llm_args
+    goto :parse_args
 )
+echo WARNING: Unknown argument: %~1
 shift
-goto :parse_llm_args
-:llm_args_done
-echo LLM wheel mode: %LLM_MODE% (cpu default; use --llm cuda for NVIDIA)
+goto :parse_args
+:args_done
 if "%SKIP_OCR%"=="1" (
     echo OCR install: SKIPPED (--skip-ocr)
 ) else (
     echo OCR install: enabled by default ^(pass --skip-ocr to skip^)
 )
-
+echo Gemma 4: litert-lm from requirements.txt; model downloads on first use.
+echo Optional LLM_PROFILE: auto ^(default^), cpu, cuda, openvino — see docs/embed_gemma4.md
 echo.
 
 REM Check Python version and recommend Python 3.10 for best compatibility
@@ -98,49 +92,22 @@ if errorlevel 1 (
 
 echo.
 echo Upgrading pip...
-%PYTHON_CMD% -m pip install --upgrade pip
+python -m pip install --upgrade pip
 
 echo.
-echo Detecting CPU SIMD features for llama-cpp-python wheel...
-set PYTHONPATH=%CD%
-for /f "delims=" %%V in ('python -c "from llm_gemma4.backends.llamacpp.cpu_features import recommended_llama_cpp_version; print(recommended_llama_cpp_version())"') do set LLAMA_CPP_VERSION=%%V
-echo Recommended llama-cpp-python version: %LLAMA_CPP_VERSION%
-if /I "%LLM_MODE%"=="cuda" (
-    echo Installing llama-cpp-python %LLAMA_CPP_VERSION% (CUDA cu124 wheel)...
-    set LLAMA_CPP_CUDA_INDEX=https://abetlen.github.io/llama-cpp-python/whl/cu124
-    pip install llama-cpp-python==%LLAMA_CPP_VERSION% --extra-index-url %LLAMA_CPP_CUDA_INDEX%
-    if errorlevel 1 (
-        echo ERROR: Failed to install llama-cpp-python CUDA wheel
-        pause
-        exit /b 1
-    )
-    echo Installing NVIDIA CUDA 12 runtime DLLs (for ggml-cuda on Windows)...
-    pip install nvidia-cuda-runtime-cu12 nvidia-cublas-cu12
-    if errorlevel 1 (
-        echo WARNING: nvidia CUDA pip packages failed; you may need CUDA DLLs on PATH
-    )
-) else (
-    echo Installing llama-cpp-python %LLAMA_CPP_VERSION% (CPU wheel)...
-    set LLAMA_CPP_CPU_INDEX=https://abetlen.github.io/llama-cpp-python/whl/cpu
-    pip install llama-cpp-python==%LLAMA_CPP_VERSION% --extra-index-url %LLAMA_CPP_CPU_INDEX%
-    if errorlevel 1 (
-        echo WARNING: CPU wheel index install failed; retrying from PyPI...
-        pip install llama-cpp-python==%LLAMA_CPP_VERSION%
-        if errorlevel 1 (
-            echo ERROR: Failed to install llama-cpp-python
-            echo See QUICKSTART.md for CPU / wheel compatibility.
-            pause
-            exit /b 1
-        )
-    )
-)
-
-echo.
-echo Installing remaining dependencies...
-echo.
+echo Installing dependencies (NiceGUI, litert-lm, ...)...
 pip install -r requirements.txt
 if errorlevel 1 (
     echo ERROR: Failed to install dependencies
+    pause
+    exit /b 1
+)
+
+echo.
+echo Verifying litert-lm import...
+python -c "import litert_lm; print('litert-lm OK')"
+if errorlevel 1 (
+    echo ERROR: litert-lm import failed after install
     pause
     exit /b 1
 )
@@ -174,6 +141,7 @@ echo.
 echo Creating project directories...
 if not exist temp mkdir temp
 if not exist exports mkdir exports
+if not exist models\gemma4 mkdir models\gemma4
 
 echo.
 echo ========================================
@@ -181,5 +149,7 @@ echo Installation completed successfully!
 echo ========================================
 echo.
 echo To start the application, run: run.bat
+echo Gemma 4 model (~3.66GB) downloads on first LLM/OCR use, or prefetch:
+echo   python -c "from llm_gemma4.hf_download import download_litert; print(download_litert())"
 echo.
 pause

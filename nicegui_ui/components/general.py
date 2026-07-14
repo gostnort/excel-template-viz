@@ -72,6 +72,8 @@ class SessionState:
     last_export_path: Path | None = None
     active_db_suffix: str | None = None
     selected_db_row_index: int | None = None
+    use_independent_db: bool = True
+    field_images: dict[str, dict[str, Any]] = field(default_factory=dict)
     google_connected: bool = False
     google_sheet_rows: list[dict[str, Any]] = field(default_factory=list)
     # 心跳时间，用于清理无活动的过期会话

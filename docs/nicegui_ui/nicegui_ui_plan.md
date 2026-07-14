@@ -1,5 +1,7 @@
 # NiceGUI UI Implementation Constraints & Specifications (Based on core*.py)
 
+> 修订 2026-07-14：§2.2 侧栏 — **显示/存储分离** + **Quasar limits 宽松占位**（必传 `(0,1000)`，禁止省略 limits、禁止 `limits=(20,400)`）。
+
 This document is the canonical NiceGUI UI specification. It defines product behavior, wireframe layout, and `core*.py` boundaries using NiceGUI / Quasar patterns.
 
 Wireframes in `docs/nicegui_ui/nicegui_ui_*.html` are layout references only. Runtime data must come from `templates/` via `core_registry`, never from documentation samples.
@@ -46,45 +48,127 @@ nicegui_ui/
 
 ## 2. Layout Parity & Splitter Constraints
 
-The shell must match `docs/nicegui_ui/nicegui_ui_index.html`: left template sidebar, middle narrow resize rail, right tab workspace. The layout must occupy the **entire viewport with zero outer margins or paddings** (no blank spaces between the DOM and the browser edges). A single-column unstyled page is unacceptable.
+The shell must match `docs/nicegui_ui/nicegui_ui_index.html` (2026-07 wireframe refresh): **unified top bar** + **body row** (sidebar list | resize rail | tab workspace). The layout must occupy the **entire viewport with zero outer margins or paddings**. A single-column unstyled page is unacceptable.
 
 ```
 +-----------------------------------------------------------------------------+
-|  Sidebar (Left)    | R  |  Main Tabs Area (Right)                           |
-|                    | a  |                                                   |
-|  * Template Header | i  |  [ 输入 ] [ Google 连接 ] [ 输入配置 ] [ 存储配置 ]   |
-|    (模板: ID)      | l  |  +---------------------------------------------+  |
-|  * Template List   |    |  |              Tab Content Area               |  |
-|    - ...           |    |  |                                             |  |
-+-----------------------------------------------------------------------------+
+| shell-top (one row, full width)                                             |
+|  [ 已选模板名  << ] | [ 输入 ] [ 输入配置 ] [ 存储配置 ] [ Google 连接 ]      |
++----------+--+---------------------------------------------------------------+
+| Template |R | Tab body (scroll)                                               |
+| list     |a |                                                                 |
+| (sidebar)|i |                                                                 |
+|          |l |                                                                 |
++----------+--+---------------------------------------------------------------+
 ```
+
+Wireframe rules (canonical):
+
+* **`shell-top`:** left `sidebar-header` (selected template display name + fold chevron `<<` / `>>`) and right `tabs` share **one horizontal bar** with the same height and bottom border. Tabs are **not** a separate row below the sidebar.
+* **`sidebar-header` collapse:** fold button sits **to the right of** the template name. On collapse: **entire template list disappears** (sidebar **hidden** via CSS); **the template name remains visible in the top bar**. Click again **pops out** the sidebar at the last persisted width (clamped). Do **not** drive collapse by setting `splitter.value` to 0.
+* **`shell-body`:** contains `ui.splitter`. `splitter.before` holds the template list, and `splitter.after` holds the main content.
+* **Resize rail:** handled by `ui.splitter` native separator. No custom dragging scripts allowed.
 
 ### 2.0 Global Layout & Page Constraints (Zero Margins)
 * **Zero Margins & Paddings:** Body, HTML, and Quasar `.q-page` / `.q-layout` must be stripped of all default margins and paddings (`p-0 m-0`, `overflow-hidden`).
-* **Full-Width Shell:** The root container or splitter must be exactly `w-full h-screen` to stretch edge-to-edge of the browser window.
+* **Full-Width Shell:** The root container must be exactly `w-full h-screen` edge-to-edge.
 
 ### 2.1 Left Sidebar: Template Selection
 
-* **Presentation:** vertical list, not a dropdown. Data from `SortTemplates.UpdateJson()` → `TemplateIDs`, `template_display_names`, `sort_timeline`.
-* **Interaction:** click item → run template activation → highlight active row.
-* **Header:** `模板: {template_id}` when active; `模板: 未选择` otherwise.
+* **Presentation:** vertical list below `shell-top`, not a dropdown. Data from `SortTemplates.UpdateJson()` → `TemplateIDs`, `template_display_names`, `sort_timeline`.
+* **Interaction:** click item → run template activation → highlight active row → update **top-bar selected template name** (not a static “模板” label).
+* **Header (top bar):** show `{template_display_name}` or `{template_id}` when active; `未选择` otherwise. No separate “模板:” prefix required if wireframe shows name only.
 * **Empty state:** if no `templates/*.xlsx`, show `templates/ 中没有可用模板`. No fallback demo templates.
 * **Active tab reset:** template change switches right tabs back to `输入` (first tab).
-* **NiceGUI approach:** render list inside `splitter.before` using `ui.column()` with `.classes('w-full h-full p-2 border-r overflow-x-hidden overflow-y-auto').style('will-change: width')`. Use `@ui.refreshable` for sidebar content.
+* **NiceGUI approach:** implement `shell-top` as `ui.row().classes('w-full')` with fixed-width left cell matching sidebar width and `ui.tabs()` filling the remainder; template list in `splitter.before` with `@ui.refreshable`.
 
 ### 2.2 Splitter: Drag-Resize Rail
 
-Gradio required a custom HTML rail inside flex wrappers. NiceGUI should use native layout:
+* **Primary Layout:** `ui.splitter(value=initial, limits=(0, 1000)).props('unit=px')` in **`shell-body` only**. No custom `#resize-rail` scripts.
 
-* **Primary Layout:** `ui.splitter(value=240, limits=(150, 400)).props('unit=px').classes('w-full h-screen')` with `splitter.before` (sidebar) and `splitter.after` (main tabs). Do not use percentage values to avoid layout instability when resizing the browser window.
-* **Collapse:** optional second control on the rail:
-  * toggle `splitter.value` to minimum (collapsed), or
-  * swap to `ui.left_drawer(value=True)` for collapse-only mode.
-* **Persistence:** store splitter pixel width in `app.storage.user['sidebar_width']` and `app.storage.user['sidebar_collapsed']`. Requires `storage_secret` in `ui.run()`.
-* **Throttle Writing:** To prevent heavy disk writes during continuous dragging, the callback saving the value to `app.storage.user` must be debounced/throttled (e.g. writing only after dragging stops, or throttled to at least 200ms).
-* **Do not** inject mousemove listeners unless `ui.splitter` cannot meet wireframe behavior after spike validation.
+#### 三层宽度（必读 — 勿混为一谈）
+
+| 层 | 机制 | 取值 | 作用 |
+|----|------|------|------|
+| **A. Quasar `limits`** | `ui.splitter(..., limits=(0, 1000))` | 0..1000 px | **仅**覆盖 QSplitter 默认 `[10, 90]`（`unit=px` 下会把 250 夹成 ≤90 甚至 0）。**不是**业务规则。 |
+| **B. 显示** | `splitter.value`、拖拽跟手 | 默认 **250**；拖拽可 &lt;20 或 &gt;400（在层 A 内） | 用户眼前宽度。 |
+| **C. 存储** | `sidebar_width` in `app.storage.user` | `clamp_store(raw)` → **20..400** | 折叠弹出、刷新恢复。 |
+
+**禁止：**
+
+* `limits=(20, 400)` — 会把**显示**锁在 20..400，与「拖 10 显示 10、存 20」矛盾。
+* **省略** `limits` — Quasar 默认 `[10, 90]` + `unit=px` → 250/300 被夹到 ≤90，常见表现 **0px 或异常窄条**（见下节根因）。
+
+#### Quasar 根因（2026-07-14 实测结论）
+
+`nicegui_ui/pages/main.py` 若写 `kwargs = {}` 且不传 `limits`：
+
+1. 底层 `QSplitter` 使用默认 **limits = [10, 90]**（百分比语义，但在 `unit=px` 下按像素解释）。
+2. `value=250` 或 `300` **超出 90** → 内部裁剪/计算失败 → 渲染 **0px** 或卡在极小宽度。
+3. 这与「存储 clamp」无关；必须在层 A 显式传 **宽松** `limits`。
+
+**推荐常量：**
+
+```python
+SIDEBAR_DEFAULT = 250
+SIDEBAR_STORE_MIN = 20
+SIDEBAR_STORE_MAX = 400
+SIDEBAR_QUASAR_LIMITS = (0, 1000)   # 层 A only
+```
+
+`clamp_store(raw) = max(20, min(int(raw), 400))` — **仅层 C**；**禁止**在 resize 回调里 `splitter.value = clamp_store(raw)`。
+
+#### 两个概念（禁止混用）
+
+* **显隐（折叠钮 `.sidebar-fold-btn`）**：CSS `.shell.is-sidebar-collapsed` 隐藏 `splitter.before` + `separator`。写入 `sidebar_collapsed`（bool）。**禁止** `splitter.value = 0` 折叠。
+* **宽度**：
+  * **显示**（`splitter.value`）：拖拽跟手，**允许** &lt; 20 或 &gt; 400。
+  * **存储**（`sidebar_width`）：拖拽结束 / 收起前写入时 **只** `clamp_store(raw)`。
+
+#### 存储（`app.storage.user` + `Auth.pref_key`）
+
+* `sidebar_width`：int，**20..400**；无键表示「从未拖过或未落库」
+* `sidebar_collapsed`：bool；仅折叠钮写入
+* **允许**在代码中硬编码 `SIDEBAR_DEFAULT = 250`（仅此一处默认像素）
+
+#### 验收用例
+
+| 操作 | 显示 | 存储 | 折叠 → 弹出后显示 |
+|------|------|------|-------------------|
+| 首次（无存储） | 250 | （无键） | 250 |
+| 拖至 200 | 200 | 200 | 200 |
+| 拖至 10 | 10 | 20 | 20 |
+| 拖至 600 | 600 | 400 | 400 |
+
+#### 折叠钮
+
+* **收起前**：`sidebar_width = clamp_store(splitter.value)`（防止 resize 未落库）
+* **归一化**：若已有 `sidebar_width` 脏数据，clamp 后写回
+* **收起**：`sidebar_collapsed = True`，加 hidden 类；**不改** `splitter.value`
+* **展开**：去 hidden 类；`splitter.value = clamp_store(stored)` 若有键，否则 **`SIDEBAR_DEFAULT`（250）**
+* 程序设置 `splitter.value` 时须 `programmatic_resize_count`（或等价）**跳过** resize 回调写存储
+
+#### 拖拽 `on_splitter_resize`
+
+* `raw` 来自 Quasar → **显示保持 raw**（勿 `splitter.value = clamp_store(raw)`）
+* `_set_sidebar_pref('sidebar_width', clamp_store(raw))`
+* 若当前折叠：清 `sidebar_collapsed` 并去 hidden（拖 separator = 要看见侧栏）
+* **禁止**用 `is_loading` 长时间丢弃 resize（否则收起前无存储 → 弹出误为 20px）
+
+#### Startup `initial`
+
+```python
+stored = pref("sidebar_width")
+initial = clamp_store(stored) if stored is not None else SIDEBAR_DEFAULT
+ui.splitter(value=initial, limits=SIDEBAR_QUASAR_LIMITS).props("unit=px")
+```
+
+* `sidebar_collapsed` 为 true 时仅加 hidden 类；`value` 仍按上式设置（**不要**为折叠改 `value=0`）。
 
 ### 2.3 Right Area: Tabs Layout & Spacing
+> **CSS 约定（禁止全局冲突）**：业务横向工具行使用 `.form-row`，**禁止**在 `style.css` 中定义全局 `.row`，以免与 Quasar 的 `ui.splitter` 或原生的 `ui.row` 严重冲突（如破坏 splitter 拖拽）。
+>
+> **`!important` 政策**：不要随便在 CSS 中使用 `!important`。应先定位冲突根因（如全局类名与 Quasar 冲突）并修复；`!important` 仅作最后手段，且须用户明确同意。
 
 * **Scrolling & Safety:** The right main container `splitter.after` and its active tab panels must have `.classes('w-full h-full overflow-y-auto')` to support vertical scrolling without page-level scrollbars.
 * **Flex Shrinkage Safety:** Ensure all flex items inside the panels use `min-width: 0` or `overflow-hidden` so that wide elements (like `ui.table`) scroll horizontally internally instead of stretching the main panel width and breaking the splitter constraints.
@@ -98,8 +182,35 @@ Four tabs, fixed order:
 | `toml_config`   | 输入配置      | `nicegui_ui_toml.html`  |
 | `db_config`     | 存储配置      | `nicegui_ui_db.html`    |
 
-* **NiceGUI:** `ui.tabs()` + `ui.tab_panels()` with `ui.tab(name='输入')` etc.
-* **Density:** use `.classes('gap-1')`, `.props('dense')`, compact `ui.row` / `ui.card(flat bordered)` to match wireframe spacing. Prefer Quasar `dense` / `flat` props over fighting generated DOM.
+* **NiceGUI:** `ui.tabs()` lives inside `shell-top` (right cell); `ui.tab_panels()` in `splitter.after` below. Tab labels: `输入`, `输入配置`, `存储配置`, `Google 连接`.
+* **Density:** use `.classes('gap-1')`, `.props('dense')`, compact `ui.row` / `ui.card(flat bordered)` to match wireframe spacing.
+
+### 2.4 Mobile / Portrait (垂直屏幕)
+
+Target: phone browsers in **portrait**; same Python handlers as desktop.
+
+* **Viewport:** add `<meta name="viewport" content="width=device-width, initial-scale=1.0">` equivalent via NiceGUI page head; no horizontal page scroll.
+* **Shell:** keep `shell-top` (template name + fold + tabs). On narrow screens default **sidebar collapsed**; fold chevron is the primary navigation back to template list. This does not constitute a default `sidebar_width` value.
+* **Tabs:** allow horizontal scroll (`overflow-x: auto`) or `dense` compact tabs so four labels remain reachable on ~360px width.
+* **Field grid:** see §3.1 — **one field per row** on mobile (`grid-cols-1`); label above or label-left with full-width input.
+* **Touch (拍照 / OCR 菜单):** see §3.1 — **do not** use double-tap or long-press on the textarea as the primary trigger (见 §3.1「移动端」).
+* **Camera:** use `<input type="file" accept="image/*" capture="environment">` hidden trigger; prefer rear camera on mobile.
+* **Session table:** `ui.table` horizontal scroll inside card; checkbox column retained.
+
+Breakpoint suggestion (Tailwind): `max-width: 639px` → mobile rules; `sm:` and up → desktop field grid.
+
+### 2.5 Wireframe file parity
+
+All `docs/nicegui_ui/nicegui_ui_*.html` files must stay aligned with this plan:
+
+| File | Shell | Tab active | Distinct content |
+|------|-------|------------|------------------|
+| `nicegui_ui_index.html` | full `shell-top` + fold + sidebar + rail | 输入 | `.field-grid` auto-fill 400px / mobile 1-col; `textarea.input-box`; session table |
+| `nicegui_ui_toml.html` | same | 输入配置 | 校验并应用 + TOML 高级（无 AI 向导） |
+| `nicegui_ui_db.html` | same | 存储配置 | §3.4 checkbox in「当前数据库」title row |
+| `nicegui_ui_connect.html` | same | Google 连接 | OAuth row + 主 ID 表 + 屏蔽所选数据 |
+
+Sub-tab wireframes omit interactive fold JS unless noted; layout classes must match index.
 
 ---
 
@@ -115,33 +226,57 @@ Four tabs, fixed order:
 * **Dynamic form fields**
   * **Forbidden:** hardcoded labels like `ID#` / `姓名`.
   * **Required:** rebuild from `ui.get_labels()` after each template activation or TOML save.
-  * **Responsive Grid Layout:** Render inputs in a responsive grid container using Tailwind/Quasar column grid classes (e.g., `.classes('grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 w-full')`). Do not hardcode a fixed column count in Python (like `ui.grid(columns=4)`) which squeezes inputs on narrow panels.
-  * **NiceGUI:** `@ui.refreshable def input_fields(): ...` creating one `ui.input` per label; call `input_fields.refresh()` when `draft` or template changes.
+  * **Wireframe class:** `.field-grid` + `.field-cell` (label left, input right) per `nicegui_ui_index.html`.
+
+  **Desktop layout (≥640px):**
+  * CSS Grid **auto-fill** using full tab-body width: e.g. `grid-template-columns: repeat(auto-fill, minmax(400px, 1fr))`.
+  * Each logical input targets **~400px** minimum cell width; extra columns appear when space allows so each row uses the full `.field-grid` width.
+  * Inside `.field-cell`, label column fixed (~100px); input stretches within the cell (`min-width: 0`).
+
+  **Mobile portrait (<640px):**
+  * **One input per row:** `grid-template-columns: 1fr` — each `.field-cell` spans full width.
+
+  **Input control behavior (all breakpoints):**
+  * Use `ui.textarea` (or Quasar `q-input` `type=textarea` with `autogrow`) — **multiline allowed**.
+  * **Horizontal overflow:** long single-line text shows a **horizontal scrollbar** (`overflow-x: auto`; preserve newlines with `white-space: pre-wrap` or `pre` per line).
+  * **Vertical growth:** as lines increase, control **height grows** to show every line; **no vertical scrollbar inside the field** (`overflow-y: hidden`). Parent `.tab-body` scrolls instead.
+  * **NiceGUI:** `@ui.refreshable def input_fields(): ...` — one textarea per label; `input_fields.refresh()` when `draft` or template changes.
   * **Primary key:** field where `[[fields]].id = true` shows `★主键` in label.
 
-* **Input context menu (右键 / 长按)** — canonical UI spec for camera / OCR lives here; OCR platform API is [`embed_paddle_ocr.md`](../embed_paddle_ocr.md).
+* **Input context menu (右键 / 移动端按钮)** — canonical UI spec for camera / OCR; OCR API is [`embed_paddle_ocr.md`](../embed_paddle_ocr.md) **`PaddleOcr(pic, rectangle)`** only.
 
-  * **Scope:** every dynamic `ui.input` / `ui.textarea` from `ui.get_labels()` on the Input tab (including primary-key field). Desktop: `contextmenu`; mobile: long-press (~500–600 ms). Use document-level event delegation; record active field context: `input_label`, `template_id`, `record_id`, DOM ref via `SessionRegistry.for_current()`.
+  * **Scope:** every dynamic input on the Input tab (including primary key). Track active field: `input_label`, `template_id`, `record_id` (from draft id when known), DOM ref via `SessionRegistry.for_current()`.
+
+  **Desktop (≥640px):**
+  * `ui.context_menu()` on `.field-cell` (or textarea wrapper); **`contextmenu`（右键）** opens「拍照」「OCR」.
+
+  **Mobile portrait (<640px):**
+  * **Do not** use **double-tap** on the textarea as the menu trigger. In browsers, double-tap inside editable text is reserved for **word selection / caret placement** (and on iOS often page zoom); it will fight OCR/camera UX and is unreliable for a custom menu.
+  * **Do not** rely on **long-press** alone either — on textarea it commonly triggers text selection or the OS paste bar, not a stable custom menu across Safari / Chrome / WebView.
+  * **Canonical mobile entry:** a small **`···` or 📷 button** at the end of each `.field-cell` row (outside the text baseline); **single tap** opens the **same** `ui.menu` / menu actions as desktop. Implement in Python (`ui.button` + `ui.menu`); no custom Vue required for v1.
+  * Optional later: long-press on the **button** or label strip only (not on the textarea) if user testing asks for it.
+
+  * **One photo per input (session buffer):** each `input_label` holds **at most one pending image** in `SessionState.field_images[input_label]` (bytes + optional preview). New **拍照** or OCR capture **replaces** the previous pending image for that field. SQLite persistence on **下一行** / **另存为** only. See [`db_store.md`](../db_store.md).
 
   * **Menu items:**
 
-    | Item | UI orchestration | Calls |
-    |------|------------------|-------|
-    | **拍照** | Open hidden `<input type="file" accept="image/*" capture="environment">` (mobile camera; desktop = file picker). On file ready → persist only. | `core_store.save_image(...)` only. **Do not** call `paddle_ocr`. |
-    | **OCR** | Acquire image (see below) → preview overlay + drag crop rect (**default = full image**) → on confirm run recognition → fill active input → `on_change` / existing blur chain. | `paddle_ocr.main.recognize(image_bytes, crop_box=...)` only for inference. Optional: `core_store.update_image_ocr(...)` if an `image_id` exists. |
+    | Item | Behavior | Calls |
+    |------|----------|-------|
+    | **拍照** | Camera / file picker → cache in `field_images[input_label]` only. Optional thumbnail on field. **Do not** OCR. | On commit → `core_store.save_image(...)` when `use_independent_db` (§3.4). |
+    | **OCR** | If pending image exists → preview + crop rect (default full) → confirm. If **none** → open camera first, cache, then same flow. Fill active field from OCR text. | `paddle_ocr.main.PaddleOcr(pic_bytes, rectangle)` — `rectangle` is OpenCV `(x,y,w,h)` or `None`. Optional: `core_store.update_image_ocr` after `image_id` exists. |
 
-  * **OCR image acquisition (UI responsibility):** (1) image user just picked in this OCR flow; (2) user picks from history for this `input_label`; (3) **if none**, open camera / file picker immediately — never show “请先拍照”. OCR does **not** require a prior **拍照** action.
+  * **OCR mapping:** per-field menu uses field-sized ROI; merge `string1` (and `string2` if needed) into active input. Full-page table JSON is out of scope for single-field menu unless user crops to one block.
 
-  * **Errors:** show `ui.notify(result.message)` from `paddle_ocr` or store; never surface HTTP status codes or raw exceptions to the user.
+  * **Errors:** `ui.notify(result.get('message'))`; never HTTP codes or raw exceptions.
 
-  * **Loading:** disable menu actions / show loading while capture or OCR runs.
+  * **Loading:** disable menu while capture / OCR runs.
 
-  * **Suggested code:** `nicegui_ui/components/input_context_menu.py` wired from `tab_input.py` after `@ui.refreshable input_fields` builds inputs.
+  * **Gate:** after `python paddle_ocr/main.py` smoke. Import `PaddleOcr` from `paddle_ocr.main` only.
 
-  * **Gate:** implement only after `python paddle_ocr/main.py smoke` passes (see `embed_paddle_ocr.md` §7–§8). UI imports `paddle_ocr` facade only — never `paddleocr` directly.
+  * **Suggested code:** `nicegui_ui/components/input_context_menu.py` in `tab_input.py`.
 
 * **ID blur lookup**
-  * Only the primary-key `ui.input` gets `on('blur', on_id_blur)`.
+  * Only the primary-key field (`ui.textarea` / input) gets `on('blur', on_id_blur)`.
   * If `suppress_id_search`: consume flag and return.
   * Else: `db.query_by_id` → if exists, open `ui.dialog` with:
     * `从数据源重新读取` → `t2db.fetch_row_by_id`
@@ -156,10 +291,10 @@ Four tabs, fixed order:
 
 * **Session list toolbar** (`.list-btns` under the table)
   * **Left:** `装载文件` — open dialog to pick an xlsx from `exports/{template_id}/`; parse rows via `ExcelWriter.read_instances(path)` into `session_rows` so users can edit multiple exported files in the UI and **另存为** as new files.
-  * **Right:** `清空` then `单个删除` (adjacent).
+  * **Right:** `清空` then `删除选中` (adjacent).
   * **`装载文件` merge policy:** if `session_rows` is empty → **replace** (load into empty list). If non-empty → dialog offers **替换当前列表** or **追加到当前列表**; rows are capped at `input_capacity`; notify when truncated.
   * **`清空`:** clear `session_rows`, reset `current_instance_index = 0`, `selected_session_index = None`, reset `draft` from `template_defaults`, refresh table and fields.
-  * **`单个删除`:** remove the single selected table row (former `删除`); recompute `current_instance_index = len(session_rows)`.
+  * **`删除选中`:** remove all checked table rows from `session_rows`; recompute `current_instance_index`.
 
 * **Toolbar**
   * Row 1: `另存为`, `下一行`, read-only label `当前 {current_instance_index + 1} / 容量 {input_capacity}`.
@@ -168,13 +303,18 @@ Four tabs, fixed order:
 
 * **下一行**
   * Check `verify_report.ok` and `current_instance_index < input_capacity`.
-  * `ui.persist_fields(draft)`; `session_rows[current_instance_index] = draft`.
+  * `ui.persist_fields(draft)` → SQLite `records` (see §3.4 for DB target).
+  * **Images on commit:** for each `input_label` in `field_images` with pending bytes, call `core_store.save_image(template_id, record_id, input_label, ...)` using the **committed** `record_id` and field name. Clear `field_images` after save. **Skip all image saves** when `use_independent_db` is false (§3.4).
+  * **Template-store mode (`use_independent_db` false):** **弃用 SQLite** for this template session — `下一行` / **另存为** write row data **directly into the template xlsx** via `ExcelWriter`; no `ui.persist_fields` to suffix DB.
+  * `session_rows[current_instance_index] = draft` (copy without image bytes).
   * If at capacity: notify user, do not clear inputs.
-  * Else: increment index, clear `draft`, refresh fields and table.
+  * Else: increment index, clear `draft` and `field_images`, refresh fields and table.
 
 * **另存为**
   * Path: `exports/{template_id}/{template_id}_{db_suffix}_{YYYYMMDD}_{HHMMSS}.xlsx`
+  * Persist current row same as **下一行** (text + images per rules above) before or as part of export transaction.
   * `ExcelWriter.write_back(template_path, output_path, session_rows, instance_k=0)` (or include current `draft` if `session_rows` empty).
+  * **Excel output never embeds images** (`export_attach_images=off` for NiceGUI product — text/cells only). Pending/committed photos remain in `core_store` for UI reload only when independent-DB mode is on.
   * Non-export actions disabled when `verify_report.ok` is false.
 
 * **打印**
@@ -185,21 +325,25 @@ Four tabs, fixed order:
 
 ### 3.2 Tab 2: Google Connection (`google_config` / `Google 连接`)
 
-* **OAuth:** `ui.upload` for `oauth_client.json`, status label, `授权 Google 账号` button → `ConnectGoogle` service.
+* **OAuth:** `ui.upload` or file picker for `oauth_client.json`; **选择授权文件** / **连接** / **删除** (wireframe); status via `AutoConnect`.
 * **Connection status:** label updated on template activation when OAuth active and TOML `[[sources]]` contains sheet URLs.
 * **Auto-reconnect:** template switch disconnects previous sheet context; reconnect if new template TOML has URLs. Edit sources only in `输入配置` tab.
 * **Main ID sheet table:** `ui.table` with multi-select; `全选` / `取消全选` / `导入选中行`.
+* **屏蔽所选数据:** link-style control (wireframe bottom-right of table toolbar) appends selected visible row primary IDs to `trash_ids` in `templates/{id}/{id}.history.json` and hides rows from the sheet table (see `nicegui_ui_connect.html`).
 * **Import:** selected rows → `ui.persist_fields` → append to Input tab `session_rows` → switch to `输入` tab.
 
 ### 3.3 Tab 3: Input Config (`toml_config` / `输入配置`)
 
-Sections as `ui.card` or `ui.expansion`, matching `nicegui_ui_toml.html`:
+Wireframe: `nicegui_ui_toml.html`. Same `shell-top` / `shell-body` as index.
 
-1. **基础:** `determiner`, `work_sheet`, `print_sheet`, `保存`
-2. **数据源:** editable table for `[[sources]]` keys/paths; `保存`
-3. **输入区段:** single `input_section` row (`input_area`, `move_to`, `offset`); `校验配置` + report area
-4. **字段映射:** table with `Input_label`, `value_from_label`, `value_offset`, `field`, `source_file`, `source_sheet`, `index`, `regex`, `id`; `生成骨架`, `保存`
-5. **高级:** `ui.codemirror` or `ui.textarea` for raw TOML; `保存`, `重置`
+**In scope (wireframe):**
+
+1. **校验与应用:** `校验并应用配置` → `verify_toml` + on success rebuild engines.
+2. **高级（TOML 全文）:** `ui.codemirror` or `ui.textarea` + `保存` / `重置`.
+
+**Out of scope (removed from this plan):** Gemma4「AI 配置向导」、页内 stepper / 对话框 / `docs/gemma4_e4b_workflow.md` W5 UI — deferred to a **separate future doc**; do not implement in NiceGUI v1 wireframe.
+
+Optional later: manual cards for 基础 / 数据源 / 输入区段 / 字段映射 if needed without LLM wizard.
 
 **校验配置:** `verify_toml(template_path, cfg)` — show `missing_labels`, `duplicate_labels`, `out_of_area_labels`, `errors`.
 
@@ -209,14 +353,38 @@ Sections as `ui.card` or `ui.expansion`, matching `nicegui_ui_toml.html`:
 2. Re-run `verify_toml`
 3. On failure: disable 输入 write actions; show report
 4. On success: rebuild `UiProvider`, `Template2DB`, `ExcelWriter`; recompute `input_capacity = writer.max_instance_count(template_path)`
-5. Clear `draft`, `session_rows`, `current_instance_index = 0`
+5. Clear `draft`, `session_rows`, `field_images`, `current_instance_index = 0`
 6. Refresh Input, DB, and TOML panels via `@ui.refreshable`
 
 ### 3.4 Tab 4: Storage Config (`db_config` / `存储配置`)
 
-* **当前数据库:** `ui.select` of `list_db_paths(template_id)`; `切换` enabled only when selection ≠ `active_db_suffix`; `新建库` → `allocate_next_db_path`
-* **全部数据:** `ui.table` of `ui.get_data()` with row selection
-* **覆盖录入:** paste textbox + `覆盖保存` → `record_from_textbox` → overwrite selected row by ID
+Wireframe: `nicegui_ui_db.html`. Same `shell-top` / `shell-body` as index.
+
+* **当前数据库** section title row (wireframe `.section-title` flex row):
+  * Left: title text **当前数据库**
+  * Right: checkbox **「使用独立数据库」**, **checked by default** (`use_independent_db = True`; persist per template in `app.storage.user` optional).
+
+  | `使用独立数据库` | DB behavior | Images | 「全部数据」 table |
+  |------------------|-------------|--------|-------------------|
+  | **Checked (default)** | Normal suffix DB files (`sample_template.A2026`, …); `切换` / `新建库` enabled per existing rules. | On **下一行** / **另存为**, pending `field_images` → `core_store.save_image` keyed by `template_id + record_id + input_label`. Reload via `get_latest_image`. | Shows all rows in the **active suffix database**. |
+  | **Unchecked** | **弃用 SQLite**：不再打开/写入后缀库文件；**下一行** / **另存为** 将数据**直接写入模板 xlsx**（`ExcelWriter.write_back` → `templates/{template_id}/{template_id}.xlsx` 的 `work_sheet`，不经 `SecureSQLite`）。`切换` / `新建库` **disabled**。 | **Not saved** — skip `save_image`; discard pending photos on commit. | Title **「数据表已存数据」**；表格数据 **从模板 xlsx 读取**（见下）。 |
+
+* **当前数据库 controls (checked mode only):** `ui.select` of `list_db_paths(template_id)`; `切换` enabled only when selection ≠ `active_db_suffix`; `新建库` → `allocate_next_db_path`.
+
+* **全部数据 / 数据表已存数据** (`ui.table`; columns = TOML `Input_label` keys):
+
+  | `use_independent_db` | Table data source | API |
+  |----------------------|-------------------|-----|
+  | **true (default)** | Active suffix SQLite | `ui_provider.get_data()` |
+  | **false** | **Template xlsx on disk** | `ExcelWriter.read_instances(session.template_path)` — same instance-group semantics as Input tab「装载文件」; path is the **template file**, not `exports/` |
+
+  After **下一行** / **另存为** in template-store mode, refresh this table from `read_instances(template_path)` so the grid reflects what was written into the workbook.
+
+* **覆盖录入:**
+  * **Independent DB:** paste textbox + `覆盖保存` → `record_from_textbox` → overwrite selected SQLite row by ID.
+  * **Template-store:** `覆盖保存` → merge paste into `draft` → `write_back` updating the selected instance row in **template xlsx** (no SQLite).
+
+**Cross-reference:** image commit semantics and `record_images` schema — [`db_store.md`](../db_store.md) §4.2, §6.1. Store APIs must exist before wiring UI commit; OCR inference does not require store.
 
 ---
 
@@ -277,6 +445,9 @@ class SessionState:
     exported_files: list = field(default_factory=list)
     last_export_path: Path | None = None
     active_db_suffix: str | None = None
+    use_independent_db: bool = True
+    field_images: dict = field(default_factory=dict)
+    # field_images[input_label] → {bytes, mime, preview_path?} — one pending photo per field
     # Google tab fields ...
 ```
 
@@ -285,7 +456,8 @@ class SessionState:
 | Data | NiceGUI storage | Notes |
 |------|-----------------|-------|
 | `draft`, `session_rows`, engines | `SessionRegistry[principal_id]` (`SessionState`) | per principal; not in `app.storage.user` |
-| Sidebar width / collapsed | `app.storage.user` (optionally `pref_key(name)`) | survives reload; needs `storage_secret` |
+| Sidebar width / collapsed | `app.storage.user` (`pref_key`) | survives reload; needs `storage_secret` |
+| `use_independent_db` per template | `app.storage.user` optional | default True |
 | Visit counters, global flags | `app.storage.general` | optional |
 | Ephemeral UI flags | `app.storage.client` or local variables | lost on reload |
 
@@ -299,9 +471,9 @@ Future permission limits: adjust grants on `user:admin` (or other accounts), not
 |--------|--------|-------------|
 | `core_registry.py` | list/switch templates | scan outside `templates/` |
 | `core_toml.py` | Load/Save/`verify_toml` | scan xlsx labels, guess coordinates |
-| `core_store.py` | DB CRUD, text split | merge legacy JSON |
-| `core_transform.py` | `max_instance_count`, `write_back`, print areas, source fetch | compute Excel coordinates in UI |
-| `paddle_ocr/` (`main.py`) | `recognize`, `health_check` from Input context menu **OCR** item | camera UI, crop overlay, `save_image`, SQLite, Excel export |
+| `core_store.py` | DB CRUD, text split, `save_image` / `get_latest_image` on commit | merge legacy JSON |
+| `core_transform.py` | `max_instance_count`, `write_back`, print areas, source fetch | compute Excel coordinates in UI; **embed images in xlsx** |
+| `paddle_ocr/` (`main.py`) | `PaddleOcr` from Input context menu **OCR** item | camera UI, crop overlay, `save_image`, SQLite, Excel export |
 
 ### 4.3 Template activation flow (unchanged semantics)
 
@@ -314,7 +486,7 @@ On sidebar click or initial load:
 5. If failed: show report; disable 输入/另存为/下一行/打印
 6. If passed: open `default_db_path`, construct `SecureSQLite`, `UiProvider`, `Template2DB`, `ExcelWriter(cfg, located)`
 7. `input_capacity = writer.max_instance_count(template_path)`
-8. Reset `draft`, `session_rows`, `current_instance_index = 0`
+8. Reset `draft`, `session_rows`, `field_images`, `current_instance_index = 0`
 9. Refresh all `@ui.refreshable` sections; switch to tab `输入`
 
 ### 4.4 TOML model (unchanged)
@@ -329,9 +501,9 @@ Forbidden: old `sections` model, UI-maintained area lists, UI coordinate math.
 
 | Requirement | Gradio (problematic) | NiceGUI (recommended) |
 |-------------|----------------------|------------------------|
-| App shell | `gr.Row` + CSS overrides on generated wrappers | `ui.splitter` or `ui.row` + `ui.column` |
+| App shell | `gr.Row` + CSS overrides | `shell-top` row + `ui.splitter` in `shell-body`; fold chevron in header |
 | Sidebar list | `gr.HTML` + JS click bridge | `ui.list` / `ui.button` + Python `on_click` |
-| Resize / collapse | custom `#resize-rail` + `localStorage` + inline `!important` | `ui.splitter` + `app.storage.user` |
+| Resize / collapse | custom `#resize-rail` + `localStorage` + inline `!important` | `ui.splitter`（显示可越界；存储 clamp 20..400；默认 250）+ CSS hidden fold + `app.storage.user` |
 | Tabs | `gr.Tabs` | `ui.tabs` + `ui.tab_panels` |
 | Dynamic inputs | `@gr.render` | `@ui.refreshable` |
 | Ghost / field blur | `.blur()` + `suppress_id_search` | `ui.input.on('blur', ...)` |
@@ -374,14 +546,15 @@ NiceGUI tradeoffs:
 
 ## 7. Implementation Order (NiceGUI greenfield)
 
-1. **Spike shell:** `ui.splitter` + sidebar template list + four empty tabs; verify resize/collapse + `app.storage.user` persistence.
+1. **Spike shell:** `shell-top` (template name + fold + tabs) + `shell-body` `ui.splitter`; sidebar collapse + width persistence.
 2. **Template activation:** port `activate_template()` logic; real data from `templates/*.xlsx` only.
-3. **Input tab:** `@ui.refreshable` fields, ghost blur, ID dialog, session `ui.table`, 下一行 / 另存为.
-4. **TOML tab:** five sections, 校验配置, save + full session reset.
-5. **DB tab:** switch/create DB, full-data table, 覆盖保存.
-6. **Google tab:** OAuth + import table (can follow after core four tabs work).
-7. **Print / export polish:** print area dropdown, `ui.download.file` fallback, `native=True` evaluation on Windows.
-8. **Input context menu (拍照 / OCR):** after `paddle_ocr` CLI smoke passes — global right-click / long-press on all input fields; **拍照** → `core_store.save_image`; **OCR** → crop UI → `paddle_ocr.main.recognize` → fill field (see §3.1).
+3. **Input tab:** responsive `.field-grid`, autogrow textareas, ghost blur, ID dialog, session `ui.table`, 下一行 / 另存为 (text only first).
+4. **DB tab:** `使用独立数据库` checkbox, switch/create DB, data table modes, 覆盖保存.
+5. **TOML tab:** five sections, 校验配置, save + full session reset.
+6. **Mobile pass:** portrait breakpoints, long-press menu, camera capture.
+7. **Google tab:** OAuth + import table (no Gemma TOML wizard in NiceGUI v1).
+8. **Input context menu (拍照 / OCR):** after `paddle_ocr` CLI smoke — session `field_images`, commit images on 下一行/另存为 per §3.4; **OCR** → `PaddleOcr`.
+9. **Print / export polish:** print area dropdown, `ui.download.file` fallback; confirm **no images in xlsx**.
 
 Do not modify `app/services/*` during UI migration unless a missing core API is confirmed and documented first.
 
@@ -445,17 +618,19 @@ Use `ui.download.file` for exported xlsx when not printing. Use `ui.notify` for 
 
 ## 10. Acceptance Criteria
 
-1. Sidebar lists only `templates/*.xlsx` via `core_registry`; empty state when none.
-2. `ui.splitter` (or approved equivalent) provides drag resize and collapse with persisted width.
-3. Template activation always runs `verify_toml`; failure disables 输入 write/export/print.
-4. Input fields are generated from `ui.get_labels()`; primary key uses blur + dialog flow.
-5. Session table supports select, highlight, 单个删除, 清空, 装载文件 (from exports), load into `draft` without hidden JSON bridges.
-6. 下一行 uses `input_capacity` from `writer.max_instance_count()` only.
-7. 另存为 writes to `exports/{template_id}/...` and refreshes print-file list.
-8. TOML save rebuilds engines and clears input session state.
-9. DB tab switches DB only when 切换 is enabled; table shows live SQLite data.
-10. All business rules delegate coordinate math to `core_transform` / `located`.
-11. Input context menu: **拍照** persists via `core_store` only; **OCR** calls `paddle_ocr.main.recognize` after CLI gate; no “请先拍照” blocker; crop defaults to full image; errors use Chinese `message` via `ui.notify`.
+1. Sidebar lists only `templates/*.xlsx` via `core_registry`; top bar shows selected template name; collapse hides list, leaves template name and expand chevron.
+2. `shell-top` + `shell-body` `ui.splitter`: drag **display** may exceed 20..400; **stored** width clamped 20..400; default **250**; fold CSS hidden; expand restores stored (or 250).
+3. Mobile portrait: field grid one column; **per-field `···` button** opens camera/OCR menu (not double-tap/long-press on textarea).
+4. Desktop field grid: `auto-fill` ~400px cells; textareas autogrow vertically, scroll horizontally when needed.
+5. Template activation always runs `verify_toml`; failure disables 输入 write/export/print.
+6. Input fields from `ui.get_labels()`; primary key blur + dialog flow.
+7. Session table: select, highlight, 删除选中, 清空, 装载文件; no hidden JSON bridges.
+8. 下一行 / 另存为 persist text; images committed per `field_images` + `use_independent_db` (see `db_store.md`).
+9. 另存为 path under `exports/{template_id}/...`; **xlsx has no embedded images**.
+10. DB tab: **使用独立数据库** default checked; unchecked → template xlsx read/write via `read_instances` / `write_back`, table titled 数据表已存数据, no images.
+11. TOML save rebuilds engines and clears input session state.
+12. All coordinate math delegated to `core_transform` / `located`.
+13. Context menu: **拍照** caches one photo per field; **OCR** → `PaddleOcr`; desktop **右键**; mobile **字段行末按钮**（非 textarea 双击/长按）; errors via `ui.notify`.
 
 ---
 
@@ -464,7 +639,8 @@ Use `ui.download.file` for exported xlsx when not printing. Use `ui.notify` for 
 | Artifact | Status |
 |----------|--------|
 | `docs/nicegui_ui/nicegui_ui_plan.md` | canonical UI specification (this document) |
-| `docs/nicegui_ui/nicegui_ui_*.html` | wireframes only |
+| `docs/nicegui_ui/nicegui_ui_*.html` | wireframes; all tabs use `shell-top` + `shell-body`; `index` = field-grid + session table; `db` = §3.4 checkbox in section title |
+| `docs/db_store.md` | image commit API + `record_images` schema; UI defers `save_image` until 下一行/另存为 |
 | `plans/nicegui_ui_migration/` | Speckit plan / spec / tasks / constitution |
 | `nicegui_ui/` | sole runtime UI package |
 | `docs/embed_paddle_ocr.md` | OCR platform API; UI menu spec is **here** (§3.1) |

@@ -7,6 +7,7 @@ from nicegui import ui
 
 from nicegui_ui.components.for_main import IdLookup
 from nicegui_ui.components.general import SessionRegistry, list_export_files
+from nicegui_ui.components.ocr_menu import open_camera_dialog, run_ocr
 
 
 def ensure_exports_dir(template_id: str) -> Path:
@@ -307,8 +308,13 @@ def render_input_tab():
                 ui.notify('已从粘贴板解析数据', type='positive')
             except Exception as ex:
                 ui.notify(f'解析失败: {str(ex)}', type='negative')
-        ghost = ui.input(placeholder='粘贴整行数据…').classes('ghost-input').props('borderless dense hide-bottom-space')
+        ghost = ui.textarea().classes('ghost-input').props('borderless autogrow hide-bottom-space rows="1"')
         ghost.on('blur', on_ghost_blur)
+        with ghost:
+            with ui.context_menu():
+                from nicegui_ui.components.ocr_menu import open_camera_dialog, run_ocr
+                ui.menu_item('拍照', on_click=lambda: open_camera_dialog(session, '顶部粘贴'))
+                ui.menu_item('OCR', on_click=lambda: run_ocr(session, '顶部粘贴', ghost))
         # 动态字段区（默认 3 列 field-grid）
         with ui.element('div').classes('field-grid'):
             render_dynamic_fields(session, labels)
@@ -332,8 +338,22 @@ def render_input_tab():
 
         # 另存为 / 下一行
         with ui.element('div').classes('toolbar-row'):
-            ui.label('另存为').classes('btn excel').on('click', lambda: handle_save_as(session))
-            ui.label('下一行').classes('btn db').on('click', lambda: handle_next_row(session))
+            save_as_cls = 'btn excel'
+            next_row_cls = 'btn db'
+            validation_ok = not (session.verify_report and not session.verify_report.get('ok', False))
+            
+            if not validation_ok:
+                save_as_cls += ' disabled'
+                next_row_cls += ' disabled'
+                
+            btn_save = ui.label('另存为').classes(save_as_cls)
+            if validation_ok:
+                btn_save.on('click', lambda: handle_save_as(session))
+                
+            btn_next = ui.label('下一行').classes(next_row_cls)
+            if validation_ok:
+                btn_next.on('click', lambda: handle_next_row(session))
+                
         ui.element('div').classes('w-full').style('height:1px; background:#000; margin: 10px 0;')
 
         # 打印文件 + 打印区域 + 打印（紧挨）
@@ -363,12 +383,19 @@ def render_dynamic_fields(session, labels: list[str]):
                     return
                 val = str(val).strip()
                 session.draft[label] = val
+                
+                use_db = getattr(session, 'use_independent_db', True)
+                existing = None
+                
                 from app.core_store import _normalize_id
                 try:
                     rid = _normalize_id(val)
                 except ValueError:
-                    rid = None
-                existing = session.db.query_by_id(rid) if rid is not None else None
+                    rid = val
+                    
+                if use_db and session.db:
+                    existing = session.db.query_by_id(rid) if rid is not None else None
+                
                 if existing:
                     with ui.dialog() as dialog, ui.card():
                         ui.label(f'发现已存在的记录 (ID: {val})')
@@ -389,7 +416,7 @@ def render_dynamic_fields(session, labels: list[str]):
                 else:
                     if IdLookup.apply_source_to_draft(session, val):
                         render_dynamic_fields.refresh()
-                        ui.notify(f'已自动拉取 ID {val} 的数据', type='info')
+                        ui.notify(f'已加载外部数据 ID {val}', type='info')
                     elif not getattr(session, 'google_connected', False):
                         ui.notify('尚未连接 Google Sheet，无法按主键查源', type='warning')
             return on_id_blur
@@ -400,19 +427,61 @@ def render_dynamic_fields(session, labels: list[str]):
             render_dynamic_fields.refresh()
         with ui.element('div').classes('field-cell id-field' if is_pk else 'field-cell'):
             ui.label(lbl).classes('field-label primary' if is_pk else 'field-label')
-            inp = ui.input(
-                value=str(session.draft.get(lbl, '') or ''),
-                on_change=create_on_change(lbl),
-            ).classes('input-box').props('dense borderless hide-bottom-space')
-            if is_pk:
-                inp.on('blur', create_on_blur(lbl))
+            
+            with ui.row().classes('w-full no-wrap items-start gap-1 p-0 m-0'):
+                inp = ui.textarea(
+                    value=str(session.draft.get(lbl, '') or ''),
+                    on_change=create_on_change(lbl),
+                ).classes('input-box flex-1').props('autogrow dense borderless hide-bottom-space rows="1"')
+                if is_pk:
+                    inp.on('blur', create_on_blur(lbl))
+                with inp:
+                    with ui.context_menu():
+                        ui.menu_item('拍照', on_click=lambda l=lbl: open_camera_dialog(session, l))
+                        ui.menu_item('OCR', on_click=lambda l=lbl: run_ocr(session, l, inp))
+                
+                # 移动端菜单按钮
+                btn = ui.button('···').classes('mobile-menu-btn p-0 m-0 min-w-[36px] min-h-[36px]').props('flat dense')
+                with btn:
+                    with ui.menu():
+                        ui.menu_item('拍照', on_click=lambda l=lbl: open_camera_dialog(session, l))
+                        ui.menu_item('OCR', on_click=lambda l=lbl: run_ocr(session, l, inp))
 
 def handle_next_row(session):
     if session.current_instance_index >= session.input_capacity:
         ui.notify("容量已满，无法录入下一行", type='warning')
         return
         
-    session.ui_provider.persist_fields(session.draft)
+    use_db = getattr(session, 'use_independent_db', True)
+    
+    if use_db:
+        record_id = session.ui_provider.persist_fields(session.draft)
+        
+        if getattr(session, 'field_images', None):
+            for label, img_data in list(session.field_images.items()):
+                res = session.db.save_image(
+                    cfg=session.cfg,
+                    template_id=session.template_id,
+                    record_id=record_id,
+                    input_label=label,
+                    image_bytes=img_data['bytes'],
+                    mime=img_data['mime']
+                )
+                if res.get('ok'):
+                    image_id = res['image_id']
+                    ocr_text = img_data.get('ocr_text')
+                    ocr_status = img_data.get('ocr_status')
+                    if ocr_text or ocr_status:
+                        session.db.update_image_ocr(
+                            image_id=image_id,
+                            ocr_text=ocr_text,
+                            ocr_status=ocr_status
+                        )
+                # clear saved image
+                del session.field_images[label]
+    else:
+        if getattr(session, 'field_images', None):
+            session.field_images.clear() # Discard images if independent DB is disabled
     
     row_copy = session.draft.copy()
     row_copy.pop('_index', None)
@@ -428,6 +497,15 @@ def handle_next_row(session):
             session.session_rows.append(row_copy)
         session.current_instance_index += 1
         
+    if not use_db:
+        # Template Direct Write mode
+        try:
+            session.writer.write_back(session.template_path, session.template_path, session.session_rows, instance_k=0)
+            from nicegui_ui.pages.tab_db import render_db_tab
+            render_db_tab.refresh()
+        except Exception as e:
+            ui.notify(f"写入模板失败: {str(e)}", type='negative')
+            
     session.draft.clear()
     if getattr(session, 'template_defaults', None):
         session.draft.update(session.template_defaults)
@@ -456,9 +534,41 @@ def handle_save_as(session):
     export_dir = ensure_exports_dir(session.template_id)
     out_path = export_dir / filename
     
+    use_db = getattr(session, 'use_independent_db', True)
+    
     try:
-        for row in rows_to_write:
-            session.ui_provider.persist_fields(row)
+        if use_db:
+            for row in rows_to_write:
+                record_id = session.ui_provider.persist_fields(row)
+                
+                # Save images for the currently drafted row
+                if row == rows_to_write[-1] and getattr(session, 'field_images', None):
+                    for label, img_data in list(session.field_images.items()):
+                        res = session.db.save_image(
+                            cfg=session.cfg,
+                            template_id=session.template_id,
+                            record_id=record_id,
+                            input_label=label,
+                            image_bytes=img_data['bytes'],
+                            mime=img_data['mime']
+                        )
+                        if res.get('ok'):
+                            image_id = res['image_id']
+                            ocr_text = img_data.get('ocr_text')
+                            ocr_status = img_data.get('ocr_status')
+                            if ocr_text or ocr_status:
+                                session.db.update_image_ocr(
+                                    image_id=image_id,
+                                    ocr_text=ocr_text,
+                                    ocr_status=ocr_status
+                                )
+                    session.field_images.clear()
+        else:
+            if getattr(session, 'field_images', None):
+                session.field_images.clear()
+            # In template mode, update the template file as well
+            session.writer.write_back(session.template_path, session.template_path, rows_to_write, instance_k=0)
+                
         session.writer.write_back(session.template_path, out_path, rows_to_write, instance_k=0)
         session.exported_files.append(out_path)
         session.last_export_path = out_path
@@ -476,21 +586,13 @@ def handle_print(session, selected_label, export_path: Path | None = None) -> No
     if path is None or not path.is_file():
         ui.notify('请先成功执行【另存为】', type='warning')
         return
-    areas = _resolve_print_areas(session, path)
-    area_entry = _find_print_area_entry(areas, selected_label)
-    if area_entry is None or not area_entry.get('area') or not area_entry.get('sheet'):
-        ui.notify('请选择有效打印区域', type='warning')
-        return
-    if not session.writer:
-        ui.notify('模板引擎未就绪', type='warning')
-        return
-    try:
-        png_bytes = session.writer.render_print_area_png_bytes(
-            path,
-            str(area_entry['sheet']),
-            str(area_entry['area']),
-        )
-    except Exception as exc:
-        ui.notify(f'渲染打印区失败: {exc}', type='negative')
-        return
-    _open_print_preview(png_bytes, f'{path.stem}_print.png')
+        
+    import os
+    if os.name == 'nt':
+        try:
+            os.startfile(str(path), 'print')
+            ui.notify('已发送至本地打印机', type='positive')
+        except Exception as e:
+            ui.notify(f'打印失败: {str(e)}', type='negative')
+    else:
+        ui.notify('自动打印仅支持 Windows 系统', type='warning')

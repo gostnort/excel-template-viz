@@ -3,105 +3,7 @@ import sys
 
 from nicegui import ui
 from nicegui_ui.components.general import SessionRegistry
-from nicegui_ui.wizard_panel import WizardUiController
 
-
-def _default_wizard_profile() -> str:
-    """Pick default --profile (cuda first when probe lists it)."""
-    try:
-        from llm_gemma4.runtime.hardware_probe import detect
-        profiles = detect().available_profiles
-        if profiles:
-            return profiles[0]
-    except Exception:
-        pass
-    return 'cuda'
-
-
-def _launch_wizard_subprocess(
-    template_id: str,
-    *,
-    resume: bool = False,
-    llm: bool = True,
-    profile: str = 'cuda',
-) -> None:
-    """Spawn CLI wizard in a new console (debug / fallback only)."""
-    cmd = [sys.executable, '-m', 'llm_gemma4', 'wizard', '--template', template_id, '--headed']
-    if resume:
-        cmd.append('--resume')
-    if llm:
-        cmd.append('--llm')
-        cmd.extend(['--profile', profile])
-    try:
-        if sys.platform == 'win32':
-            subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
-        else:
-            subprocess.Popen(cmd, start_new_session=True)
-        ui.notify(f'已在终端启动向导（调试模式）：{template_id}', type='info')
-    except Exception as exc:
-        ui.notify(f'启动向导失败: {exc}', type='negative')
-
-
-def open_in_app_wizard(
-    session,
-    *,
-    llm: bool = True,
-    profile: str = 'cuda',
-    resume: bool = False,
-) -> None:
-    """Open in-app wizard panel bound to ``WizardRunner`` (W5b)."""
-    if not session.template_id:
-        ui.notify('请先选择模板', type='warning')
-        return
-    template_id = session.template_id
-    controller = WizardUiController(
-        session,
-        template_id=template_id,
-        llm=llm,
-        profile=profile,
-        resume=resume,
-        on_apply=lambda: trigger_toml_save(session),
-        on_terminal=lambda: _launch_wizard_subprocess(
-            template_id, resume=resume, llm=llm, profile=profile,
-        ),
-    )
-    controller.open()
-
-
-def open_wizard_dialog(session) -> None:
-    """Open wizard start options, then in-app panel (primary path)."""
-    if not session.template_id:
-        ui.notify('请先选择模板', type='warning')
-        return
-    template_id = session.template_id
-    with ui.dialog() as dialog, ui.card().classes('gap-2'):
-        ui.label('开始 AI 配置向导').classes('text-lg font-bold')
-        ui.label(
-            '向导将在本页面内分步协助 TOML 配置：可见加载状态、模型解说、'
-            '选项与「完成并继续」。需 NiceGUI 已运行。'
-        ).classes('text-sm')
-        llm_cb = ui.checkbox('启用 LLM 字段映射', value=True)
-        profile_select = ui.select(
-            options=['cuda', 'cpu', 'openvino'],
-            value=_default_wizard_profile(),
-            label='推理配置',
-        ).classes('w-full').props('dense')
-        resume_cb = ui.checkbox('从上次进度继续', value=False)
-        with ui.row().classes('w-full gap-2'):
-            ui.button(
-                '开始向导',
-                on_click=lambda: (
-                    dialog.close(),
-                    open_in_app_wizard(
-                        session,
-                        llm=llm_cb.value,
-                        profile=profile_select.value,
-                        resume=resume_cb.value,
-                    ),
-                ),
-            ).props('color=primary')
-            ui.button('取消', on_click=dialog.close).props('flat')
-    dialog.open()
 
 
 @ui.refreshable
@@ -116,7 +18,7 @@ def render_toml_tab():
         with ui.element('div').classes('section'):
             ui.label('校验与应用').classes('section-title')
             with ui.element('div').classes('section-body'):
-                with ui.element('div').classes('row'):
+                with ui.element('div').classes('form-row'):
                     ui.label('校验并应用配置').classes('btn primary').on('click', lambda: trigger_toml_save(session))
                     
                     if session.verify_report:
@@ -134,14 +36,6 @@ def render_toml_tab():
                                 if session.verify_report.get('errors'):
                                     for err in session.verify_report['errors']:
                                         ui.label(f"- {err}").classes('text-sm text-red')
-
-        # AI 配置向导（Gemma4 E4B）
-        with ui.element('div').classes('section'):
-            ui.label('AI 配置向导').classes('section-title')
-            with ui.element('div').classes('section-body'):
-                with ui.element('div').classes('row'):
-                    ui.button('AI 配置向导', on_click=lambda: open_wizard_dialog(session)).props('color=primary')
-                    ui.label('首次配置或校验失败时，在页面内启动分步向导').classes('text-sm text-gray-600')
 
         # 高级（TOML 全文）
         with ui.element('div').classes('section'):
@@ -167,7 +61,7 @@ def render_toml_tab():
                     except Exception as e:
                         ui.notify(f"保存文件失败: {str(e)}", type='negative')
                         
-                with ui.element('div').classes('row').style('margin-top:8px'):
+                with ui.element('div').classes('form-row').style('margin-top:8px'):
                     ui.label('保存').classes('btn').on('click', save_raw_toml)
                     ui.label('重置').classes('btn').on('click', render_toml_tab.refresh)
 
@@ -201,6 +95,8 @@ def trigger_toml_save(session):
             session.session_rows.clear()
             session.selected_session_index = None
             session.selected_session_indices.clear()
+            if hasattr(session, 'field_images'):
+                session.field_images.clear()
             
             ui.notify('配置保存并加载成功', type='positive')
         else:

@@ -11,21 +11,67 @@
       font-size: 13px; line-height: 1.4; background: #fff; color: #000;
       height: 100vh; overflow: hidden;
     }
-    .main { display: flex; flex-direction: column; height: 100vh; border: 2px solid #000; }
-    .tabs { display: flex; border-bottom: 2px solid #000; flex-shrink: 0; }
+    .shell { display: flex; flex-direction: column; height: 100vh; border: 2px solid #000; }
+    .shell-top {
+      display: flex; flex-shrink: 0;
+      border-bottom: 2px solid #000; min-height: 40px;
+    }
+    .sidebar-header {
+      display: flex; align-items: center; gap: 8px;
+      width: var(--sidebar-width, 200px);
+      min-width: var(--sidebar-width, 200px);
+      max-width: var(--sidebar-width, 200px);
+      padding: 0 8px 0 10px; font-weight: bold;
+      border-right: 1px solid #000; background: #f0f0f0;
+      flex-shrink: 0; overflow: hidden;
+    }
+    .selected-template-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sidebar-fold-btn {
+      width: 24px; height: 24px; flex-shrink: 0; margin-left: auto;
+      border: none; background: transparent; padding: 0; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .fold-chevron { width: 18px; height: 18px; display: block; }
+    .shell-body { display: flex; flex: 1; min-height: 0; }
+    .sidebar {
+      width: var(--sidebar-width, 200px);
+      min-width: var(--sidebar-width, 200px);
+      max-width: var(--sidebar-width, 200px);
+      border-right: 1px solid #000; flex-shrink: 0; overflow: auto;
+    }
+    .template-item { padding: 10px 12px; border-bottom: 1px solid #ccc; }
+    .template-item.active { font-weight: bold; background: #e8e8e8; }
+    .resize-rail { width: 6px; flex-shrink: 0; background: transparent; cursor: col-resize; }
+    .shell.is-sidebar-collapsed .sidebar { display: none; }
+    .shell.is-sidebar-collapsed .resize-rail { display: none; }
+    .shell.is-sidebar-collapsed .sidebar-header {
+      width: auto; min-width: 8rem; max-width: none;
+    }
+    .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    .tabs { display: flex; flex: 1; min-width: 0; background: #f0f0f0; }
     .tab { padding: 10px 24px; border-right: 1px solid #000; font-weight: bold; }
     .tab.active { background: #eee; }
     .tab-body { flex: 1; overflow: auto; padding: 16px 20px; }
     .section { border: 1px solid #000; margin-bottom: 14px; }
-    .section-title { border-bottom: 1px solid #000; padding: 6px 10px; font-weight: bold; background: #f5f5f5; }
+    .section-title {
+      border-bottom: 1px solid #000; padding: 6px 10px;
+      font-weight: bold; background: #f5f5f5;
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    }
+    .section-title-text { flex-shrink: 0; }
+    .indep-db-check {
+      font-weight: normal; font-size: 12px;
+      display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+    }
     .section-body { padding: 10px; }
-    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; }
-    .row:last-child { margin-bottom: 0; }
+    .form-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; }
+    .form-row:last-child { margin-bottom: 0; }
     .field-label { min-width: 80px; }
     .ctrl { border: 1px solid #000; padding: 6px 8px; min-height: 32px; display: inline-flex; align-items: center; }
     .ctrl.medium { min-width: 200px; }
-    .btn { width: 110px; height: 36px; border: 1px solid #000; background: #fff; font-weight: bold; display: inline-flex; align-items: center; justify-content: center; }
-    .btn.disabled { color: #999; border-color: #999; background: #f5f5f5; }
+    .ctrl.disabled { color: #999; border-color: #999; background: #f5f5f5; }
+    .btn { width: 110px; height: 36px; border: 1px solid #000; background: #fff; font-weight: bold; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+    .btn.disabled { color: #999; border-color: #999; background: #f5f5f5; pointer-events: none; }
     table.t { border-collapse: collapse; width: 100%; }
     table.t th, table.t td { border: 1px solid #000; padding: 4px 6px; text-align: left; }
     table.t th { background: #eee; }
@@ -33,69 +79,137 @@
     table.t tbody tr.selected { background: #e8e8e8; font-weight: bold; }
     .chkcol { width: 28px; text-align: center; }
     .placeholder { border: 1px dashed #666; padding: 10px; color: #444; font-style: italic; }
-    .legend { position: fixed; bottom: 8px; right: 8px; font-size: 11px; border: 1px dashed #000; padding: 8px 10px; background: #fff; max-width: 320px; }
+    .hint { font-size: 11px; color: #666; margin-top: 8px; }
+    .mode-note { font-size: 11px; color: #444; margin-top: 6px; padding: 6px 8px; border: 1px dashed #999; display: none; }
+    .shell.is-template-store .mode-note { display: block; }
+    .legend { position: fixed; bottom: 8px; right: 8px; font-size: 11px; border: 1px dashed #000; padding: 8px 10px; background: #fff; max-width: 360px; }
   </style>
 </head>
 <body>
 
-<div class="main">
-  <!-- 顶部 Tab（保留名称与间隔；本页无侧边栏/分隔条） -->
-  <nav class="tabs">
-    <div class="tab">输入</div>
-    <div class="tab">输入配置</div>
-    <div class="tab active">存储配置</div>
-    <div class="tab">Google 连接</div>
-  </nav>
+<div class="shell" id="app-shell" style="--sidebar-width: 200px;">
 
-  <div class="tab-body">
-    <div class="section">
-      <div class="section-title">当前数据库</div>
-      <div class="section-body">
-        <div class="row">
-          <span class="field-label">使用库</span>
-          <div class="ctrl medium">▼ sample_template.A2026</div>
-          <div class="btn disabled">切换</div>
-          <div class="btn">新建库</div>
+  <header class="shell-top">
+    <div class="sidebar-header">
+      <span class="selected-template-name">销售模板</span>
+      <button type="button" class="sidebar-fold-btn" aria-label="折叠" title="折叠">
+        <svg class="fold-chevron" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M14 5 L8 12 L14 19" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M19 5 L13 12 L19 19" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
+    <nav class="tabs">
+      <div class="tab">输入</div>
+      <div class="tab">输入配置</div>
+      <div class="tab active">存储配置</div>
+      <div class="tab">Google 连接</div>
+    </nav>
+  </header>
+
+  <div class="shell-body">
+    <aside class="sidebar">
+      <div class="template-item active">销售模板</div>
+      <div class="template-item">订单模板</div>
+    </aside>
+    <div class="resize-rail" title="拖拽调宽"></div>
+    <main class="main">
+      <div class="tab-body">
+
+        <div class="section">
+          <div class="section-title">
+            <span class="section-title-text">当前数据库</span>
+            <label class="indep-db-check">
+              <input type="checkbox" id="use-indep-db" checked>
+              使用独立数据库
+            </label>
+          </div>
+          <div class="section-body">
+            <div class="form-row db-suffix-row" id="db-suffix-row">
+              <span class="field-label">使用库</span>
+              <div class="ctrl medium" id="db-select">▼ sample_template.A2026</div>
+              <div class="btn disabled" id="btn-switch">切换</div>
+              <div class="btn" id="btn-new-db">新建库</div>
+            </div>
+            <p class="hint" id="db-hint-indep">
+              「切换」仅当 Dropdown 选中项 ≠ 当前使用库时可点。勾选「使用独立数据库」时启用后缀库与拍照存图。
+            </p>
+            <p class="mode-note" id="db-hint-template-store">
+              未勾选：完全弃用 SQLite；下一行/另存为直接写入模板 xlsx；不保存字段拍照；下方为「数据表已存数据」。
+            </p>
+          </div>
         </div>
-        <p style="margin-top:8px;font-size:11px;color:#666">
-          「切换」平时不可用；仅当 Dropdown 选中项 ≠ 当前使用库时才变为可点。
-        </p>
-      </div>
-    </div>
 
-    <div class="section">
-      <div class="section-title">全部数据（HTML5 自定义表格）</div>
-      <div class="section-body">
-        <table class="t">
-          <thead>
-            <tr><th class="chkcol">☐</th><th>id</th><th>ID#</th><th>姓名</th><th>报告日期</th><th>处理意见</th><th>签字</th></tr>
-          </thead>
-          <tbody>
-            <tr class="selected"><td class="chkcol">☑</td><td>8129</td><td>8129</td><td>Clark Kent</td><td>1978/02/29</td><td></td><td></td></tr>
-            <tr><td class="chkcol">☐</td><td>250</td><td>250</td><td>狗蛋</td><td>2026/01/31</td><td>每日刷牙</td><td>One</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">覆盖录入（选中某行后，粘贴整段数据覆盖并保存）</div>
-      <div class="section-body">
-        <div class="placeholder" style="min-height:48px">粘贴整行数据…（按分隔符覆盖选中记录）</div>
-        <div class="row" style="margin-top:8px">
-          <div class="btn">覆盖保存</div>
+        <div class="section">
+          <div class="section-title">
+            <span class="section-title-text" id="data-section-title">全部数据（HTML5 自定义表格）</span>
+          </div>
+          <div class="section-body">
+            <table class="t">
+              <thead>
+                <tr><th class="chkcol">☐</th><th>id</th><th>ID#</th><th>姓名</th><th>报告日期</th><th>处理意见</th><th>签字</th></tr>
+              </thead>
+              <tbody>
+                <tr class="selected"><td class="chkcol">☑</td><td>8129</td><td>8129</td><td>Clark Kent</td><td>1978/02/29</td><td></td><td></td></tr>
+                <tr><td class="chkcol">☐</td><td>250</td><td>250</td><td>狗蛋</td><td>2026/01/31</td><td>每日刷牙</td><td>One</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
+
+        <div class="section">
+          <div class="section-title">覆盖录入（选中某行后，粘贴整段数据覆盖并保存）</div>
+          <div class="section-body">
+            <div class="placeholder" style="min-height:48px">粘贴整行数据…（按分隔符覆盖选中记录）</div>
+            <div class="form-row" style="margin-top:8px">
+              <div class="btn">覆盖保存</div>
+            </div>
+          </div>
+        </div>
+
       </div>
-    </div>
+    </main>
   </div>
 </div>
 
+<script>
+(function () {
+  var shell = document.getElementById("app-shell");
+  var cb = document.getElementById("use-indep-db");
+  var suffixRow = document.getElementById("db-suffix-row");
+  var dbSelect = document.getElementById("db-select");
+  var btnSwitch = document.getElementById("btn-switch");
+  var btnNew = document.getElementById("btn-new-db");
+  var dataTitle = document.getElementById("data-section-title");
+  var hintIndep = document.getElementById("db-hint-indep");
+
+  function applyMode(indep) {
+    shell.classList.toggle("is-template-store", !indep);
+    suffixRow.style.display = indep ? "flex" : "none";
+    hintIndep.style.display = indep ? "block" : "none";
+    dataTitle.textContent = indep
+      ? "全部数据（HTML5 自定义表格）"
+      : "数据表已存数据（HTML5 自定义表格）";
+    if (indep) {
+      dbSelect.classList.remove("disabled");
+      btnNew.classList.remove("disabled");
+    } else {
+      btnSwitch.classList.add("disabled");
+      btnNew.classList.add("disabled");
+    }
+  }
+
+  cb.addEventListener("change", function () { applyMode(cb.checked); });
+  applyMode(cb.checked);
+})();
+</script>
+
 <div class="legend">
   线框 · 存储配置<br>
-  本页无侧边栏 / 拖拽条，仅保留顶部 Tab<br>
-  指定当前库 / 新建库 / 查看全部数据 / 选行覆盖录入<br>
-  输入 Tab「本次已录入」：首列勾选 +「删除选中」移除 session_rows（见 nicegui_ui_index.html）<br>
-  详见 docs/nicegui_ui/nicegui_ui_plan.md
+  shell-top 与 index 一致（折叠 hidden；显示可越界，存储 20–400，默认 250）<br>
+  「当前数据库」标题行右侧 ☑ 使用独立数据库（默认勾选）<br>
+  取消勾选 → 模板即库 / 不存图 / 表题改为数据表已存数据<br>
+  详见 nicegui_ui_plan.md §2.2、§3.4
 </div>
 
 </body>

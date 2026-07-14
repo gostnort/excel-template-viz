@@ -59,12 +59,28 @@ def _trash_id_set(session) -> set[str]:
 
 
 def _id_in_database(session, row_id: str) -> bool:
-    """True when primary ID already exists in SQLite."""
-    if not session.db or not row_id:
+    """True when primary ID already exists in SQLite or Template/Session."""
+    if not row_id:
         return False
+        
     try:
         rid = _normalize_id(row_id)
     except ValueError:
+        rid = row_id
+        
+    use_db = getattr(session, 'use_independent_db', True)
+    
+    if not use_db:
+        if getattr(session, 't2db', None) and session.t2db.fetch_row_by_id(rid):
+            return True
+        pk_label = next((rule.Input_label for rule in getattr(session.cfg, 'field_rules', []) if getattr(rule, 'id', False)), None)
+        if pk_label:
+            for row in getattr(session, 'session_rows', []):
+                if str(row.get(pk_label, '')).strip() == str(row_id).strip():
+                    return True
+        return False
+        
+    if not session.db:
         return False
     return session.db.query_by_id(rid) is not None
 
@@ -228,7 +244,7 @@ def render_google_tab():
                 ).props('accept=".json" no-thumbnails auto-hide-upload-progress').style(
                     'position:fixed;left:-9999px;width:1px;height:1px;opacity:0;overflow:hidden'
                 )
-                with ui.element('div').classes('row'):
+                with ui.element('div').classes('form-row'):
                     ui.label('选择授权文件').classes('btn google').on(
                         'click',
                         lambda: upload.run_method('pickFiles'),
@@ -329,7 +345,10 @@ def render_google_tab():
                             if not ids:
                                 ui.notify('请先勾选要导入的行', type='warning')
                                 return
-                            if not session.ui_provider:
+                                
+                            use_db = getattr(session, 'use_independent_db', True)
+                            
+                            if use_db and not session.ui_provider:
                                 ui.notify('数据库未就绪', type='negative')
                                 return
                             try:
@@ -337,7 +356,8 @@ def render_google_tab():
                                 rows = session.google_op.build_import_rows(ids)
                                 for incoming in rows:
                                     merged = {**defaults, **incoming}
-                                    session.ui_provider.persist_fields(merged)
+                                    if use_db:
+                                        session.ui_provider.persist_fields(merged)
                                     session.session_rows.append(dict(merged))
                                 if session.template_id:
                                     history = load_trash_history(session.template_id)
@@ -345,6 +365,13 @@ def render_google_tab():
                                     save_trash_history(history)
                                 ui.notify(f'已导入 {len(rows)} 行', type='positive')
                                 session.google_selected_ids = set()
+                                
+                                # switch to input tab
+                                from nicegui import app
+                                if hasattr(app.storage, 'user'):
+                                    app.storage.user['active_tab'] = '输入'
+                                ui.run_javascript("Array.from(document.querySelectorAll('.tabs .tab')).find(el => el.textContent === '输入')?.click();")
+                                
                                 _refresh_input_tab()
                                 render_google_tab.refresh()
                             except Exception as exc:

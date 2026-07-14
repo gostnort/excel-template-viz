@@ -15,24 +15,75 @@
       height: 100vh;
       overflow: hidden;
     }
-    .shell { display: flex; height: 100vh; border: 2px solid #000; }
-    /* 左侧模板侧边栏 */
-    .sidebar {
-      width: 200px; min-width: 120px; max-width: 400px;
-      border-right: 1px solid #000;
-      display: flex; flex-direction: column; flex-shrink: 0;
+    .shell { display: flex; flex-direction: column; height: 100vh; border: 2px solid #000; }
+    /* 顶栏：左（已选模板 + 折叠）与右（Tab）同一行 */
+    .shell-top {
+      display: flex; flex-shrink: 0;
+      border-bottom: 2px solid #000;
+      min-height: 40px;
     }
     .sidebar-header {
-      padding: 10px 12px; font-weight: bold;
-      border-bottom: 1px solid #000; background: #f0f0f0;
+      display: flex; align-items: center; gap: 8px;
+      width: var(--sidebar-width, 200px);
+      min-width: var(--sidebar-width, 200px);
+      max-width: var(--sidebar-width, 200px);
+      padding: 0 8px 0 10px;
+      font-weight: bold;
+      border-right: 1px solid #000;
+      background: #f0f0f0;
+      flex-shrink: 0;
+      overflow: hidden;
     }
-    .template-item { padding: 10px 12px; border-bottom: 1px solid #ccc; }
+    .shell.is-sidebar-collapsed .sidebar-header {
+      width: auto;
+      min-width: 8rem;
+      max-width: none;
+    }
+    .sidebar-fold-btn {
+      width: 24px; height: 24px; flex-shrink: 0;
+      margin-left: auto;
+      border: none; background: transparent; padding: 0;
+      color: #000; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .sidebar-fold-btn:hover { background: #e0e0e0; border-radius: 3px; }
+    .sidebar-fold-btn:active { background: #d0d0d0; }
+    .fold-chevron {
+      width: 18px; height: 18px;
+      display: block;
+      transition: transform 0.15s ease;
+    }
+    /* 侧栏展开：<< 向左；折叠后翻转 >> 向右 */
+    .sidebar-fold-btn[aria-expanded="false"] .fold-chevron {
+      transform: scaleX(-1);
+    }
+    .selected-template-name {
+      flex: 1; min-width: 0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .shell-body { display: flex; flex: 1; min-height: 0; }
+    /* 左侧模板列表（顶栏已移出） */
+    .sidebar {
+      width: var(--sidebar-width, 200px);
+      min-width: var(--sidebar-width, 200px);
+      max-width: var(--sidebar-width, 200px);
+      border-right: 1px solid #000;
+      display: flex; flex-direction: column; flex-shrink: 0;
+      overflow: auto;
+      transition: width 0.15s ease, min-width 0.15s ease, max-width 0.15s ease;
+    }
+    .shell.is-sidebar-collapsed .sidebar {
+      display: none;
+      border-right: none;
+    }
+    .shell.is-sidebar-collapsed .resize-rail { display: none; }
+    .template-item { padding: 10px 12px; border-bottom: 1px solid #ccc; cursor: pointer; }
     .template-item.active { font-weight: bold; background: #e8e8e8; }
     .template-item.muted { color: #555; }
-    /* 拖拽 / 折叠条（平时窄，悬停可见） */
+    /* 拖拽 / 折叠条：仅 shell-body 内，不贯穿顶栏 */
     .resize-rail {
       width: 6px; flex-shrink: 0; position: relative; cursor: col-resize;
-      background: transparent;
+      background: transparent; align-self: stretch;
     }
     .resize-rail::after {
       content: ""; position: absolute; top: 0; bottom: 0; left: 50%;
@@ -45,10 +96,16 @@
       font-size: 10px; writing-mode: vertical-rl; opacity: 0; pointer-events: none;
     }
     .resize-rail:hover .fold-hint { opacity: 0.6; }
-    /* 右侧主区 */
+    /* 右侧主区（Tab 导航已并入顶栏） */
     .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-    .tabs { display: flex; border-bottom: 2px solid #000; flex-shrink: 0; }
-    .tab { padding: 10px 24px; border-right: 1px solid #000; font-weight: bold; }
+    .tabs {
+      display: flex; flex: 1; min-width: 0;
+      border-bottom: none; background: #f0f0f0;
+    }
+    .tab {
+      padding: 10px 24px; border-right: 1px solid #000;
+      font-weight: bold; cursor: pointer;
+    }
     .tab.active { background: #eee; }
     .tab-body { flex: 1; overflow: auto; padding: 16px 20px; }
     /* 幽灵输入框 */
@@ -58,29 +115,38 @@
       min-height: 36px;
     }
     .ghost-note { font-size: 11px; color: #888; margin: 0 0 16px 4px; }
-    /* 动态字段：弹性多列容器（默认 3 列）；每格内标签在左、输入在右 */
+    /* 动态字段：桌面 auto-fill ~400px；手机竖屏每行一个 */
     .field-grid {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
       gap: 12px 20px;
       width: 100%;
       max-width: 100%;
+    }
+    @media (max-width: 639px) {
+      .field-grid { grid-template-columns: 1fr; }
     }
     .field-cell {
       display: grid;
       grid-template-columns: 100px minmax(0, 1fr);
       gap: 8px;
-      align-items: center;
+      align-items: start;
       min-width: 0;
     }
-    .field-label { text-align: right; white-space: nowrap; }
+    .field-label { text-align: right; white-space: nowrap; padding-top: 8px; }
     .field-label.primary::after { content: " ★主键"; font-size: 11px; color: #555; }
     .input-box {
       border: 1px solid #000; padding: 6px 8px; min-height: 32px;
-      min-width: 0; width: 100%;
+      min-width: 0; width: 100%; font: inherit;
+      overflow-x: auto; overflow-y: hidden;
+      white-space: pre-wrap; word-break: break-word;
+      resize: none; field-sizing: content;
     }
-    .field-grid-hint {
-      font-size: 11px; color: #666; margin: 0 0 10px 2px;
+    .input-box.has-photo::after {
+      content: "📷"; float: right; font-size: 11px; opacity: 0.7;
+    }
+    .field-menu-hint {
+      font-size: 11px; color: #666; margin: 4px 0 10px 2px;
     }
     /* 本次输入列表 */
     .session-list { margin-top: 18px; }
@@ -121,65 +187,80 @@
 </head>
 <body>
 
-<div class="shell">
-  <!-- 左侧模板侧边栏 -->
-  <aside class="sidebar">
-    <div class="sidebar-header">模板</div>
-    <div class="template-item active">销售模板</div>
-    <div class="template-item muted">订单模板</div>
-    <div class="template-item muted">月报模板</div>
-    <div class="template-item muted">…</div>
-  </aside>
+<div class="shell" id="app-shell" style="--sidebar-width: 200px;">
 
-  <!-- 拖拽 / 折叠条 -->
-  <div class="resize-rail" title="悬停拖拽调宽；单击折叠（宽度记忆）">
-    <span class="fold-hint">折叠</span>
-  </div>
-
-  <!-- 右侧 Tab 区 -->
-  <main class="main">
+  <!-- 顶栏：已选模板 + 折叠按钮 | Tab 导航（同一行） -->
+  <header class="shell-top">
+    <div class="sidebar-header">
+      <span class="selected-template-name" id="selected-template-name" title="销售模板">销售模板</span>
+      <button type="button" class="sidebar-fold-btn" id="sidebar-fold-btn"
+              title="折叠左侧模板栏" aria-label="折叠左侧模板栏" aria-expanded="true">
+        <svg class="fold-chevron" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M14 5 L8 12 L14 19" fill="none" stroke="currentColor" stroke-width="2.2"
+                stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M19 5 L13 12 L19 19" fill="none" stroke="currentColor" stroke-width="2.2"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
     <nav class="tabs">
       <div class="tab active">输入</div>
       <div class="tab">输入配置</div>
       <div class="tab">存储配置</div>
       <div class="tab">Google 连接</div>
     </nav>
+  </header>
 
-    <div class="tab-body">
+  <div class="shell-body">
+    <!-- 左侧模板列表 -->
+    <aside class="sidebar" id="sidebar">
+      <div class="template-item active" data-name="销售模板">销售模板</div>
+      <div class="template-item muted" data-name="订单模板">订单模板</div>
+      <div class="template-item muted" data-name="月报模板">月报模板</div>
+      <div class="template-item muted" data-name="…">…</div>
+    </aside>
+
+    <!-- 拖拽 / 折叠条（仅主体区，不贯穿顶栏） -->
+    <div class="resize-rail" id="resize-rail" title="拖拽调宽（20–400px）；运行时由 ui.splitter separator 实现">
+    </div>
+
+    <!-- 右侧工作区 -->
+    <main class="main">
+      <div class="tab-body">
       <!-- 幽灵输入框 -->
       <div class="ghost-input">粘贴整行数据…</div>
       <div class="ghost-note">隐藏样式输入框：切换焦点后按分隔符拆分，自动填入下方各项</div>
 
-      <!-- 动态字段：默认 3 列弹性网格，宽屏有效利用横向空间 -->
-      <p class="field-grid-hint">字段区使用 <code>.field-grid</code>（CSS Grid，默认 3 列）；每项 <code>.field-cell</code> 内标签左、输入右。窄屏可降为 2 列 / 1 列。</p>
+      <!-- 动态字段：桌面 auto-fill min 400px；手机 1 列；右键/长按 → 拍照|OCR -->
+      <p class="field-menu-hint">桌面：输入框右键 →「拍照」「OCR」；手机：每行右侧 ··· 按钮（勿用 textarea 双击/长按）。多行自动增高，过长横向滚动。</p>
       <div class="field-grid">
         <div class="field-cell">
           <span class="field-label primary">ID#</span>
-          <div class="input-box">8129</div>
+          <textarea class="input-box" rows="1">8129</textarea>
         </div>
         <div class="field-cell">
           <span class="field-label">姓名</span>
-          <div class="input-box">Clark Kent</div>
+          <textarea class="input-box" rows="1">Clark Kent</textarea>
         </div>
         <div class="field-cell">
           <span class="field-label">报告日期</span>
-          <div class="input-box">1978/02/29</div>
+          <textarea class="input-box" rows="1">1978/02/29</textarea>
         </div>
         <div class="field-cell">
           <span class="field-label">近期问题</span>
-          <div class="input-box">recreate himself…</div>
+          <textarea class="input-box" rows="2">recreate himself…</textarea>
         </div>
         <div class="field-cell">
           <span class="field-label">处理意见</span>
-          <div class="input-box"></div>
+          <textarea class="input-box" rows="1"></textarea>
         </div>
         <div class="field-cell">
           <span class="field-label">生效日期</span>
-          <div class="input-box"></div>
+          <textarea class="input-box" rows="1"></textarea>
         </div>
         <div class="field-cell">
           <span class="field-label">签字</span>
-          <div class="input-box"></div>
+          <textarea class="input-box has-photo" rows="1"></textarea>
         </div>
       </div>
       <div class="modal-hint">
@@ -229,14 +310,105 @@
       </div>
     </div>
   </main>
+  </div>
 </div>
+
+<script>
+(function () {
+  var SIDEBAR_MIN = 20;
+  var SIDEBAR_MAX = 400;
+  var shell = document.getElementById("app-shell");
+  var sidebar = document.getElementById("sidebar");
+  var foldBtn = document.getElementById("sidebar-fold-btn");
+  var selectedName = document.getElementById("selected-template-name");
+  var resizeRail = document.getElementById("resize-rail");
+  var savedWidth = "200px";
+  var collapsed = false;
+
+  function clampWidth(px) {
+    return Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, px));
+  }
+
+  function normalizeSavedWidth() {
+    var n = parseInt(savedWidth, 10);
+    if (isNaN(n)) { n = 200; }
+    n = clampWidth(n);
+    savedWidth = n + "px";
+    return n;
+  }
+
+  function setCollapsed(next) {
+    collapsed = next;
+    shell.classList.toggle("is-sidebar-collapsed", collapsed);
+    foldBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    foldBtn.title = collapsed ? "展开左侧模板栏" : "折叠左侧模板栏";
+    foldBtn.setAttribute("aria-label", foldBtn.title);
+  }
+
+  foldBtn.addEventListener("click", function () {
+    if (!collapsed) {
+      savedWidth = shell.style.getPropertyValue("--sidebar-width") || savedWidth;
+    }
+    normalizeSavedWidth();
+    if (!collapsed) {
+      setCollapsed(true);
+      return;
+    }
+    shell.style.setProperty("--sidebar-width", savedWidth);
+    setCollapsed(false);
+  });
+
+  foldBtn.addEventListener("dblclick", function (e) {
+    e.preventDefault();
+    normalizeSavedWidth();
+    if (collapsed) {
+      shell.style.setProperty("--sidebar-width", savedWidth);
+      setCollapsed(false);
+    }
+  });
+
+  resizeRail.addEventListener("mousedown", function (e) {
+    if (e.button !== 0) { return; }
+    e.preventDefault();
+    var startX = e.clientX;
+    var startW = parseInt(shell.style.getPropertyValue("--sidebar-width"), 10) || 200;
+    if (collapsed) {
+      setCollapsed(false);
+    }
+    function onMove(ev) {
+      var w = clampWidth(startW + (ev.clientX - startX));
+      savedWidth = w + "px";
+      shell.style.setProperty("--sidebar-width", savedWidth);
+    }
+    function onUp() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+
+  sidebar.querySelectorAll(".template-item").forEach(function (item) {
+    item.addEventListener("click", function () {
+      sidebar.querySelectorAll(".template-item").forEach(function (el) {
+        el.classList.remove("active");
+        el.classList.add("muted");
+      });
+      item.classList.add("active");
+      item.classList.remove("muted");
+      var name = item.getAttribute("data-name") || item.textContent.trim();
+      selectedName.textContent = name;
+      selectedName.title = name;
+    });
+  });
+})();
+</script>
 
 <div class="legend">
   线框 · 主界面（输入）<br>
-  左：模板侧边栏（拖拽调宽 / 单击折叠 / 宽度记忆）<br>
-  中：竖向拖拽条（悬停可见）<br>
-  右：四 Tab；输入 Tab 字段区默认 3 列 <code>.field-grid</code><br>
-  详见 docs/nicegui_ui/nicegui_ui_plan.md
+  侧栏：折叠=hidden 列表（顶栏模板名保留）；**显示**可越界，**存储** clamp 20–400，默认 **250**<br>
+  字段区 auto-fill(400px) / 手机单列 / 桌面右键·手机 ··· 菜单<br>
+  规范：docs/nicegui_ui/nicegui_ui_plan.md §2.2（显示 vs 存储）
 </div>
 
 </body>
