@@ -28,6 +28,20 @@
 - OCR 算法执行本身（可由上层或插件执行后回填结果）
 - UI 组件状态管理（会话、按钮、交互节流）
 
+### 2.1) 模板即库模式（非本模块）
+
+当 UI 中 **取消勾选「使用独立数据库」**（`use_independent_db=false`）时，文本数据**不经过** `core_store`：
+
+| 能力 | 独立数据库（默认） | 模板即库 |
+|------|-------------------|----------|
+| 文本持久化 | `insert_or_update` → 后缀 SQLite | `ExcelWriter.write_back` → 模板 xlsx（见 [`excel_transform.md`](excel_transform.md) §4.6） |
+| 图片 | `save_image` / `get_latest_image` 等 | **不调用**；提交时丢弃 pending `field_images` |
+| 输入页容量满 | `input_capacity` 达上限时禁用「下一行」 | **不适用**——无「容量已满」；录入行数由 xlsx instance 自然增长 |
+| 写回定位键 | `records.id`（SQLite） | **`instance_k`**（immutable；列头排序后仍用 k 写回，见 [`excel_transform.md`](excel_transform.md) §4.6.5） |
+| DB 页「全部数据」 | `ui_provider.get_data()` | `read_instances(template_path)` |
+
+本文件 §4–§9 的 SQLite / `record_images` 契约仅在 **独立数据库** 模式下生效。模板即库的 UI 行为见 [`nicegui_ui/nicegui_ui_plan.md`](nicegui_ui/nicegui_ui_plan.md) §3.1、§3.4。
+
 ## 3) 输入输出
 
 ### 主要输入
@@ -255,6 +269,7 @@
 - 多图规则验证：同 `record_id + input_label` 在 overlay/并列模式下顺序与结果稳定。
 - 导出开关验证：`export_attach_images=off` 时无图片输出，且纯文本导出结果与历史一致。
 - 缺图/坏图容错：存在异常图片时导出流程不中断，告警信息可追踪到 `image_id`。
+- **模板即库**：确认 `use_independent_db=false` 时无 `insert_or_update` / `save_image` 调用路径。
 
 ## 10) 后续扩展
 

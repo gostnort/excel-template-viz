@@ -220,7 +220,7 @@ def render_google_tab():
         return
     conn = _session_connect(session)
     client_ready = conn.has_oauth_client()
-    with ui.element('div'):
+    with ui.element('div').classes('tab-scroll-container'):
         # 授权与连接
         with ui.element('div').classes('section'):
             ui.label('授权与连接').classes('section-title')

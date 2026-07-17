@@ -13,7 +13,7 @@ def render_toml_tab():
         ui.label('请先从左侧选择模板').classes('text-gray-500 italic p-4')
         return
 
-    with ui.element('div'):
+    with ui.element('div').classes('tab-scroll-container'):
         # 校验操作区域
         with ui.element('div').classes('section'):
             ui.label('校验与应用').classes('section-title')
@@ -88,15 +88,29 @@ def trigger_toml_save(session):
             session.writer = ExcelWriter(session.cfg, session.located)
             
             session.input_capacity = session.writer.max_instance_count(session.template_path)
-            session.template_defaults = session.writer.read_values(session.template_path, 0) if session.template_path else {}
-            session.current_instance_index = 0
-            session.draft.clear()
-            session.draft.update(session.template_defaults)
-            session.session_rows.clear()
-            session.selected_session_index = None
-            session.selected_session_indices.clear()
-            if hasattr(session, 'field_images'):
-                session.field_images.clear()
+            if session.use_independent_db:
+                session.session_rows.clear()
+                session.current_instance_index = 0
+                if hasattr(session, 'field_images'):
+                    session.field_images.clear()
+                val, mask = session.writer.read_values(session.template_path, 0) if session.template_path else ({}, {})
+                session.template_defaults = val
+                session.draft.clear()
+                session.draft.update(val)
+                session.formula_mask = mask
+            else:
+                if hasattr(session, 'field_images'):
+                    session.field_images.clear()
+                instances, masks = session.writer.read_instances(session.template_path) if session.template_path else ([], [])
+                session.session_rows = instances
+                session.session_masks = masks
+                session.current_instance_index = len(instances)
+                session.draft.clear()
+                val, mask = session.writer.read_values(session.template_path, session.current_instance_index) if session.template_path else ({}, {})
+                session.draft.update(val)
+                session.formula_mask = mask
+            session.selected_instance_k = None
+            session.selected_instance_indices.clear()
             
             ui.notify('配置保存并加载成功', type='positive')
         else:

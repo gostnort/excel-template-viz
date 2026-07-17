@@ -94,7 +94,9 @@ html, body {
   text-align: center;
 }
 .tab.active { background: #eee; }
-.tab-body { flex: 1; overflow: auto; padding: 16px 20px; }
+.tab-body { flex: 1; overflow: hidden; display: flex; flex-direction: column; padding: 0; }
+.tab-scroll-container { flex: 1; overflow-y: auto; padding: 16px 20px; box-sizing: border-box; height: 100%; }
+.tab-flex-container { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 16px 20px; box-sizing: border-box; height: 100%; }
 
 /* 幽灵输入框 */
 .ghost-input {
@@ -256,7 +258,8 @@ input.input-box:not(.q-field) {
 .session-list .title { font-weight: bold; margin-bottom: 6px; }
 table.records, table.t { border-collapse: collapse; width: 100%; }
 table.records th, table.records td, table.t th, table.t td {
-  border: 1px solid #000; padding: 4px 6px; text-align: left;
+  border: 1px solid #ccc; padding: 10px 12px; text-align: left; line-height: 1.5;
+  word-break: break-word;
 }
 table.records th, table.t th { background: #eee; }
 table.records tbody tr:hover, table.t tbody tr:hover { background: #f7f7f7; cursor: pointer; }

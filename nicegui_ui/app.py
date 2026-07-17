@@ -18,7 +18,7 @@ def index_page():
 
 if __name__ in {"__main__", "__mp_main__"}:
     ui.run(
-        host='127.0.0.1',
+        host='0.0.0.0',
         port=8738,
         title='Excel Template Viz',
         storage_secret='local-offline-secret-key-2026',  # 必须项：开启浏览器 Cookie 存储

@@ -50,8 +50,13 @@ class ForMain:
         state.current_instance_index = 0
         state.draft.clear()
         state.session_rows.clear()
-        state.selected_session_index = None
-        state.selected_session_indices.clear()
+        state.selected_instance_k = None
+        state.selected_instance_indices.clear()
+        state.sort_column = None
+        state.sort_descending = False
+        state.total_instance_count = 0
+        state.loaded_offset_k = 0
+        state.db_loaded_limit = 50
         state.exported_files = []
         state.last_export_path = None
         ForMain._clear_engines(state)
@@ -87,8 +92,31 @@ class ForMain:
             state.t2db = Template2DB(cfg)
             state.writer = ExcelWriter(cfg, state.located)
             state.input_capacity = state.writer.max_instance_count(xlsx_path)
-            state.template_defaults = state.writer.read_values(xlsx_path, 0)
-            state.draft.update(state.template_defaults)
+            # 初始化 Session 状态
+            if state.use_independent_db:
+                state.session_rows.clear()
+                state.current_instance_index = 0
+                state.field_images.clear()
+                val, mask = state.writer.read_values(xlsx_path, 0)
+                state.template_defaults = val
+                state.draft.clear()
+                state.draft.update(val)
+                state.formula_mask = mask
+            else:
+                state.field_images.clear()
+                total = state.writer.get_total_instance_count(xlsx_path)
+                state.total_instance_count = total
+                state.loaded_offset_k = max(0, total - 50)
+                instances, masks = state.writer.read_instances(xlsx_path, limit=50, reverse=True)
+                state.session_rows = instances
+                state.session_masks = masks
+                state.current_instance_index = total
+                state.draft.clear()
+                val, mask = state.writer.read_values(xlsx_path, state.current_instance_index)
+                state.draft.update(val)
+                state.formula_mask = mask
+            state.selected_instance_k = None
+            state.selected_instance_indices.clear()
             conn = ForMain._ensure_connect_google(state)
             bundle = AutoConnect(conn).run(cfg, verify_ok=bool(report.get('ok')))
             AutoConnect.apply_bundle(state, bundle)

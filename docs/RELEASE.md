@@ -14,10 +14,13 @@
 
 根目录 `VERSION` 文件与 `v0.1` 标签在该分支上维护。
 
-## 开发中（未发版）
+## 当前主线 — `main` / `add-paddle-ocr`
 
-| 分支 | 相对 0.1 的增量 |
-|------|-----------------|
-| `add-paddle-ocr` | `paddle_ocr/`、`llm_gemma4/`、OCR 菜单、安装与文档更新 |
+**分支**：`main` 与 `add-paddle-ocr` 同步（同一提交 `cc2473d` 起）。
 
-合并回 `split-logic-core` 或发 **0.2** 前，以上分支不视为稳定发布。
+**范围**（相对 0.1 的增量）：
+
+- `paddle_ocr/`、`llm_gemma4/`
+- NiceGUI OCR 菜单、安装与文档更新
+
+日常开发在 `add-paddle-ocr`；合并到 `main` 后 `main` 与之间保持一致。

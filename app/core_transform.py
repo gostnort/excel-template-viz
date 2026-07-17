@@ -327,61 +327,156 @@ class ExcelWriter:
         return offset_cell(value_row, value_col, section.move_to, section.offset * instance_k)
 
 
-    def _read_instance(self, ws: Any, instance_k: int) -> dict[str, Any]:
-        """读取第 k 组全部 located 值格，键为 Input_label。"""
+    def _read_instance(self, ws_data: Any, ws_form: Any | None, instance_k: int) -> tuple[dict[str, Any], dict[str, bool]]:
+        """读取第 k 组全部 located 值格，键为 Input_label。返回 (值字典, 公式掩码字典)"""
         values: dict[str, Any] = {}
-        for label in self.located:
-            cell = self._value_cell(label, instance_k)
-            if cell is None:
-                continue
-            values[label] = ws.cell(row=cell[0], column=cell[1]).value
-        return values
+        masks: dict[str, bool] = {}
+        try:
+            for label in self.located:
+                cell = self._value_cell(label, instance_k)
+                if cell is None:
+                    continue
+                # If out of bounds, openpyxl cell() might still work but it's safe to check.
+                if cell[0] > 1048576 or cell[1] > 16384:
+                    raise ValueError("Cell out of bounds")
+                
+                val = ws_data.cell(row=cell[0], column=cell[1]).value
+                values[label] = val
+                
+                if ws_form:
+                    form_val = ws_form.cell(row=cell[0], column=cell[1]).value
+                    masks[label] = isinstance(form_val, str) and form_val.startswith("=")
+                else:
+                    masks[label] = False
+        except ValueError:
+            # Propagate up to stop reading when we hit sheet bounds via offset_cell
+            raise
+            
+        return values, masks
 
 
-    def read_values(self, excel_path: Path, instance_k: int = 0) -> dict[str, Any]:
+    def read_values(self, excel_path: Path, instance_k: int = 0) -> tuple[dict[str, Any], dict[str, bool]]:
         """
         函数名: read_values
-        作用: 读取单个 instance 的填写值格（键为 Input_label）
+        作用: 读取单个 instance 的填写值格（键为 Input_label）及公式掩码
         输入:
             excel_path (Path) - 模板 xlsx
             instance_k (int) - 组序
         输出:
-            dict[str, Any] - {Input_label: 值}
+            tuple - (值字典, 公式掩码字典)
         """
         sheet_name = self._worksheet_name(excel_path)
-        wb = load_workbook(excel_path, read_only=True, data_only=True)
+        wb_data = load_workbook(excel_path, read_only=True, data_only=True)
+        wb_form = load_workbook(excel_path, read_only=True, data_only=False)
         try:
-            return self._read_instance(wb[sheet_name], instance_k)
+            return self._read_instance(wb_data[sheet_name], wb_form[sheet_name], instance_k)
         finally:
-            wb.close()
+            wb_data.close()
+            wb_form.close()
 
 
-    def read_instances(self, excel_path: Path, limit: int = 100) -> list[dict[str, Any]]:
+    def get_total_instance_count(self, excel_path: Path) -> int:
         """
-        函数名: read_instances
-        作用: 从 instance 0 起逐组读取值格，遇全空组停止
+        函数名: get_total_instance_count
+        作用: 使用二分查找快速找到文件中非空 instance 的总数 (O(log N))
         输入:
             excel_path (Path) - 模板 xlsx
-            limit (int) - 最大扫描组数，防止无界循环
         输出:
-            list[dict[str, Any]] - 每组一个 {Input_label: 值}
+            int - 非空 instance 数量
         """
         if not self.located:
-            return []
+            return 0
         sheet_name = self._worksheet_name(excel_path)
-        wb = load_workbook(excel_path, read_only=True, data_only=True)
+        wb_data = load_workbook(excel_path, read_only=True, data_only=True)
+        wb_form = load_workbook(excel_path, read_only=True, data_only=False)
         try:
-            ws = wb[sheet_name]
-            instances: list[dict[str, Any]] = []
-            for k in range(limit):
-                values = self._read_instance(ws, k)
-                # 全空视为区域结束
-                if all(_cell_empty(v) for v in values.values()):
-                    break
-                instances.append(values)
-            return instances
+            ws_data = wb_data[sheet_name]
+            ws_form = wb_form[sheet_name]
+            
+            def is_empty_instance(k: int) -> bool:
+                try:
+                    values, mask = self._read_instance(ws_data, ws_form, k)
+                    for label, v in values.items():
+                        if not _cell_empty(v) or mask.get(label):
+                            return False
+                    return True
+                except ValueError:
+                    return True
+            
+            # Find upper bound using max_row/max_column
+            max_r = ws_data.max_row
+            max_c = ws_data.max_column
+            offset_val = self.cfg.input_section.offset or 1
+            if self.cfg.input_section.move_to in ["down", "up"]:
+                high = max_r // offset_val + 2
+            else:
+                high = max_c // offset_val + 2
+                
+            low = 0
+            ans = 0
+            while low <= high:
+                mid = (low + high) // 2
+                if not is_empty_instance(mid):
+                    ans = mid + 1
+                    low = mid + 1
+                else:
+                    high = mid - 1
+            return ans
         finally:
-            wb.close()
+            wb_data.close()
+            wb_form.close()
+
+    def read_instances(
+        self, excel_path: Path, limit: int | None = None, offset_k: int | None = None, reverse: bool = True
+    ) -> tuple[list[dict[str, Any]], list[dict[str, bool]]]:
+        """
+        函数名: read_instances
+        作用: 读取指定范围内的 instances。若不传 limit/offset，则从底部读回所有非空行。
+        输入:
+            excel_path (Path) - 模板 xlsx
+            limit (int | None) - 读取条数
+            offset_k (int | None) - 起始 instance_k（reverse=True时表示向下的上限，为None则从最新开始）
+            reverse (bool) - 是否从大 k 倒序读取（默认倒序）
+        输出:
+            tuple - (值字典列表, 公式掩码字典列表)，值字典带有 "instance_k" 键
+        """
+        if not self.located:
+            return [], []
+            
+        total_count = self.get_total_instance_count(excel_path)
+        if total_count == 0:
+            return [], []
+            
+        sheet_name = self._worksheet_name(excel_path)
+        wb_data = load_workbook(excel_path, read_only=True, data_only=True)
+        wb_form = load_workbook(excel_path, read_only=True, data_only=False)
+        try:
+            ws_data = wb_data[sheet_name]
+            ws_form = wb_form[sheet_name]
+            instances: list[dict[str, Any]] = []
+            masks: list[dict[str, bool]] = []
+            
+            start_k = offset_k if offset_k is not None else total_count - 1
+            if start_k >= total_count:
+                start_k = total_count - 1
+                
+            if reverse:
+                k_range = range(start_k, max(-1, start_k - (limit if limit else total_count)), -1)
+            else:
+                k_range = range(start_k, min(total_count, start_k + (limit if limit else total_count)))
+                
+            for k in k_range:
+                try:
+                    values, mask = self._read_instance(ws_data, ws_form, k)
+                    values["instance_k"] = k
+                    instances.append(values)
+                    masks.append(mask)
+                except ValueError:
+                    break
+            return instances, masks
+        finally:
+            wb_data.close()
+            wb_form.close()
 
 
     def max_instance_count(self, excel_path: Path) -> int:
@@ -459,12 +554,12 @@ class ExcelWriter:
         if not self.located:
             raise ValueError("located is empty; run verify_toml first")
         sheet_name = self._worksheet_name(excel_path)
-        wb = load_workbook(excel_path)
+        wb = load_workbook(excel_path)  # data_only=False 默认保留公式
         try:
             ws = wb[sheet_name]
             # 第 i 条记录写入第 instance_k+i 组值格
             for offset_idx, record in enumerate(record_list):
-                k = instance_k + offset_idx
+                k = record.get("instance_k", instance_k + offset_idx)
                 for label in self.located:
                     if label not in record:
                         continue
@@ -475,6 +570,12 @@ class ExcelWriter:
                     cell = self._value_cell(label, k)
                     if cell is None:
                         continue
+                    
+                    # 公式格保护：即使有非空输入也不覆盖公式
+                    existing = ws.cell(row=cell[0], column=cell[1]).value
+                    if isinstance(existing, str) and existing.startswith("="):
+                        continue
+                        
                     ws.cell(row=cell[0], column=cell[1]).value = value
             output_path.parent.mkdir(parents=True, exist_ok=True)
             wb.save(output_path)
@@ -674,7 +775,7 @@ def main() -> None:
         read_payload["textbox_split"] = ui.split_by_determiner(args.textbox)
         read_payload["textbox_incoming"] = ui.record_from_textbox(args.textbox)
         # Excel 读：按 located + input_section 平移逐组读填写值格
-        excel_instances = writer.read_instances(excel_path)
+        excel_instances, excel_masks = writer.read_instances(excel_path)
         read_payload["excel_instances"] = excel_instances
         try:
             read_payload["print_areas"] = writer.get_print_areas(excel_path)

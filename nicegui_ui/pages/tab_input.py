@@ -51,6 +51,8 @@ def _open_print_preview(png_bytes: bytes, download_name: str) -> None:
 def _normalize_row_for_session(row: dict, labels: list[str]) -> dict[str, object]:
     """将 read_instances 的一行对齐到当前模板 Input_label 键。"""
     normalized: dict[str, object] = {}
+    if 'instance_k' in row:
+        normalized['instance_k'] = row['instance_k']
     for lbl in labels:
         val = row.get(lbl)
         if val is None:
@@ -67,69 +69,136 @@ def _reset_draft_after_session_change(session) -> None:
 
 
 def _clear_session_row_selection(session) -> None:
-    session.selected_session_index = None
-    session.selected_session_indices.clear()
+    session.selected_instance_k = None
+    session.selected_instance_indices.clear()
 
 
-def _load_session_row_into_draft(session, idx: int) -> None:
-    session.selected_session_index = idx
-    session.draft = session.session_rows[idx].copy()
-    session.draft.pop('_index', None)
-    session.suppress_id_search = True
-    render_dynamic_fields.refresh()
-    render_session_table.refresh()
+def _load_session_row_into_draft(session, row_k: int) -> None:
+    session.selected_instance_k = row_k
+    idx = next((i for i, r in enumerate(session.session_rows) if r.get('instance_k', i) == row_k), None)
+    if idx is not None:
+        session.draft = session.session_rows[idx].copy()
+        session.draft.pop('_index', None)
+        session.suppress_id_search = True
+        
+        # update formula_mask based on the selected row
+        if getattr(session, 'session_masks', None) and idx < len(session.session_masks):
+            session.formula_mask = session.session_masks[idx].copy()
+            
+        render_dynamic_fields.refresh()
+        render_session_table.refresh()
 
 
 @ui.refreshable
 def render_session_table(session, labels: list[str]) -> None:
     """本次已录入：HTML5 表格 + 勾选列 + 行点击载入 draft。"""
-    checked = session.selected_session_indices
-    with ui.element('table').classes('records w-full'):
-        with ui.element('thead'):
-            with ui.element('tr'):
-                with ui.element('th').classes('chkcol'):
-                    ui.label('')
-                for lbl in labels:
-                    with ui.element('th'):
-                        ui.label(lbl)
-        with ui.element('tbody'):
-            if not session.session_rows:
+    checked = session.selected_instance_indices
+    
+    def toggle_sort(session, column: str) -> None:
+        if getattr(session, 'sort_column', None) == column:
+            if getattr(session, 'sort_descending', False):
+                session.sort_column = None
+                session.sort_descending = False
+            else:
+                session.sort_descending = True
+        else:
+            session.sort_column = column
+            session.sort_descending = False
+        render_session_table.refresh()
+        
+    with ui.element('div').classes('flex-1 overflow-y-auto w-full mt-2'):
+        with ui.element('table').classes('records w-full'):
+            with ui.element('thead').classes('sticky top-0 bg-gray-200 z-10 shadow-sm'):
                 with ui.element('tr'):
-                    with ui.element('td').props(f'colspan={len(labels) + 1}'):
-                        ui.label('（尚无录入行）').classes('text-gray-500')
-            for idx, row in enumerate(session.session_rows):
-                row_class = 'selected' if session.selected_session_index == idx else ''
-                with ui.element('tr').classes(row_class):
-                    with ui.element('td').classes('chkcol'):
-                        def on_toggle(event, row_idx: int = idx) -> None:
-                            if event.value:
-                                session.selected_session_indices.add(row_idx)
-                            else:
-                                session.selected_session_indices.discard(row_idx)
-                            render_session_table.refresh()
-                        ui.checkbox(
-                            value=idx in checked,
-                            on_change=on_toggle,
-                        ).props('dense')
+                    with ui.element('th').classes('chkcol'):
+                        ui.label('')
+                    if not session.use_independent_db:
+                        with ui.element('th'):
+                            move_dir = getattr(session.cfg.input_section, 'move_to', 'down')
+                            header_lbl = '列号' if move_dir in ['left', 'right'] else '行号'
+                            ui.label(header_lbl)
                     for lbl in labels:
-                        with ui.element('td').on(
-                            'click',
-                            lambda _e=None, row_idx=idx: _load_session_row_into_draft(session, row_idx),
-                        ):
-                            ui.label(str(row.get(lbl, '') or ''))
+                        with ui.element('th').classes('cursor-pointer select-none').on('click', lambda _e=None, l=lbl: toggle_sort(session, l)):
+                            suffix = " ▲" if getattr(session, 'sort_column', None) == lbl and not getattr(session, 'sort_descending', False) else (" ▼" if getattr(session, 'sort_column', None) == lbl else "")
+                            ui.label(lbl + suffix)
+            with ui.element('tbody'):
+                if not session.session_rows:
+                    with ui.element('tr'):
+                        with ui.element('td').props(f'colspan={len(labels) + 2 if not session.use_independent_db else len(labels) + 1}'):
+                            ui.label('（尚无录入行）').classes('text-gray-500')
+                            
+                displayed_rows = list(enumerate(session.session_rows))
+                if getattr(session, 'sort_column', None):
+                    col = session.sort_column
+                    displayed_rows.sort(
+                        key=lambda item: str(item[1].get(col, '') or ''),
+                        reverse=getattr(session, 'sort_descending', False)
+                    )
+                    
+                for idx, row in displayed_rows:
+                    row_k = row.get('instance_k', idx)
+                    row_class = 'selected' if session.selected_instance_k == row_k else ''
+                    with ui.element('tr').classes(row_class):
+                        with ui.element('td').classes('chkcol'):
+                            def on_toggle(event, r_k: int = row_k) -> None:
+                                if event.value:
+                                    session.selected_instance_indices.add(r_k)
+                                else:
+                                    session.selected_instance_indices.discard(r_k)
+                                render_session_table.refresh()
+                            ui.checkbox(
+                                value=row_k in checked,
+                                on_change=on_toggle,
+                            ).props('dense')
+                        if not session.use_independent_db:
+                            with ui.element('td').on('click', lambda _e=None, r_k=row_k: _load_session_row_into_draft(session, r_k)):
+                                ui.label(str(row_k))
+                        for lbl in labels:
+                            with ui.element('td').on(
+                                'click',
+                                lambda _e=None, r_k=row_k: _load_session_row_into_draft(session, r_k),
+                            ):
+                                val_str = str(row.get(lbl, '') or '')
+                                if val_str.endswith(' 00:00:00'):
+                                    val_str = val_str.replace(' 00:00:00', '')
+                                ui.label(val_str).classes('whitespace-pre-wrap')
+                                
+    
+    if not session.use_independent_db and getattr(session, 'loaded_offset_k', 0) > 0:
+        def load_next_batch():
+            offset_k = max(0, session.loaded_offset_k - 50)
+            limit = session.loaded_offset_k - offset_k
+            session.loaded_offset_k = offset_k
+            instances, masks = session.writer.read_instances(
+                session.template_path, limit=limit, offset_k=offset_k + limit - 1, reverse=True
+            )
+            session.session_rows.extend(instances)
+            session.session_masks.extend(masks)
+            render_session_table.refresh()
+            
+        with ui.row().classes('justify-center w-full my-2'):
+            ui.button(f'加载更多 (剩余 {session.loaded_offset_k} 行)', on_click=load_next_batch).props('flat dense')
 
 
 def handle_delete_checked_session_rows(session) -> None:
     """删除勾选的 session_rows 行（含空行/部分填写行）；仅内存列表，不写 DB。"""
-    indices = sorted(session.selected_session_indices, reverse=True)
-    if not indices:
+    keys = list(session.selected_instance_indices)
+    if not keys:
         ui.notify('请先勾选要删除的行', type='warning')
         return
     deleted = 0
-    for idx in indices:
-        if 0 <= idx < len(session.session_rows):
-            session.session_rows.pop(idx)
-            deleted += 1
+    # map keys back to indices to pop
+    indices_to_delete = []
+    for idx, row in enumerate(session.session_rows):
+        if row.get('instance_k', idx) in keys:
+            indices_to_delete.append(idx)
+            
+    for idx in sorted(indices_to_delete, reverse=True):
+        session.session_rows.pop(idx)
+        if getattr(session, 'session_masks', None) and idx < len(session.session_masks):
+            session.session_masks.pop(idx)
+        deleted += 1
+        
     _clear_session_row_selection(session)
     session.current_instance_index = len(session.session_rows)
     _reset_draft_after_session_change(session)
@@ -137,7 +206,7 @@ def handle_delete_checked_session_rows(session) -> None:
     ui.notify(f'已删除 {deleted} 行', type='positive')
 
 
-def _apply_loaded_rows(session, rows: list[dict], replace: bool) -> int:
+def _apply_loaded_rows(session, rows: list[dict], masks: list[dict], replace: bool) -> int:
     """
     将装载的行写入 session_rows；返回实际写入行数。
     replace=True 替换列表，False 追加；总量不超过 input_capacity。
@@ -146,13 +215,17 @@ def _apply_loaded_rows(session, rows: list[dict], replace: bool) -> int:
     cleaned = [_normalize_row_for_session(row, labels) for row in rows]
     if replace:
         allowed = cleaned[:session.input_capacity]
+        allowed_masks = masks[:session.input_capacity]
         session.session_rows = allowed
+        session.session_masks = allowed_masks
     else:
         remaining = max(0, session.input_capacity - len(session.session_rows))
         session.session_rows.extend(cleaned[:remaining])
+        if hasattr(session, 'session_masks'):
+            session.session_masks.extend(masks[:remaining])
         allowed = cleaned[:remaining]
-    session.selected_session_index = None
-    session.selected_session_indices.clear()
+    session.selected_instance_k = None
+    session.selected_instance_indices.clear()
     session.current_instance_index = len(session.session_rows)
     _reset_draft_after_session_change(session)
     return len(allowed)
@@ -193,7 +266,7 @@ def open_load_file_dialog(session) -> None:
                     ui.notify('文件不存在', type='negative')
                     return
                 try:
-                    rows = session.writer.read_instances(path)
+                    rows, masks = session.writer.read_instances(path)
                 except Exception as exc:
                     ui.notify(f'读取失败: {exc}', type='negative')
                     return
@@ -201,7 +274,7 @@ def open_load_file_dialog(session) -> None:
                     ui.notify('文件中未读到有效数据行', type='warning')
                     return
                 replace = merge_mode is None or merge_mode.value == 'replace'
-                loaded_count = _apply_loaded_rows(session, rows, replace=replace)
+                loaded_count = _apply_loaded_rows(session, rows, masks, replace=replace)
                 dialog.close()
                 render_input_tab.refresh()
                 if loaded_count < len(rows):
@@ -223,6 +296,8 @@ def handle_clear_session(session) -> None:
         ui.notify('列表已为空', type='info')
         return
     session.session_rows.clear()
+    if hasattr(session, 'session_masks'):
+        session.session_masks.clear()
     _clear_session_row_selection(session)
     session.current_instance_index = 0
     _reset_draft_after_session_change(session)
@@ -293,7 +368,7 @@ def render_input_tab():
         
     labels = ui_provider.get_labels()
     
-    with ui.element('div'):
+    with ui.element('div').classes('tab-flex-container'):
         # 幽灵输入框
         def on_ghost_blur(event) -> None:
             raw = event.sender.value or ''
@@ -316,15 +391,19 @@ def render_input_tab():
                 ui.menu_item('拍照', on_click=lambda: open_camera_dialog(session, '顶部粘贴'))
                 ui.menu_item('OCR', on_click=lambda: run_ocr(session, '顶部粘贴', ghost))
         # 动态字段区（默认 3 列 field-grid）
-        with ui.element('div').classes('field-grid'):
+        with ui.element('div').classes('field-grid shrink-0'):
             render_dynamic_fields(session, labels)
         
-        # 本次已录入表格
-        with ui.element('div').classes('session-list'):
-            ui.label('本次已录入（勾选后删除；点击数据格载入上方编辑）').classes('title')
-            ui.label(f'当前 {session.current_instance_index + 1} / 容量 {session.input_capacity}（容量 = writer.max_instance_count(模板)，到达上界时不再清空输入）').classes('ghost-note')
+        # 本次已录入表格 / 模板已存数据
+        with ui.element('div').classes('session-list flex-1 flex flex-col min-h-[150px] overflow-hidden'):
+            if session.use_independent_db:
+                ui.label('本次已录入（勾选后删除；点击数据格载入上方编辑）').classes('title shrink-0')
+                ui.label(f'当前 {session.current_instance_index + 1} / 容量 {session.input_capacity}（到达容量上限时不再清空输入）').classes('ghost-note shrink-0')
+            else:
+                ui.label('模板已存数据（勾选后删除清空行；点击数据格载入上方编辑）').classes('title shrink-0')
+                ui.label(f'当前将录入至第 {session.current_instance_index + 1} 行').classes('ghost-note shrink-0')
             render_session_table(session, labels)
-            with ui.element('div').classes('list-btns'):
+            with ui.element('div').classes('list-btns shrink-0 mt-2'):
                 with ui.element('div').classes('list-btns-start'):
                     ui.label('装载文件').classes('btn excel').on('click', lambda: open_load_file_dialog(session))
                 with ui.element('div').classes('list-btns-end'):
@@ -334,10 +413,10 @@ def render_input_tab():
                         lambda: handle_delete_checked_session_rows(session),
                     )
 
-        ui.element('hr').classes('sep')
+        ui.element('hr').classes('sep shrink-0')
 
         # 另存为 / 下一行
-        with ui.element('div').classes('toolbar-row'):
+        with ui.element('div').classes('toolbar-row shrink-0'):
             save_as_cls = 'btn excel'
             next_row_cls = 'btn db'
             validation_ok = not (session.verify_report and not session.verify_report.get('ok', False))
@@ -354,10 +433,11 @@ def render_input_tab():
             if validation_ok:
                 btn_next.on('click', lambda: handle_next_row(session))
                 
-        ui.element('div').classes('w-full').style('height:1px; background:#000; margin: 10px 0;')
+        ui.element('div').classes('w-full shrink-0').style('height:1px; background:#000; margin: 10px 0;')
 
         # 打印文件 + 打印区域 + 打印（紧挨）
-        render_print_row(session)
+        with ui.element('div').classes('shrink-0'):
+            render_print_row(session)
 
 @ui.refreshable
 def render_dynamic_fields(session, labels: list[str]):
@@ -433,6 +513,8 @@ def render_dynamic_fields(session, labels: list[str]):
                     value=str(session.draft.get(lbl, '') or ''),
                     on_change=create_on_change(lbl),
                 ).classes('input-box flex-1').props('autogrow dense borderless hide-bottom-space rows="1"')
+                if getattr(session, 'formula_mask', {}).get(lbl):
+                    inp.props('readonly')
                 if is_pk:
                     inp.on('blur', create_on_blur(lbl))
                 with inp:
@@ -448,12 +530,12 @@ def render_dynamic_fields(session, labels: list[str]):
                         ui.menu_item('OCR', on_click=lambda l=lbl: run_ocr(session, l, inp))
 
 def handle_next_row(session):
-    if session.current_instance_index >= session.input_capacity:
+    use_db = getattr(session, 'use_independent_db', True)
+    
+    if use_db and session.current_instance_index >= session.input_capacity:
         ui.notify("容量已满，无法录入下一行", type='warning')
         return
         
-    use_db = getattr(session, 'use_independent_db', True)
-    
     if use_db:
         record_id = session.ui_provider.persist_fields(session.draft)
         
@@ -477,39 +559,46 @@ def handle_next_row(session):
                             ocr_text=ocr_text,
                             ocr_status=ocr_status
                         )
-                # clear saved image
                 del session.field_images[label]
+                
+        row_copy = session.draft.copy()
+        row_copy.pop('_index', None)
+        
+        if getattr(session, 'selected_instance_k', None) is not None:
+            idx = next((i for i, r in enumerate(session.session_rows) if r.get('instance_k', i) == session.selected_instance_k), None)
+            if idx is not None:
+                session.session_rows[idx] = row_copy
+            session.selected_instance_k = None
+            session.current_instance_index = len(session.session_rows)
+        else:
+            if session.current_instance_index < len(session.session_rows):
+                # When reading bottom-up, session_rows[0] is the newest.
+                # However, for independent DB, session_rows are just "what we entered this session"
+                session.session_rows.insert(0, row_copy)
+            else:
+                session.session_rows.insert(0, row_copy)
+            session.current_instance_index += 1
+            
+        session.draft.clear()
+        if getattr(session, 'template_defaults', None):
+            session.draft.update(session.template_defaults)
     else:
         if getattr(session, 'field_images', None):
-            session.field_images.clear() # Discard images if independent DB is disabled
-    
-    row_copy = session.draft.copy()
-    row_copy.pop('_index', None)
-    
-    if session.selected_session_index is not None:
-        session.session_rows[session.selected_session_index] = row_copy
-        session.selected_session_index = None
-        session.current_instance_index = len(session.session_rows)
-    else:
-        if session.current_instance_index < len(session.session_rows):
-            session.session_rows[session.current_instance_index] = row_copy
-        else:
-            session.session_rows.append(row_copy)
-        session.current_instance_index += 1
-        
-    if not use_db:
-        # Template Direct Write mode
+            session.field_images.clear()
+            
+        row_copy = session.draft.copy()
+        row_copy.pop('_index', None)
+        k = session.current_instance_index
         try:
-            session.writer.write_back(session.template_path, session.template_path, session.session_rows, instance_k=0)
+            session.writer.write_back(session.template_path, session.template_path, row_copy, instance_k=k)
+            from nicegui_ui.components.for_main import ForMain
+            ForMain.load_template(session.template_id, str(session.template_path))
             from nicegui_ui.pages.tab_db import render_db_tab
             render_db_tab.refresh()
         except Exception as e:
             ui.notify(f"写入模板失败: {str(e)}", type='negative')
+            return
             
-    session.draft.clear()
-    if getattr(session, 'template_defaults', None):
-        session.draft.update(session.template_defaults)
-    
     render_input_tab.refresh()
     ui.notify("已记录", type='positive')
 
@@ -518,13 +607,18 @@ def handle_save_as(session):
         ui.notify("没有数据可以保存", type='warning')
         return
         
+    use_db = getattr(session, 'use_independent_db', True)
+        
     rows_to_write = session.session_rows.copy()
     for r in rows_to_write:
         r.pop('_index', None)
         
-    if any(str(v).strip() for v in session.draft.values() if v is not None) and session.selected_session_index is None:
+    is_draft_active = any(str(v).strip() for v in session.draft.values() if v is not None)
+    if is_draft_active and getattr(session, 'selected_instance_k', None) is None:
         d = session.draft.copy()
         d.pop('_index', None)
+        if not use_db:
+            d['instance_k'] = session.current_instance_index
         rows_to_write.append(d)
         
     from app.core_store import _read_active_suffix_token
@@ -534,40 +628,40 @@ def handle_save_as(session):
     export_dir = ensure_exports_dir(session.template_id)
     out_path = export_dir / filename
     
-    use_db = getattr(session, 'use_independent_db', True)
-    
     try:
         if use_db:
             for row in rows_to_write:
+                # We skip persisting to DB here for draft, handle_next_row already does it,
+                # but if draft is active it wasn't persisted yet, let's persist it?
+                # Actually, in existing code it persists rows_to_write... wait, they are already persisted?
+                # The existing code did persist_fields(row). It's fine.
                 record_id = session.ui_provider.persist_fields(row)
-                
-                # Save images for the currently drafted row
                 if row == rows_to_write[-1] and getattr(session, 'field_images', None):
                     for label, img_data in list(session.field_images.items()):
                         res = session.db.save_image(
-                            cfg=session.cfg,
-                            template_id=session.template_id,
-                            record_id=record_id,
-                            input_label=label,
-                            image_bytes=img_data['bytes'],
-                            mime=img_data['mime']
+                            cfg=session.cfg, template_id=session.template_id,
+                            record_id=record_id, input_label=label,
+                            image_bytes=img_data['bytes'], mime=img_data['mime']
                         )
                         if res.get('ok'):
                             image_id = res['image_id']
-                            ocr_text = img_data.get('ocr_text')
-                            ocr_status = img_data.get('ocr_status')
+                            ocr_text, ocr_status = img_data.get('ocr_text'), img_data.get('ocr_status')
                             if ocr_text or ocr_status:
-                                session.db.update_image_ocr(
-                                    image_id=image_id,
-                                    ocr_text=ocr_text,
-                                    ocr_status=ocr_status
-                                )
+                                session.db.update_image_ocr(image_id, ocr_text, ocr_status)
                     session.field_images.clear()
         else:
             if getattr(session, 'field_images', None):
                 session.field_images.clear()
-            # In template mode, update the template file as well
-            session.writer.write_back(session.template_path, session.template_path, rows_to_write, instance_k=0)
+            # In template mode, we just write the whole dataset into the export file.
+            # Write back to template first for the draft
+            if is_draft_active and getattr(session, 'selected_instance_k', None) is None:
+                d = session.draft.copy()
+                d.pop('_index', None)
+                session.writer.write_back(session.template_path, session.template_path, d, instance_k=session.current_instance_index)
+                from nicegui_ui.components.for_main import ForMain
+                ForMain.load_template(session.template_id, str(session.template_path))
+                # Update rows_to_write from the fresh session_rows
+                rows_to_write = session.session_rows.copy()
                 
         session.writer.write_back(session.template_path, out_path, rows_to_write, instance_k=0)
         session.exported_files.append(out_path)

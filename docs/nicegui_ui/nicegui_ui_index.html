@@ -156,6 +156,12 @@
       border: 1px solid #000; padding: 4px 6px; text-align: left;
     }
     table.records th { background: #eee; }
+    table.records th.sortable { cursor: pointer; user-select: none; }
+    table.records th.sortable:hover { background: #e0e0e0; }
+    table.records th.sortable::after { content: " ⇅"; font-size: 10px; color: #666; font-weight: normal; }
+    table.records th.sortable.sort-asc::after { content: " ▲"; }
+    table.records th.sortable.sort-desc::after { content: " ▼"; }
+    table.records th.instcol { width: 36px; text-align: center; }
     table.records tbody tr:hover { background: #f7f7f7; }
     table.records tbody tr.selected { background: #e8e8e8; font-weight: bold; }
     .chkcol { width: 28px; text-align: center; }
@@ -269,14 +275,26 @@
 
       <!-- 本次输入列表（最后一个 input 下、分隔线之上） -->
       <div class="session-list">
-        <div class="title">本次已录入（HTML5 自定义表格；勾选后删除选中；点击数据格载入上方编辑）</div>
-        <table class="records">
+        <div class="title">本次已录入 / 模板已存数据（点击列头排序仅改显示；写回用 <code>instance_k</code>，不用排序后行号）</div>
+        <p class="field-menu-hint">
+          表行 = 一条 instance（<code>k</code>）；表列 = <code>Input_label</code>。
+          TOML <code>move_to=down/up</code> → instance 沿 Sheet <strong>行</strong> 叠放；
+          <code>move_to=left/right</code> → 表行对应 Sheet <strong>列</strong> 向各组填写值。
+        </p>
+        <table class="records" id="session-records-table">
           <thead>
-            <tr><th class="chkcol">☐</th><th>ID#</th><th>姓名</th><th>报告日期</th><th>…</th></tr>
+            <tr>
+              <th class="chkcol">☐</th>
+              <th class="instcol">#</th>
+              <th class="sortable" data-sort-col="2">ID#</th>
+              <th class="sortable" data-sort-col="3">姓名</th>
+              <th class="sortable" data-sort-col="4">报告日期</th>
+              <th class="sortable" data-sort-col="5">…</th>
+            </tr>
           </thead>
           <tbody>
-            <tr class="selected"><td class="chkcol">☑</td><td>8129</td><td>Clark Kent</td><td>1978/02/29</td><td>…</td></tr>
-            <tr><td class="chkcol">☐</td><td>250</td><td>狗蛋</td><td>2026/01/31</td><td>…</td></tr>
+            <tr class="selected" data-instance-k="0"><td class="chkcol">☑</td><td class="instcol">0</td><td>8129</td><td>Clark Kent</td><td>1978/02/29</td><td>…</td></tr>
+            <tr data-instance-k="1"><td class="chkcol">☐</td><td class="instcol">1</td><td>250</td><td>狗蛋</td><td>2026/01/31</td><td>…</td></tr>
           </tbody>
         </table>
         <div class="list-btns">
@@ -401,6 +419,35 @@
       selectedName.title = name;
     });
   });
+
+  /* 线框演示：列头排序仅重排 DOM；data-instance-k 不变 → 写回仍用 k */
+  var recordsTable = document.getElementById("session-records-table");
+  if (recordsTable) {
+    var sortState = { col: null, dir: 1 };
+    recordsTable.querySelectorAll("th.sortable").forEach(function (th) {
+      th.addEventListener("click", function () {
+        var col = parseInt(th.getAttribute("data-sort-col"), 10);
+        if (sortState.col === col) { sortState.dir = -sortState.dir; }
+        else { sortState.col = col; sortState.dir = 1; }
+        recordsTable.querySelectorAll("th.sortable").forEach(function (h) {
+          h.classList.remove("sort-asc", "sort-desc");
+        });
+        th.classList.add(sortState.dir === 1 ? "sort-asc" : "sort-desc");
+        var tbody = recordsTable.querySelector("tbody");
+        var rows = Array.prototype.slice.call(tbody.querySelectorAll("tr"));
+        rows.sort(function (a, b) {
+          var av = (a.children[col] && a.children[col].textContent) || "";
+          var bv = (b.children[col] && b.children[col].textContent) || "";
+          if (av === bv) {
+            return (parseInt(a.getAttribute("data-instance-k"), 10) || 0) -
+                   (parseInt(b.getAttribute("data-instance-k"), 10) || 0);
+          }
+          return av.localeCompare(bv, undefined, { numeric: true }) * sortState.dir;
+        });
+        rows.forEach(function (r) { tbody.appendChild(r); });
+      });
+    });
+  }
 })();
 </script>
 
@@ -408,7 +455,9 @@
   线框 · 主界面（输入）<br>
   侧栏：折叠=hidden 列表（顶栏模板名保留）；**显示**可越界，**存储** clamp 20–400，默认 **250**<br>
   字段区 auto-fill(400px) / 手机单列 / 桌面右键·手机 ··· 菜单<br>
-  规范：docs/nicegui_ui/nicegui_ui_plan.md §2.2（显示 vs 存储）
+  会话表：<code>instance_k</code> 列 + 列头排序（视图）；写回/载入用 <code>data-instance-k</code>，非排序行号<br>
+  <code>move_to=left/right</code> 时表行 = Sheet 列向 instance<br>
+  规范：docs/nicegui_ui/nicegui_ui_plan.md §3.1、excel_transform.md §4.6.5
 </div>
 
 </body>

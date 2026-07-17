@@ -64,8 +64,15 @@ class SessionState:
     draft: dict[str, Any] = field(default_factory=dict)
     template_defaults: dict[str, Any] = field(default_factory=dict)
     session_rows: list[dict[str, Any]] = field(default_factory=list)
-    selected_session_index: int | None = None
-    selected_session_indices: set[int] = field(default_factory=set)
+    session_masks: list[dict[str, bool]] = field(default_factory=list)
+    selected_instance_k: int | None = None
+    selected_instance_indices: set[int] = field(default_factory=set)
+    formula_mask: dict[str, bool] = field(default_factory=dict)
+    sort_column: str | None = None
+    sort_descending: bool = False
+    total_instance_count: int = 0
+    loaded_offset_k: int = 0
+    db_loaded_limit: int = 50
     suppress_id_search: bool = False
     pending_id_value: int | None = None
     exported_files: list[Path] = field(default_factory=list)
