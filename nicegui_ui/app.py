@@ -4,6 +4,24 @@ from nicegui import ui, app
 # 加载全局 CSS
 ui.add_css(Path(__file__).parent.joinpath('components', 'style.css').read_text(encoding='utf-8'), shared=True)
 
+ui.add_head_html('''
+<script>
+(function () {
+  function applyAppHeight() {
+    var h = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    document.documentElement.style.setProperty('--app-height', h + 'px');
+  }
+  applyAppHeight();
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', applyAppHeight);
+    window.visualViewport.addEventListener('scroll', applyAppHeight);
+  }
+  window.addEventListener('resize', applyAppHeight);
+  window.addEventListener('orientationchange', applyAppHeight);
+})();
+</script>
+''', shared=True)
+
 @ui.page('/')
 def index_page():
     # 利用 app.storage.browser 的唯一 ID 作为会话主键，确保即便是默认 admin 也不会跨标签页串车

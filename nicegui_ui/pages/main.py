@@ -25,6 +25,7 @@ def render_shell():
             ui.query(".shell").classes("is-sidebar-collapsed")
 
         with ui.element("div").classes("sidebar-header").props('id="sidebar-header"'):
+
             @ui.refreshable
             def render_template_name():
                 from nicegui_ui.components.general import SessionRegistry
@@ -79,6 +80,7 @@ def render_shell():
             render_panels.refresh()
 
         with ui.element("nav").classes("tabs"):
+
             @ui.refreshable
             def render_tabs():
                 for t in ["输入", "输入配置", "存储配置", "Google 连接"]:
@@ -90,6 +92,7 @@ def render_shell():
             render_tabs()
 
         with ui.element("aside").classes("sidebar").props('id="sidebar"'):
+
             @ui.refreshable
             def render_sidebar_list():
                 from app.core_registry import SortTemplates
@@ -105,11 +108,7 @@ def render_shell():
                     if not t_id:
                         continue
                     is_active = session.template_id == t_id
-                    cls = (
-                        "template-item active"
-                        if is_active
-                        else "template-item muted"
-                    )
+                    cls = "template-item active" if is_active else "template-item muted"
 
                     def on_click(e, tid=t_id):
                         from nicegui_ui.components.for_main import ForMain
@@ -136,6 +135,7 @@ def render_shell():
             render_sidebar_list()
 
         with ui.element("main").classes("main w-full h-full overflow-y-auto"):
+
             @ui.refreshable
             def render_panels():
                 with ui.element("div").classes("tab-body"):
