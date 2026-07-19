@@ -1,32 +1,36 @@
 # 支持 \t(tab) 等转义字符和其他单字符分隔符
-determiner = "\t"       
+determiner = "\t"
 work_sheet = "Input_sheet"
 print_sheet = "Print_sheet"
+use_independent_db = true
 
 # 外部数据源；路径可为本地文件、网页链接或 Google Sheet
 # 首次生成时写入空值 ""，真实路径由专用配置页写入后再落盘
-# 写入Windows路径需要使用'
 [[sources]]
 source1 = 'E:\my_github\excel-template-viz\docs\sample\执法堂业绩.xlsx'
 
-# 多区域配置（一页 3 个证书，垂直排列）
-[[sections]]
+# 输入区段（有且仅有一条）
+[[input_section]]
 input_area = "A2:G2"
-move_to = "down"      # 向下移动；支持 up, down, left, right
-offset = 1            # 向下移动一行；up/down 移动行，left/right 移动列
+move_to = "down"
+offset = 1
 
 # 字段映射：每个模板列一个 [[fields]] 表项
 [[fields]]
 Input_label = "ID#"
+value_from_label = "down"
+value_offset = 1
 field = "ID"
 source_file = "source1"
 source_sheet = "sheet1"
-index = 0             # index base 0
+index = 0
 regex = ""
 id = true
 
 [[fields]]
 Input_label = "Name"
+value_from_label = "down"
+value_offset = 1
 field = "name"
 source_file = "source1"
 source_sheet = "sheet1"
@@ -36,6 +40,8 @@ id = false
 
 [[fields]]
 Input_label = "Recent Issue"
+value_from_label = "down"
+value_offset = 1
 field = "issues"
 source_file = "source1"
 source_sheet = "sheet2"
@@ -45,6 +51,8 @@ id = false
 
 [[fields]]
 Input_label = "Report Date"
+value_from_label = "down"
+value_offset = 1
 field = "issues"
 source_file = "source1"
 source_sheet = "sheet2"
@@ -54,15 +62,19 @@ id = false
 
 [[fields]]
 Input_label = "Discipline"
+value_from_label = "down"
+value_offset = 1
 field = ""
 source_file = ""
 source_sheet = ""
-index = -1            # 无文本框列索引；无 field / source_* / regex
+index = -1
 regex = ""
 id = false
 
 [[fields]]
 Input_label = "Effective_Date"
+value_from_label = "down"
+value_offset = 1
 field = ""
 source_file = ""
 source_sheet = ""
@@ -72,6 +84,8 @@ id = false
 
 [[fields]]
 Input_label = "Sign"
+value_from_label = "down"
+value_offset = 1
 field = ""
 source_file = ""
 source_sheet = ""

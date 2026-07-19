@@ -73,6 +73,7 @@ class SessionState:
     total_instance_count: int = 0
     loaded_offset_k: int = 0
     db_loaded_limit: int = 50
+    delete_mode: bool = False
     suppress_id_search: bool = False
     pending_id_value: int | None = None
     exported_files: list[Path] = field(default_factory=list)

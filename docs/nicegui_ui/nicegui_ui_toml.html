@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>绾挎�� 路 杈撳叆閰嶇疆 toml_config</title>
+  <title>线框 · 输入配置 toml_config</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -14,87 +14,111 @@
     .shell { display: flex; flex-direction: column; height: 100vh; border: 2px solid #000; }
     .shell-top { display: flex; flex-shrink: 0; border-bottom: 2px solid #000; min-height: 40px; }
     .sidebar-header {
-      width: 200px; min-width: 200px; padding: 0 10px; font-weight: bold;
+      display: flex; align-items: center; gap: 8px;
+      flex: 0 1 auto; max-width: 40vw;
+      padding: 0 8px 0 10px; font-weight: bold;
       border-right: 1px solid #000; background: #f0f0f0;
-      display: flex; align-items: center;
     }
+    .selected-template-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .shell-body { display: flex; flex: 1; min-height: 0; }
-    .sidebar { width: 200px; border-right: 1px solid #000; flex-shrink: 0; }
+    .sidebar { width: 200px; border-right: 1px solid #000; flex-shrink: 0; overflow: auto; }
     .template-item { padding: 10px 12px; border-bottom: 1px solid #ccc; }
     .template-item.active { font-weight: bold; background: #e8e8e8; }
-    .resize-rail { width: 6px; flex-shrink: 0; }
+    .resize-rail { width: 6px; flex-shrink: 0; cursor: col-resize; }
     .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-    .tabs { display: flex; flex: 1; background: #f0f0f0; }
-    .tab { padding: 10px 24px; border-right: 1px solid #000; font-weight: bold; }
+    .tabs { display: flex; flex: 1; min-width: 0; background: #f0f0f0; }
+    .tab { padding: 10px 24px; border-right: 1px solid #000; font-weight: bold; cursor: pointer; }
     .tab.active { background: #eee; }
     .tab-body { flex: 1; overflow: auto; padding: 16px 20px; }
     .section { border: 1px solid #000; margin-bottom: 14px; }
     .section-title { border-bottom: 1px solid #000; padding: 6px 10px; font-weight: bold; background: #f5f5f5; }
     .section-body { padding: 10px; }
-    .form-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; }
+    .form-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; margin-bottom: 8px; }
     .ctrl { border: 1px solid #000; padding: 6px 8px; min-height: 32px; display: inline-flex; align-items: center; }
     .ctrl.wide { min-width: 260px; }
+    .ctrl.status-ok { background: #f0fff0; }
     .ctrl.status-warn { background: #fff8e6; color: #664; min-width: 260px; flex-direction: column; align-items: flex-start; height: auto; }
-    .btn { min-width: 110px; height: 36px; padding: 0 12px; border: 1px solid #000; background: #fff; font-weight: bold; display: inline-flex; align-items: center; justify-content: center; }
-    .toml-editor { border: 1px solid #000; min-height: 320px; padding: 4px; font-family: monospace; font-size: 12px; white-space: pre-wrap; }
-    .legend { position: fixed; bottom: 8px; right: 8px; font-size: 11px; border: 1px dashed #000; padding: 8px 10px; background: #fff; max-width: 360px; }
+    .btn { min-width: 110px; height: 36px; padding: 0 12px; border: 1px solid #000; background: #fff; font-weight: bold; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+    .btn.primary { min-height: auto; }
+    .toml-editor {
+      border: 1px solid #000; min-height: 280px; padding: 8px;
+      font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+      white-space: pre-wrap; width: 100%;
+    }
+    .hint { font-size: 11px; color: #666; margin-top: 8px; }
+    .legend { position: fixed; bottom: 8px; right: 8px; font-size: 11px; border: 1px dashed #000; padding: 8px 10px; background: #fff; max-width: 380px; }
   </style>
 </head>
 <body>
 
-<div class="shell">
+<div class="shell" id="app-shell">
   <header class="shell-top">
-    <div class="sidebar-header"><span>閿�鍞�妯℃�?/span></div>
+    <div class="sidebar-header">
+      <span class="selected-template-name" title="sample_template">sample_template</span>
+    </div>
     <nav class="tabs">
-      <div class="tab">杈撳叆</div>
-      <div class="tab active">杈撳叆閰嶇疆</div>
-      <div class="tab">瀛樺偍閰嶇疆</div>
-      <div class="tab">Google 杩炴帴</div>
+      <div class="tab">输入</div>
+      <div class="tab active">输入配置</div>
+      <div class="tab">存储配置</div>
+      <div class="tab">Google 连接</div>
     </nav>
   </header>
   <div class="shell-body">
     <aside class="sidebar">
-      <div class="template-item active">閿�鍞�妯℃�?/div>
+      <div class="template-item active">sample_template</div>
+      <div class="template-item">…</div>
     </aside>
-    <div class="resize-rail"></div>
+    <div class="resize-rail" title="运行时 = ui.splitter separator"></div>
     <main class="main">
       <div class="tab-body">
+
         <div class="section">
-          <div class="section-title">鏍￠獙涓庡簲鐢?/div>
+          <div class="section-title">校验与应用</div>
           <div class="section-body">
             <div class="form-row">
-              <div class="btn">鏍￠獙骞跺簲鐢ㄩ厤缃?/div>
-              <div class="ctrl wide status-warn">
-                <strong>閰嶇疆鏍￠獙澶辫触</strong>
-                <span style="font-size:12px">缂哄け鏍囩��: order, qty</span>
-              </div>
+              <div class="btn primary">校验并应用配置</div>
+              <div class="ctrl wide status-ok">当前配置已校验通过</div>
             </div>
+            <p class="hint">失败时显示 missing_labels / duplicate_labels / out_of_area_labels / errors；校验失败锁定输入 Tab 写入操作。</p>
           </div>
         </div>
+
         <div class="section">
-          <div class="section-title">楂樼骇锛圱OML 鍏ㄦ枃锛?/div>
+          <div class="section-title">高级（TOML 全文）</div>
           <div class="section-body">
-            <div class="toml-editor">[work_sheet]
-List
+            <div class="toml-editor">determiner = "\t"
+work_sheet = "Input_sheet"
+print_sheet = "Print_sheet"
+use_independent_db = true
+
+[[input_section]]
+input_area = "A2:G2"
+move_to = "down"
+offset = 1
 
 [[fields]]
-input_label = "ID#"
+Input_label = "ID#"
+value_from_label = "down"
+value_offset = 1
 ...</div>
+            <p class="hint">运行时：<code>ui.textarea</code> 全文编辑；保存后走 <code>trigger_toml_save</code> 重建引擎。<code>use_independent_db</code> 也可在「存储配置」勾选后由 <code>cfg.Save</code> 写入。</p>
             <div class="form-row" style="margin-top:8px">
-              <div class="btn">淇濆瓨</div>
-              <div class="btn">閲嶇疆</div>
+              <div class="btn">保存</div>
+              <div class="btn">重置</div>
             </div>
           </div>
         </div>
+
       </div>
     </main>
   </div>
 </div>
 
 <div class="legend">
-  绾挎�� 路 杈撳叆閰嶇疆 路 shell 涓?index 涓�鑷?br>
-  鏍￠獙骞跺簲鐢?+ TOML 楂樼骇锛圓I 閰嶇疆鍚戝�煎凡绉诲嚭鏈�璁″垝锛?br>
-  璇﹁�� nicegui_ui_plan.md 搂3.3
+  线框 · 输入配置 · shell 与 index 一致（ui.splitter）<br>
+  仅「校验并应用」+ TOML 高级编辑器（无 AI 向导）<br>
+  TOML 含顶层 <code>use_independent_db</code> — 见 toml_config_design.md<br>
+  规范：nicegui_ui_plan.md §3.3
 </div>
 
 </body>

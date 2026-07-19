@@ -74,6 +74,18 @@ Effective Date|2026-01-31
 
 顶层可选键 **`db_id`**：指定本地 `records` 表主键所对应的 **`Input_label`**（不是 `field` 列名）。未配置时由校验/入库逻辑按下列 id 规则自动推断或报错。
 
+顶层可选键 **`use_independent_db`**（bool，默认 **`true`**）：控制 NiceGUI「存储配置」中「使用独立数据库」的默认与落盘状态。
+
+| 值 | 含义 |
+|----|------|
+| `true`（默认） | 后缀 SQLite 库 + `core_store.save_image`；Input Tab「本次已录入」 |
+| `false` | 模板 xlsx 即数据表（`ExcelWriter.write_back` / `read_instances`）；不存图 |
+
+- 解析：`_config_from_dict` → `GetTomlValues.use_independent_db`（缺键视为 `true`）。
+- 序列化：`_dict_to_toml` / `ToDict()` / `Save()` 均写出该键。
+- UI 勾选变更：`tab_db.py` 更新 `cfg.use_independent_db` 后调用 `cfg.Save(template_id)`。
+- **与** `db_id` **无关**：仅影响 UI 存储模式，不参与 `verify_toml` 坐标校验。
+
 ### `id` 与 `source_sheet`
 
 `[[fields]].id = true` 表示该字段参与**外部数据源行查找**与**本地 records 主键**语义。规则如下：
@@ -283,6 +295,7 @@ UI **只**调用一个函数 `verify_toml()`，由 `core_toml` 完成「打开 x
 determiner = "\t"           # 纯文本粘贴的分隔符；支持 \t(tab) 等转义字符和其他单字符分隔符
 work_sheet = "Input_sheet"   # 模板中需要输入数据的表格（TOML 定位 / 读写）
 print_sheet = "Print_sheet"  # UI 打印区选择与 Windows 打印时激活的工作表（可选）
+use_independent_db = true    # 是否使用独立后缀数据库（false = 模板 xlsx 即数据表）
 db_id = "ID#"               # 本地 records 主键对应的 Input_label；仅一条 id=true 时可省略；多条 id=true 时必填
 
 # 外部数据源；路径可为本地文件、网页链接或 Google Sheet
@@ -383,7 +396,7 @@ id = false
 2. **Windows 路径**：单引号字面量，反斜杠原样保留，例如 `'c:\temp\cache\执法堂业绩.xlsx'`。
 3. **正则表达式**：含反斜杠时用字面量，例如 `'\d+/\d+/\d+'`。
 4. **已映射但无 regex**：写入空字符串 `regex = ""`。
-5. **默认配置**：包含 `determiner`、`work_sheet`（若有）、`print_sheet`（可选）、`[[input_section]]`（**一条**）、`[[sources]]` 与 `[[fields]]` 骨架；可选字符串键以 `""` 占位。
+5. **默认配置**：包含 `determiner`、`work_sheet`（若有）、`print_sheet`（可选）、`use_independent_db`（默认 `true`）、`[[input_section]]`（**一条**）、`[[sources]]` 与 `[[fields]]` 骨架；可选字符串键以 `""` 占位。
 6. **`index`**：纯文本粘贴时按 `determiner` 拆分后的列索引（base 0）；与 Excel 列号、与 `input_section` 平移无关。
 7. **`input_area`**：只框 instance 0 **填写值**；**不**用于找标签。找标签后推算出的值格**必须**落在此区域内。
 8. **标签与 `input_area`**：二者独立——扫描只认 `Input_label`；`input_area` 只校验值格是否入框。
@@ -403,7 +416,7 @@ tomlkit>=0.13
 | 职责 | 模块 | 说明 |
 |------|------|------|
 | 生成默认 TOML | `TomlGenerator` | TOML 不存在时；标准范式；**不**做全表扫描 |
-| 读写 TOML 文本 | `GetTomlValues` | Load / Save / ToDict |
+| 读写 TOML 文本 | `GetTomlValues` | Load / Save / ToDict（含 `db_id`、`use_independent_db`） |
 | **激活校验**（UI 调用） | `verify_toml()` | UI 只调这一个；斜向扫描 work_sheet，报告找不到 / 重复 / 值格越界的 `Input_label`，以及 `duplicate_id_sheets` / `db_id` 相关项 |
 | 解析本地主键 | `resolve_db_id()` | 由已加载配置推断生效的 `db_id`（`Input_label`）；无 id 字段时返回 `None` |
 | 坐标解析 | `offset_cell`、`_scan_worksheet_labels_diagonal` 等 | 校验与填表共用；扫描上限 **100×100** |
@@ -413,7 +426,7 @@ tomlkit>=0.13
 ### 职责划分
 
 - **生成器（`TomlGenerator`）**：TOML 不存在时，按标准范式生成骨架（第 1 行 → `[[fields]].Input_label`，`input_area` → 第 2 行值区）；默认 `value_from_label = "down"`、`value_offset = 1`；**不**扫描全表。
-- **持久化层（`GetTomlValues`）**：Load / Save / ToDict（含可选 `db_id`）；**`verify_toml()`**——回报坐标问题与 id 规则（`duplicate_id_sheets`、`db_id_required`、`invalid_db_id`、`db_id`、`id_lookup_keys`）。
+- **持久化层（`GetTomlValues`）**：Load / Save / ToDict（含可选 `db_id`、`use_independent_db`）；**`verify_toml()`**——回报坐标问题与 id 规则（`duplicate_id_sheets`、`db_id_required`、`invalid_db_id`、`db_id`、`id_lookup_keys`）。
 - **定位**：仅在 `work_sheet` 上斜向波面扫描标签；值格由 offset 推算且**必须**在 `input_area` 内；`move_to`/`offset` 处理 k≥1 值格平移。
 - **打印**：`print_sheet` 由 `ExcelWriter.get_print_areas()` 与 UI 打印行使用；不参与 `verify_toml` 坐标印证。
 - **数据源路径**：由专用 UI 写入，不由生成器提供。

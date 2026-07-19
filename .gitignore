@@ -49,3 +49,7 @@ test_*.py
 # 导出 xlsx（打开/打印用）
 exports/
 temp/
+
+# Local TLS Certificates
+certs/*.crt
+certs/*.key

@@ -24,14 +24,11 @@
     }
     .sidebar-header {
       display: flex; align-items: center; gap: 8px;
-      width: var(--sidebar-width, 200px);
-      min-width: var(--sidebar-width, 200px);
-      max-width: var(--sidebar-width, 200px);
+      flex: 0 1 auto; max-width: 40vw;
       padding: 0 8px 0 10px;
       font-weight: bold;
       border-right: 1px solid #000;
       background: #f0f0f0;
-      flex-shrink: 0;
       overflow: hidden;
     }
     .shell.is-sidebar-collapsed .sidebar-header {
@@ -62,15 +59,12 @@
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .shell-body { display: flex; flex: 1; min-height: 0; }
-    /* 左侧模板列表（顶栏已移出） */
+    /* 左侧模板列表：运行时由 ui.splitter.before 承载，宽度由 splitter 控制 */
     .sidebar {
-      width: var(--sidebar-width, 200px);
-      min-width: var(--sidebar-width, 200px);
-      max-width: var(--sidebar-width, 200px);
+      width: 100%;
       border-right: 1px solid #000;
       display: flex; flex-direction: column; flex-shrink: 0;
       overflow: auto;
-      transition: width 0.15s ease, min-width 0.15s ease, max-width 0.15s ease;
     }
     .shell.is-sidebar-collapsed .sidebar {
       display: none;
@@ -80,7 +74,7 @@
     .template-item { padding: 10px 12px; border-bottom: 1px solid #ccc; cursor: pointer; }
     .template-item.active { font-weight: bold; background: #e8e8e8; }
     .template-item.muted { color: #555; }
-    /* 拖拽 / 折叠条：仅 shell-body 内，不贯穿顶栏 */
+    /* 线框占位：运行时 = Quasar QSplitter separator（非自定义拖拽脚本） */
     .resize-rail {
       width: 6px; flex-shrink: 0; position: relative; cursor: col-resize;
       background: transparent; align-self: stretch;
@@ -175,8 +169,9 @@
     .sep { border: 0; border-top: 2px solid #000; margin: 18px 0; }
     .toolbar-row {
       display: flex; justify-content: space-between; align-items: center;
-      margin-bottom: 12px;
+      gap: 8px; flex-wrap: wrap; margin-bottom: 12px;
     }
+    .toolbar-group { display: flex; gap: 8px; align-items: center; }
     .print-row { display: flex; align-items: center; gap: 8px; }
     .btn.disabled { color: #999; border-color: #999; background: #f5f5f5; }
     .dropdown { border: 1px solid #000; padding: 8px 12px; min-width: 280px; height: 36px; display: inline-flex; align-items: center; }
@@ -273,51 +268,46 @@
         ID# 切换焦点：库有旧数据则询问来源 — 从数据源重新读取 &nbsp;|&nbsp; 从数据库读取
       </div>
 
-      <!-- 本次输入列表（最后一个 input 下、分隔线之上） -->
+      <!-- 本次输入列表（delete_mode 时才显示勾选列） -->
       <div class="session-list">
-        <div class="title">本次已录入 / 模板已存数据（点击列头排序仅改显示；写回用 <code>instance_k</code>，不用排序后行号）</div>
+        <div class="title">本次已录入 <span class="ghost-note" style="display:inline;font-weight:normal">（点击数据格载入上方编辑）</span></div>
+        <p class="ghost-note">当前 2 / 容量 N · 独立库模式</p>
         <p class="field-menu-hint">
-          表行 = 一条 instance（<code>k</code>）；表列 = <code>Input_label</code>。
-          TOML <code>move_to=down/up</code> → instance 沿 Sheet <strong>行</strong> 叠放；
-          <code>move_to=left/right</code> → 表行对应 Sheet <strong>列</strong> 向各组填写值。
+          两步删除：点「删除选中」→ 出现勾选列 →「确认删除」。排序仅改显示；写回用 <code>instance_k</code>。
         </p>
         <table class="records" id="session-records-table">
           <thead>
             <tr>
-              <th class="chkcol">☐</th>
               <th class="instcol">#</th>
-              <th class="sortable" data-sort-col="2">ID#</th>
-              <th class="sortable" data-sort-col="3">姓名</th>
-              <th class="sortable" data-sort-col="4">报告日期</th>
-              <th class="sortable" data-sort-col="5">…</th>
+              <th class="sortable">ID#</th>
+              <th class="sortable">姓名</th>
+              <th class="sortable">报告日期</th>
+              <th class="sortable">…</th>
             </tr>
           </thead>
           <tbody>
-            <tr class="selected" data-instance-k="0"><td class="chkcol">☑</td><td class="instcol">0</td><td>8129</td><td>Clark Kent</td><td>1978/02/29</td><td>…</td></tr>
-            <tr data-instance-k="1"><td class="chkcol">☐</td><td class="instcol">1</td><td>250</td><td>狗蛋</td><td>2026/01/31</td><td>…</td></tr>
+            <tr class="selected" data-instance-k="0"><td class="instcol">0</td><td>8129</td><td>Clark Kent</td><td>1978/02/29</td><td>…</td></tr>
+            <tr data-instance-k="1"><td class="instcol">1</td><td>250</td><td>狗蛋</td><td>2026/01/31</td><td>…</td></tr>
           </tbody>
         </table>
-        <div class="list-btns">
-          <div class="list-btns-start">
-            <div class="btn">装载文件</div>
-          </div>
-          <div class="list-btns-end">
-            <div class="btn">清空</div>
-            <div class="btn">删除选中</div>
-          </div>
-        </div>
+        <p class="field-menu-hint" style="margin-top:6px">delete_mode 示意：表头多一列 ☐，按钮文案为「确认删除」（红色）。</p>
       </div>
 
       <hr class="sep">
 
-      <!-- 另存为 / 下一行 -->
+      <!-- 工具栏：左 保存|刷新|删除 ；右 添加数据 -->
       <div class="toolbar-row">
-        <div class="btn">另存为</div>
-        <div class="btn">下一行</div>
-        <span class="ghost-note">当前 1 / 容量 N（容量 = writer.max_instance_count(模板)，到达上界时不再清空输入）</span>
+        <div class="toolbar-group">
+          <div class="btn excel">保存</div>
+          <div class="btn excel">刷新数据</div>
+          <div class="btn">删除选中</div>
+        </div>
+        <div class="toolbar-group">
+          <div class="btn db">添加数据</div>
+        </div>
       </div>
       <div class="ghost-note" style="margin-bottom:10px">
-        另存为直接写出：exports/模板名/模板名_A2026_20260625_143052.xlsx（不弹保存框）
+        保存：独立库 → exports/…xlsx；模板即库 → 写回 templates/…xlsx。刷新数据：模板即库时从 xlsx 重载 session_rows；独立库仅提示保留内存列表。
       </div>
 
       <!-- 打印文件 + 打印区域 + 打印（紧挨） -->
@@ -453,11 +443,10 @@
 
 <div class="legend">
   线框 · 主界面（输入）<br>
-  侧栏：折叠=hidden 列表（顶栏模板名保留）；**显示**可越界，**存储** clamp 20–400，默认 **250**<br>
-  字段区 auto-fill(400px) / 手机单列 / 桌面右键·手机 ··· 菜单<br>
-  会话表：<code>instance_k</code> 列 + 列头排序（视图）；写回/载入用 <code>data-instance-k</code>，非排序行号<br>
-  <code>move_to=left/right</code> 时表行 = Sheet 列向 instance<br>
-  规范：docs/nicegui_ui/nicegui_ui_plan.md §3.1、excel_transform.md §4.6.5
+  运行时：<code>ui.splitter</code> + CSS 折叠（非 value=0）；顶栏模板名与侧栏宽度解耦<br>
+  工具栏：保存 | 刷新数据 | 删除选中（两步） ‖ 添加数据<br>
+  独立库开关在「存储配置」Tab，持久化于模板 TOML <code>use_independent_db</code><br>
+  规范：nicegui_ui_plan.md §2.2、§3.1、§3.4；toml_config_design.md
 </div>
 
 </body>

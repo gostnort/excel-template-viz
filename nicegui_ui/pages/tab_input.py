@@ -110,8 +110,9 @@ def render_session_table(session, labels: list[str]) -> None:
         with ui.element('table').classes('records w-full'):
             with ui.element('thead').classes('sticky top-0 bg-gray-200 z-10 shadow-sm'):
                 with ui.element('tr'):
-                    with ui.element('th').classes('chkcol'):
-                        ui.label('')
+                    if getattr(session, 'delete_mode', False):
+                        with ui.element('th').classes('chkcol'):
+                            ui.label('')
                     if not session.use_independent_db:
                         with ui.element('th'):
                             move_dir = getattr(session.cfg.input_section, 'move_to', 'down')
@@ -139,17 +140,18 @@ def render_session_table(session, labels: list[str]) -> None:
                     row_k = row.get('instance_k', idx)
                     row_class = 'selected' if session.selected_instance_k == row_k else ''
                     with ui.element('tr').classes(row_class):
-                        with ui.element('td').classes('chkcol'):
-                            def on_toggle(event, r_k: int = row_k) -> None:
-                                if event.value:
-                                    session.selected_instance_indices.add(r_k)
-                                else:
-                                    session.selected_instance_indices.discard(r_k)
-                                render_session_table.refresh()
-                            ui.checkbox(
-                                value=row_k in checked,
-                                on_change=on_toggle,
-                            ).props('dense')
+                        if getattr(session, 'delete_mode', False):
+                            with ui.element('td').classes('chkcol'):
+                                def on_toggle(event, r_k: int = row_k) -> None:
+                                    if event.value:
+                                        session.selected_instance_indices.add(r_k)
+                                    else:
+                                        session.selected_instance_indices.discard(r_k)
+                                    render_session_table.refresh()
+                                ui.checkbox(
+                                    value=row_k in checked,
+                                    on_change=on_toggle,
+                                ).props('dense')
                         if not session.use_independent_db:
                             with ui.element('td').on('click', lambda _e=None, r_k=row_k: _load_session_row_into_draft(session, r_k)):
                                 ui.label(str(row_k))
@@ -182,10 +184,19 @@ def render_session_table(session, labels: list[str]) -> None:
 
 def handle_delete_checked_session_rows(session) -> None:
     """删除勾选的 session_rows 行（含空行/部分填写行）；仅内存列表，不写 DB。"""
+    if not getattr(session, 'delete_mode', False):
+        session.delete_mode = True
+        session.selected_instance_indices.clear()
+        render_input_tab.refresh()
+        return
+
     keys = list(session.selected_instance_indices)
     if not keys:
-        ui.notify('请先勾选要删除的行', type='warning')
+        ui.notify('已取消删除操作', type='info')
+        session.delete_mode = False
+        render_input_tab.refresh()
         return
+        
     deleted = 0
     # map keys back to indices to pop
     indices_to_delete = []
@@ -200,109 +211,11 @@ def handle_delete_checked_session_rows(session) -> None:
         deleted += 1
         
     _clear_session_row_selection(session)
+    session.delete_mode = False
     session.current_instance_index = len(session.session_rows)
     _reset_draft_after_session_change(session)
     render_input_tab.refresh()
     ui.notify(f'已删除 {deleted} 行', type='positive')
-
-
-def _apply_loaded_rows(session, rows: list[dict], masks: list[dict], replace: bool) -> int:
-    """
-    将装载的行写入 session_rows；返回实际写入行数。
-    replace=True 替换列表，False 追加；总量不超过 input_capacity。
-    """
-    labels = session.ui_provider.get_labels()
-    cleaned = [_normalize_row_for_session(row, labels) for row in rows]
-    if replace:
-        allowed = cleaned[:session.input_capacity]
-        allowed_masks = masks[:session.input_capacity]
-        session.session_rows = allowed
-        session.session_masks = allowed_masks
-    else:
-        remaining = max(0, session.input_capacity - len(session.session_rows))
-        session.session_rows.extend(cleaned[:remaining])
-        if hasattr(session, 'session_masks'):
-            session.session_masks.extend(masks[:remaining])
-        allowed = cleaned[:remaining]
-    session.selected_instance_k = None
-    session.selected_instance_indices.clear()
-    session.current_instance_index = len(session.session_rows)
-    _reset_draft_after_session_change(session)
-    return len(allowed)
-
-
-def open_load_file_dialog(session) -> None:
-    """弹出装载文件对话框：从 exports 选择 xlsx。"""
-    if not session.writer:
-        ui.notify('当前模板未就绪，无法装载文件', type='warning')
-        return
-    template_id = session.template_id or ''
-    export_files = list_export_files(template_id)
-    name_to_path = {p.name: p for p in export_files}
-    with ui.dialog() as dialog, ui.card().classes('gap-2'):
-        ui.label('装载文件').classes('text-lg font-bold')
-        ui.label('从已导出文件中选择').classes('ghost-note')
-        file_select = ui.select(
-            options=list(name_to_path.keys()) if name_to_path else ['（无导出文件）'],
-            value=next(iter(name_to_path), '（无导出文件）'),
-            label='导出文件',
-        ).classes('w-full').props('dense')
-        if not name_to_path:
-            file_select.props('disable')
-        merge_mode = None
-        if session.session_rows:
-            merge_mode = ui.radio(
-                {'replace': '替换当前列表', 'append': '追加到当前列表'},
-                value='replace',
-            ).props('inline')
-        with ui.row().classes('w-full gap-2'):
-            def on_confirm() -> None:
-                selected_name = file_select.value
-                if not selected_name or selected_name == '（无导出文件）':
-                    ui.notify('请选择导出文件', type='warning')
-                    return
-                path = name_to_path.get(selected_name)
-                if path is None or not path.is_file():
-                    ui.notify('文件不存在', type='negative')
-                    return
-                try:
-                    rows, masks = session.writer.read_instances(path)
-                except Exception as exc:
-                    ui.notify(f'读取失败: {exc}', type='negative')
-                    return
-                if not rows:
-                    ui.notify('文件中未读到有效数据行', type='warning')
-                    return
-                replace = merge_mode is None or merge_mode.value == 'replace'
-                loaded_count = _apply_loaded_rows(session, rows, masks, replace=replace)
-                dialog.close()
-                render_input_tab.refresh()
-                if loaded_count < len(rows):
-                    ui.notify(
-                        f'已装载 {loaded_count} 行（已达容量 {session.input_capacity}，部分行未载入）',
-                        type='warning',
-                    )
-                else:
-                    action = '替换' if replace else '追加'
-                    ui.notify(f'已{action}装载 {loaded_count} 行', type='positive')
-            ui.label('装载').classes('btn excel primary').on('click', on_confirm)
-            ui.label('取消').classes('btn').on('click', dialog.close)
-    dialog.open()
-
-
-def handle_clear_session(session) -> None:
-    """清空本次已录入列表并重置草稿。"""
-    if not session.session_rows:
-        ui.notify('列表已为空', type='info')
-        return
-    session.session_rows.clear()
-    if hasattr(session, 'session_masks'):
-        session.session_masks.clear()
-    _clear_session_row_selection(session)
-    session.current_instance_index = 0
-    _reset_draft_after_session_change(session)
-    render_input_tab.refresh()
-    ui.notify('已清空本次已录入', type='positive')
 
 
 @ui.refreshable
@@ -380,16 +293,19 @@ def render_input_tab():
                 session.suppress_id_search = True
                 event.sender.value = ''
                 render_dynamic_fields.refresh()
-                ui.notify('已从粘贴板解析数据', type='positive')
+                if raw.strip().startswith("{"):
+                    ui.notify("已从 OCR 结果解析并填入各字段", type="positive")
+                else:
+                    ui.notify("已从粘贴板解析数据", type="positive")
             except Exception as ex:
                 ui.notify(f'解析失败: {str(ex)}', type='negative')
         ghost = ui.textarea().classes('ghost-input').props('borderless autogrow hide-bottom-space rows="1"')
         ghost.on('blur', on_ghost_blur)
         with ghost:
             with ui.context_menu():
-                from nicegui_ui.components.ocr_menu import open_camera_dialog, run_ocr
-                ui.menu_item('拍照', on_click=lambda: open_camera_dialog(session, '顶部粘贴'))
-                ui.menu_item('OCR', on_click=lambda: run_ocr(session, '顶部粘贴', ghost))
+                from nicegui_ui.components.ocr_menu import open_camera_dialog, run_ocr, GHOST_OCR_LABEL
+                ui.menu_item('拍照', on_click=lambda: open_camera_dialog(session, GHOST_OCR_LABEL))
+                ui.menu_item('OCR', on_click=lambda: run_ocr(session, GHOST_OCR_LABEL, ghost))
         # 动态字段区（默认 3 列 field-grid）
         with ui.element('div').classes('field-grid shrink-0'):
             render_dynamic_fields(session, labels)
@@ -397,41 +313,56 @@ def render_input_tab():
         # 本次已录入表格 / 模板已存数据
         with ui.element('div').classes('session-list flex-1 flex flex-col min-h-[150px] overflow-hidden'):
             if session.use_independent_db:
-                ui.label('本次已录入（勾选后删除；点击数据格载入上方编辑）').classes('title shrink-0')
+                lbl_hint = "（请勾选要删除的行）" if getattr(session, 'delete_mode', False) else "（点击数据格载入上方编辑）"
+                ui.label(f'本次已录入 {lbl_hint}').classes('title shrink-0')
                 ui.label(f'当前 {session.current_instance_index + 1} / 容量 {session.input_capacity}（到达容量上限时不再清空输入）').classes('ghost-note shrink-0')
             else:
-                ui.label('模板已存数据（勾选后删除清空行；点击数据格载入上方编辑）').classes('title shrink-0')
+                lbl_hint = "（请勾选要删除的行）" if getattr(session, 'delete_mode', False) else "（点击数据格载入上方编辑）"
+                ui.label(f'模板已存数据 {lbl_hint}').classes('title shrink-0')
                 ui.label(f'当前将录入至第 {session.current_instance_index + 1} 行').classes('ghost-note shrink-0')
             render_session_table(session, labels)
-            with ui.element('div').classes('list-btns shrink-0 mt-2'):
-                with ui.element('div').classes('list-btns-start'):
-                    ui.label('装载文件').classes('btn excel').on('click', lambda: open_load_file_dialog(session))
-                with ui.element('div').classes('list-btns-end'):
-                    ui.label('清空').classes('btn').on('click', lambda: handle_clear_session(session))
+        ui.element('hr').classes('sep shrink-0')
+
+        # 保存 / 添加 / 刷新 / 删除数据
+        with ui.element('div').classes('toolbar-row shrink-0 w-full'):
+            validation_ok = not (session.verify_report and not session.verify_report.get('ok', False))
+            
+            with ui.row().classes('gap-2 items-center'):
+                # C) 原有的 保存 按钮 (最左侧)
+                save_as_cls = 'btn excel'
+                if not validation_ok:
+                    save_as_cls += ' disabled'
+                btn_save = ui.label('保存').classes(save_as_cls)
+                if validation_ok:
+                    btn_save.on('click', lambda: handle_save_as(session))
+                    
+                # A) 刷新数据按钮 (中间)
+                def on_refresh():
+                    from nicegui_ui.components.for_main import ForMain
+                    ForMain.refresh_session_from_source(session)
+                    render_input_tab.refresh()
+                ui.label('刷新数据').classes('btn excel').on('click', on_refresh)
+
+                # B) 删除选中按钮 (最右侧)
+                if getattr(session, 'delete_mode', False):
+                    ui.label('确认删除').classes('btn').style('color: red; border-color: red;').on(
+                        'click',
+                        lambda: handle_delete_checked_session_rows(session),
+                    )
+                else:
                     ui.label('删除选中').classes('btn').on(
                         'click',
                         lambda: handle_delete_checked_session_rows(session),
                     )
 
-        ui.element('hr').classes('sep shrink-0')
-
-        # 另存为 / 下一行
-        with ui.element('div').classes('toolbar-row shrink-0'):
-            save_as_cls = 'btn excel'
-            next_row_cls = 'btn db'
-            validation_ok = not (session.verify_report and not session.verify_report.get('ok', False))
-            
-            if not validation_ok:
-                save_as_cls += ' disabled'
-                next_row_cls += ' disabled'
-                
-            btn_save = ui.label('另存为').classes(save_as_cls)
-            if validation_ok:
-                btn_save.on('click', lambda: handle_save_as(session))
-                
-            btn_next = ui.label('下一行').classes(next_row_cls)
-            if validation_ok:
-                btn_next.on('click', lambda: handle_next_row(session))
+            with ui.row().classes('gap-2 items-center'):
+                # D) 原有的 添加数据 按钮
+                next_row_cls = 'btn db'
+                if not validation_ok:
+                    next_row_cls += ' disabled'
+                btn_next = ui.label('添加数据').classes(next_row_cls)
+                if validation_ok:
+                    btn_next.on('click', lambda: handle_next_row(session))
                 
         ui.element('div').classes('w-full shrink-0').style('height:1px; background:#000; margin: 10px 0;')
 
@@ -519,21 +450,21 @@ def render_dynamic_fields(session, labels: list[str]):
                     inp.on('blur', create_on_blur(lbl))
                 with inp:
                     with ui.context_menu():
-                        ui.menu_item('拍照', on_click=lambda l=lbl: open_camera_dialog(session, l))
+                        ui.menu_item('拍照', on_click=lambda l=lbl: open_camera_dialog(session, l, input_element=inp))
                         ui.menu_item('OCR', on_click=lambda l=lbl: run_ocr(session, l, inp))
                 
                 # 移动端菜单按钮
                 btn = ui.button('···').classes('mobile-menu-btn p-0 m-0 min-w-[36px] min-h-[36px]').props('flat dense')
                 with btn:
                     with ui.menu():
-                        ui.menu_item('拍照', on_click=lambda l=lbl: open_camera_dialog(session, l))
+                        ui.menu_item('拍照', on_click=lambda l=lbl: open_camera_dialog(session, l, input_element=inp))
                         ui.menu_item('OCR', on_click=lambda l=lbl: run_ocr(session, l, inp))
 
 def handle_next_row(session):
     use_db = getattr(session, 'use_independent_db', True)
     
     if use_db and session.current_instance_index >= session.input_capacity:
-        ui.notify("容量已满，无法录入下一行", type='warning')
+        ui.notify("容量已满，无法继续添加数据", type='warning')
         return
         
     if use_db:
@@ -666,7 +597,7 @@ def handle_save_as(session):
         session.writer.write_back(session.template_path, out_path, rows_to_write, instance_k=0)
         session.exported_files.append(out_path)
         session.last_export_path = out_path
-        ui.notify(f"成功另存为: {filename}", type='positive')
+        ui.notify(f"保存成功: {filename}", type='positive')
         render_input_tab.refresh()
         from nicegui_ui.pages.tab_db import render_db_tab
         render_db_tab.refresh()
@@ -678,7 +609,7 @@ def handle_print(session, selected_label, export_path: Path | None = None) -> No
     if path is None and session.last_export_path:
         path = Path(session.last_export_path)
     if path is None or not path.is_file():
-        ui.notify('请先成功执行【另存为】', type='warning')
+        ui.notify('请先成功执行【保存】', type='warning')
         return
         
     import os

@@ -17,13 +17,20 @@ def index_page():
     render_shell()
 
 if __name__ in {"__main__", "__mp_main__"}:
-    ui.run(
-        host='0.0.0.0',
-        port=8738,
-        title='Excel Template Viz',
-        storage_secret='local-offline-secret-key-2026',  # 必须项：开启浏览器 Cookie 存储
-        reload=False,                                     # 单进程；E2E 测试前避免热重载子进程缓存旧模块
-        native=False,                                    # 暂不使用 pywebview 避免多窗口渲染问题
-        language='zh-CN',
-        show=False,                                      # 防止每次热重载都弹新网页
-    )
+    from nicegui_ui.ssl_manager import ensure_tls_certs
+    cert_dir = Path(__file__).parent.parent / "certs"
+    cert_file, key_file = ensure_tls_certs(cert_dir)
+    run_kwargs = {
+        'host': '0.0.0.0',
+        'port': 8738,
+        'title': 'Excel Template Viz',
+        'storage_secret': 'local-offline-secret-key-2026',
+        'reload': False,
+        'native': False,
+        'language': 'zh-CN',
+        'show': False,
+    }
+    if cert_file and key_file:
+        run_kwargs['ssl_certfile'] = cert_file
+        run_kwargs['ssl_keyfile'] = key_file
+    ui.run(**run_kwargs)

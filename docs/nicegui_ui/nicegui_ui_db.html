@@ -135,7 +135,7 @@
               「切换」仅当 Dropdown 选中项 ≠ 当前使用库时可点。勾选「使用独立数据库」时启用后缀库与拍照存图。
             </p>
             <p class="mode-note" id="db-hint-template-store">
-              未勾选：完全弃用 SQLite；下一行/另存为直接写入模板 xlsx；不保存字段拍照；下方为「数据表已存数据」。
+              未勾选：完全弃用 SQLite；添加数据/保存直接写入模板 xlsx；不保存字段拍照；下方为「数据表已存数据」。
             </p>
           </div>
         </div>
@@ -206,10 +206,10 @@
 
 <div class="legend">
   线框 · 存储配置<br>
-  shell-top 与 index 一致（折叠 hidden；显示可越界，存储 20–400，默认 250）<br>
-  「当前数据库」标题行右侧 ☑ 使用独立数据库（默认勾选）<br>
-  取消勾选 → 模板即库 / 不存图 / 表题改为数据表已存数据<br>
-  详见 nicegui_ui_plan.md §2.2、§3.4
+  shell-top 与 index 一致（ui.splitter；折叠 hidden 列表）<br>
+  「使用独立数据库」→ 写入 <code>templates/{id}/{id}.toml</code> 的 <code>use_independent_db</code><br>
+  取消勾选 → 模板即库 / 不存图 / 表题「数据表已存数据」<br>
+  详见 nicegui_ui_plan.md §3.4、toml_config_design.md
 </div>
 
 </body>

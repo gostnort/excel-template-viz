@@ -631,6 +631,73 @@ class SecureSQLite:
         """
         self.conn.close()
 
+def _ocr_json_to_flat_kv(data: dict) -> dict[str, str]:
+    """从 PaddleOcr result dict 提取扁平 key->value（string* + table cells 交替对）"""
+    flat = {}
+    # 1. table1..N
+    for k in sorted(data.keys()):
+        if k.startswith("table") and isinstance(data[k], list):
+            for row in data[k]:
+                if isinstance(row, dict) and "cells" in row:
+                    cells = row["cells"]
+                    if not isinstance(cells, list):
+                        continue
+                    for i in range(0, len(cells) - 1, 2):
+                        key = str(cells[i]).strip()
+                        val = str(cells[i+1]).strip()
+                        if key:
+                            flat[key] = val
+
+    # 2. string1..N (会覆盖同名的 table 提取结果，优先级由字典遍历顺序决定，这里 string1..N 提取的是单行键值)
+    pattern = re.compile(r"^([^：:]+)[：:](.*)$")
+    for k in sorted(data.keys()):
+        if k.startswith("string") and isinstance(data[k], str):
+            line = data[k].strip()
+            match = pattern.fullmatch(line)
+            if match:
+                key = match.group(1).strip()
+                val = match.group(2).strip()
+                if key:
+                    flat[key] = val
+
+    return flat
+
+def _map_flat_kv_to_fields(flat: dict[str, str], field_rules: list) -> dict[str, Any]:
+    """Input_label 精确匹配 -> 规范化 -> 唯一模糊匹配；值经 _apply_regex"""
+    fields = {}
+    
+    def normalize_key(k: str) -> str:
+        return k.replace(" ", "").replace("　", "")
+        
+    for rule in field_rules:
+        target_label = rule.Input_label
+        norm_target = normalize_key(target_label)
+        
+        # 1. 精确匹配
+        if target_label in flat:
+            fields[target_label] = _apply_regex(flat[target_label], getattr(rule, "regex", ""))
+            continue
+            
+        # 2. 规范化精确匹配
+        matched = False
+        for k, v in flat.items():
+            if normalize_key(k) == norm_target:
+                fields[target_label] = _apply_regex(v, getattr(rule, "regex", ""))
+                matched = True
+                break
+        if matched:
+            continue
+            
+        # 3. 模糊匹配（仅当唯一命中）
+        candidates = []
+        for k, v in flat.items():
+            norm_k = normalize_key(k)
+            if target_label in k or k in target_label or norm_target in norm_k or norm_k in norm_target:
+                candidates.append(v)
+        if len(candidates) == 1:
+            fields[target_label] = _apply_regex(candidates[0], getattr(rule, "regex", ""))
+
+    return fields
 
 class UiProvider:
     """Gradio labels + data；数据一律来自 SecureSQLite。"""
@@ -689,15 +756,27 @@ class UiProvider:
         """
         return raw.split(self.cfg.determiner)
 
+
     def record_from_textbox(self, raw: str) -> dict[str, Any]:
         """
         函数名: record_from_textbox
-        作用: 路径 A：determiner 拆分后按 index 映射为 dict[Input_label]
+        作用: 路径 A：determiner 拆分后按 index 映射为 dict[Input_label]。若输入为合法 OCR JSON，则按字段名进行匹配填充。
         输入:
             raw (str) - textbox 纯字符串
         输出:
             dict[str, Any] - 仅含参与拆分的 Input_label 键
         """
+        stripped = raw.strip()
+        if stripped.startswith("{") and stripped.endswith("}"):
+            try:
+                data = json.loads(stripped)
+                if isinstance(data, dict) and data.get("ok") is not False:
+                    flat = _ocr_json_to_flat_kv(data)
+                    if flat:
+                        return _map_flat_kv_to_fields(flat, self.cfg.field_rules)
+            except (json.JSONDecodeError, TypeError):
+                pass
+                
         parts = self.split_by_determiner(raw)
         fields: dict[str, Any] = {}
         max_index = max(

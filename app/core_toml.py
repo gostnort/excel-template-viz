@@ -389,6 +389,7 @@ def _config_from_dict(raw: dict[str, Any]) -> GetTomlValues | None:
         return None
     determiner = str(raw.get("determiner", DEFAULT_DETERMINER)) or DEFAULT_DETERMINER
     db_id = _optional_string(raw.get("db_id"))
+    use_independent_db = _parse_bool(raw.get("use_independent_db", True))
     return GetTomlValues(
         determiner=determiner,
         sources=_parse_sources(raw.get("sources")),
@@ -397,6 +398,7 @@ def _config_from_dict(raw: dict[str, Any]) -> GetTomlValues | None:
         print_sheet=print_sheet,
         input_section=input_section,
         db_id=db_id,
+        use_independent_db=use_independent_db,
     )
 
 
@@ -420,6 +422,7 @@ def _dict_to_toml(config: dict[str, Any]) -> str:
     db_id = config.get("db_id")
     if db_id is not None and str(db_id).strip():
         doc["db_id"] = str(db_id).strip()
+    doc["use_independent_db"] = config.get("use_independent_db", True)
     # ---- [[sources]]：空别名落盘为空串 ----
     sources_aot = aot()
     for item in config.get("sources", DEFAULT_SOURCES):
@@ -932,6 +935,7 @@ class TomlGenerator:
                 "determiner": DEFAULT_DETERMINER,
                 "work_sheet": resolved_name,
                 "print_sheet": "",
+                "use_independent_db": True,
                 "sources": [dict(item) for item in DEFAULT_SOURCES],
                 "input_section": InputSection(input_area=input_area).to_dict(),
                 "fields": fields,
@@ -991,6 +995,7 @@ class GetTomlValues:
         print_sheet: str | None = None,
         input_section: InputSection | None = None,
         db_id: str | None = None,
+        use_independent_db: bool = True,
     ) -> None:
         """
         函数名: GetTomlValues.__init__
@@ -1003,6 +1008,7 @@ class GetTomlValues:
             print_sheet (str | None) - UI 打印区选择所用工作表名
             input_section (InputSection | None) - 单条区段
             db_id (str | None) - 本地 records 主键对应的 Input_label；多 id 时必填
+            use_independent_db (bool) - 是否使用独立数据库
         输出:
             无
         """
@@ -1013,6 +1019,7 @@ class GetTomlValues:
         self.print_sheet = print_sheet
         self.input_section = input_section if input_section is not None else InputSection("A2:A2")
         self.db_id = db_id
+        self.use_independent_db = use_independent_db
 
 
     def Load(self, template_id: str) -> GetTomlValues | None:
@@ -1080,6 +1087,7 @@ class GetTomlValues:
             "work_sheet": self.work_sheet,
             "print_sheet": self.print_sheet,
             "db_id": self.db_id,
+            "use_independent_db": self.use_independent_db,
             "sources": [dict(item) for item in self.sources],
             "input_section": self.input_section.to_dict(),
             "fields": [rule.to_dict() for rule in self.field_rules],

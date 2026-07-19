@@ -145,11 +145,14 @@ flowchart LR
 1. **新模板：** xlsx 放入 `templates/`，子目录放 `{stem}.toml` 与可选 `.history.json`。
 2. **Google：** 「Google 连接」Tab；URL 写在 TOML `[[sources]]`，见 `docs/connect_google.md`。
 3. **字段规则：** 「输入配置」Tab 编辑 TOML；保存后重建全部引擎。
-4. **刷新依赖图：**
+4. **MCP（Cursor Agent，推荐）：** `~/.cursor/mcp.json` 使用 `@astudioplus/codegraph-mcp`，参数 **`-w <repo>`** 即可（**不要**再写 `--mcp`，会与包内默认重复报错）；**不要**在同一进程加 `--watch`。
+5. **保存即索引（可选）：** 另开终端运行 `.\scripts\codegraph_watch.ps1`，后台 `--watch` 增量更新 `~/.codegraph`。
+6. **Agent 验收未提交改动：** `codegraph_reindex_workspace` → `codegraph_symbol_search` / `codegraph_get_ai_context`。
+7. **刷新静态 CSV/HTML 快照（旧 CLI，仅 `app/`）：**
 
 ```bash
 PYTHONUTF8=1 codegraph app --output plans/codegraph.html
 PYTHONUTF8=1 codegraph app --csv plans/codegraph.csv
 ```
 
-5. 更新本概览中的快照日期与实体计数。
+8. 更新本概览中的快照日期与实体计数。

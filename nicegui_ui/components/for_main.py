@@ -44,9 +44,6 @@ class ForMain:
         state.template_id = template_id
         state.template_path = xlsx_path
         
-        from nicegui import app
-        if hasattr(app.storage, 'user'):
-            state.use_independent_db = app.storage.user.get(f'use_independent_db_{template_id}', True)
         state.current_instance_index = 0
         state.draft.clear()
         state.session_rows.clear()
@@ -57,6 +54,7 @@ class ForMain:
         state.total_instance_count = 0
         state.loaded_offset_k = 0
         state.db_loaded_limit = 50
+        state.delete_mode = False
         state.exported_files = []
         state.last_export_path = None
         ForMain._clear_engines(state)
@@ -76,6 +74,7 @@ class ForMain:
         if cfg is None:
             state.verify_report = {'ok': False, 'errors': ['TOML 无法解析']}
             return
+        state.use_independent_db = cfg.use_independent_db
         report = verify_toml(xlsx_path, cfg)
         state.verify_report = report
         state.located = report.get('located', {}) or {}
@@ -117,6 +116,7 @@ class ForMain:
                 state.formula_mask = mask
             state.selected_instance_k = None
             state.selected_instance_indices.clear()
+            state.delete_mode = False
             conn = ForMain._ensure_connect_google(state)
             bundle = AutoConnect(conn).run(cfg, verify_ok=bool(report.get('ok')))
             AutoConnect.apply_bundle(state, bundle)
@@ -133,6 +133,41 @@ class ForMain:
         state = SessionRegistry.for_current()
         return state.cfg is not None
 
+    @staticmethod
+    def refresh_session_from_source(session) -> None:
+        """轻量级刷新：仅在模板即库模式下重载数据，避免清空独立库未导出的录入"""
+        from nicegui import ui
+        if session.use_independent_db:
+            ui.notify('独立库模式下刷新：保留当前内存列表', type='info')
+            return
+            
+        if not session.writer or not session.template_path:
+            ui.notify('当前没有可刷新的模板', type='warning')
+            return
+            
+        try:
+            instances, masks = session.writer.read_instances(
+                session.template_path, limit=session.db_loaded_limit, reverse=True
+            )
+            session.session_rows = instances
+            session.session_masks = masks
+            
+            total = session.writer.get_total_instance_count(session.template_path)
+            session.total_instance_count = total
+            session.current_instance_index = total
+            session.loaded_offset_k = max(0, total - session.db_loaded_limit)
+            
+            session.draft.clear()
+            val, mask = session.writer.read_values(session.template_path, session.current_instance_index)
+            session.draft.update(val)
+            session.formula_mask = mask
+            
+            session.delete_mode = False
+            session.selected_instance_k = None
+            session.selected_instance_indices.clear()
+            ui.notify('数据已刷新', type='positive')
+        except Exception as e:
+            ui.notify(f'刷新失败: {str(e)}', type='negative')
 
 
 class IdLookup:

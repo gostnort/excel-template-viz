@@ -508,7 +508,7 @@ if not result["ok"]:
 | **C3.1** | ~~放弃 CPU VL：`gate/hardware_probe` + `ShouldTryVl` 需 `AcceleratorAvailable` + `gate/gemma_correct`（CPU-only Gemma4 改字）+ `scripts/install_backend.py`（装 paddlepaddle-gpu）+ VL 模型按 `detect_accelerator` 去留~~ | 有加速器→VL(GPU)；无加速器→Gemma4 纠错 | ✅ 完成（**`gate/gemma_correct.py` 纠错部分已于 C3.3 前置清理中删除**，`hardware_probe`/`install_backend.py`/VL 去留逻辑仍保留） |
 | **C3.2** | **内存分级精修**：`measure_available_vram_gb` + `RefineTier()`（none/gemma_only/sequential/both_resident，4/10/14GB）+ `main.PaddleOcr` 分档分支 + sequential 卸载 Gemma4 再 VL + both_resident 异步预热 VL + `main._warm_for_tier` | 峰值 Gemma4 4.6+VL 10.8=15.4GB；<4GB 仅 fast；4-10GB Gemma4 检查；10-14GB 顺序；≥14GB 常驻 | ✅ 完成 |
 | **C3.3** | **gemma_only 视觉纠错**：`gate/gemma_vision_correct.py`（`GemmaVisionCorrect`）——派生角色 character + `Pic2Str` 整图读图（同形 JSON）+ 逐单元 `_pick_better` 择优合并（保结构）；`main.PaddleOcr` 的 `gemma_only` 分支接线；`MSG_GEMMA_VISION`。幻觉可接受（角色约束）。见 §3.2a「gemma_only 视觉纠错（C3.3）」 | 纯文本纠错验证效率≈0（已删 C3.1）；新方案整图 Pic2Str 避开单元→bbox 映射阻塞 | ✅ 完成 |
-| E | NiceGUI **一次**调用 `PaddleOcr` | C2/C3.1 + S0；**无**重新识别按钮 | 待定 |
+| **E** | **NiceGUI 一次调用 `PaddleOcr`（双模式回填）**：整表识别走 GHOST 模式回填全量 JSON 并通过 blur 分拆；单字段/覆盖录入走 FIELD 模式自动组合纯文本并回填单格。 | C2/C3.1 + S0；**无**重新识别按钮 | ✅ 完成 |
 
 ### C3.1 实施清单（本轮）
 

@@ -28,14 +28,11 @@ def render_db_tab():
             with ui.row().classes('w-full justify-between items-center section-title'):
                 ui.label('当前数据库')
                 
-                from nicegui import app
-                if session.template_id:
-                    session.use_independent_db = app.storage.user.get(f'use_independent_db_{session.template_id}', True)
-                    
                 def on_use_independent_db_change(e):
                     session.use_independent_db = e.value
                     if session.template_id:
-                        app.storage.user[f'use_independent_db_{session.template_id}'] = e.value
+                        session.cfg.use_independent_db = e.value
+                        session.cfg.Save(session.template_id)
                     from nicegui_ui.components.for_main import ForMain
                     if session.template_id and session.template_path:
                         ForMain.load_template(session.template_id, str(session.template_path))

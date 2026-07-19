@@ -1,10 +1,11 @@
 # NiceGUI UI Implementation Constraints & Specifications (Based on core*.py)
 
+> 修订 2026-07-18：`use_independent_db` 落盘至模板 TOML（`GetTomlValues.Save`）；输入 Tab 工具栏与两步删除对齐实现；线框注明 `ui.splitter` 替代自定义 rail。
 > 修订 2026-07-14：§2.2 侧栏 — **显示/存储分离** + **Quasar limits 宽松占位**（必传 `(0,1000)`，禁止省略 limits、禁止 `limits=(20,400)`）。
 
 This document is the canonical NiceGUI UI specification. It defines product behavior, wireframe layout, and `core*.py` boundaries using NiceGUI / Quasar patterns.
 
-Wireframes in `docs/nicegui_ui/nicegui_ui_*.html` are layout references only. Runtime data must come from `templates/` via `core_registry`, never from documentation samples.
+Wireframes in `docs/nicegui_ui/nicegui_ui_*.html` are **layout references** for spacing and control grouping. Runtime uses NiceGUI / Quasar primitives (`ui.splitter`, `ui.textarea`, `ui.checkbox`, HTML `<table>` via `ui.element`) — wireframe class names (e.g. `.resize-rail`, `.btn`) map to CSS + label/button patterns, not necessarily identical DOM.
 
 Gradio UI (`webui/`, `docs/gradio_ui/`) has been removed from the repository; do not reintroduce Gradio dependencies or components.
 
@@ -24,12 +25,16 @@ Unchanged from the Gradio plan. UI framework choice does not alter disk layout.
 * **Exports Directory (`exports/`):**
   * `exports/{template_id}/{template_id}_{db_suffix}_{YYYYMMDD}_{HHMMSS}.xlsx`
   * Create `exports/{template_id}/` automatically when missing.
+* **TLS Directory (`certs/`)** — runtime-generated; **gitignored** (§8.1):
+  * `certs/server.crt`, `certs/server.key` — self-signed server certificate + private key
+  * Optional `certs/san.txt` — SAN hostnames / LAN IPs for certificate generation
 
 Suggested NiceGUI code layout (sole UI package):
 
 ```text
 nicegui_ui/
-  app.py                 # ui.run(), page route, storage_secret
+  app.py                 # ui.run(), page route, storage_secret, TLS ensure hook
+  ssl_manager.py         # ensure_tls_certs(): OpenSSL 自签证书检测/生成（§8.1）
   pages/
     main.py              # splitter shell; wires sidebar + tab panels
     sidebar.py
@@ -54,20 +59,20 @@ The shell must match `docs/nicegui_ui/nicegui_ui_index.html` (2026-07 wireframe 
 +-----------------------------------------------------------------------------+
 | shell-top (one row, full width)                                             |
 |  [ 已选模板名  << ] | [ 输入 ] [ 输入配置 ] [ 存储配置 ] [ Google 连接 ]      |
-+----------+--+---------------------------------------------------------------+
-| Template |R | Tab body (scroll)                                               |
-| list     |a |                                                                 |
-| (sidebar)|i |                                                                 |
-|          |l |                                                                 |
-+----------+--+---------------------------------------------------------------+
++----------+---------------------------------------------------------------+
+| Template | Tab body (scroll)                                               |
+| list     |                                                                 |
+| (splitter|                                                                 |
+| .before) |                                                                 |
++----------+---------------------------------------------------------------+
 ```
 
 Wireframe rules (canonical):
 
-* **`shell-top`:** left `sidebar-header` (selected template display name + fold chevron `<<` / `>>`) and right `tabs` share **one horizontal bar** with the same height and bottom border. Tabs are **not** a separate row below the sidebar.
-* **`sidebar-header` collapse:** fold button sits **to the right of** the template name. On collapse: **entire template list disappears** (sidebar **hidden** via CSS); **the template name remains visible in the top bar**. Click again **pops out** the sidebar at the last persisted width (clamped). Do **not** drive collapse by setting `splitter.value` to 0.
+* **`shell-top`:** left `sidebar-header` (selected template display name + fold chevron `<<` / `>>`) and right `tabs` share **one horizontal bar** with the same height and bottom border. Tabs are **not** a separate row below the sidebar. Header width is **not** tied to `--sidebar-width` — it uses flex (`max-width: 40vw` on template name) so collapse does not hide the name.
+* **`sidebar-header` collapse:** fold button sits **to the right of** the template name. On collapse: **entire template list disappears** (`splitter.before` + separator hidden via CSS); **the template name remains visible in the top bar**. Click again **pops out** the sidebar at the last persisted width (clamped). Do **not** drive collapse by setting `splitter.value` to 0.
 * **`shell-body`:** contains `ui.splitter`. `splitter.before` holds the template list, and `splitter.after` holds the main content.
-* **Resize rail:** handled by `ui.splitter` native separator. No custom dragging scripts allowed.
+* **Resize:** handled by `ui.splitter` native separator (wireframe `.resize-rail` is a visual stand-in only). No custom dragging scripts.
 
 ### 2.0 Global Layout & Page Constraints (Zero Margins)
 * **Zero Margins & Paddings:** Body, HTML, and Quasar `.q-page` / `.q-layout` must be stripped of all default margins and paddings (`p-0 m-0`, `overflow-hidden`).
@@ -194,7 +199,8 @@ Target: phone browsers in **portrait**; same Python handlers as desktop.
 * **Tabs:** allow horizontal scroll (`overflow-x: auto`) or `dense` compact tabs so four labels remain reachable on ~360px width.
 * **Field grid:** see §3.1 — **one field per row** on mobile (`grid-cols-1`); label above or label-left with full-width input.
 * **Touch (拍照 / OCR 菜单):** see §3.1 — **do not** use double-tap or long-press on the textarea as the primary trigger (见 §3.1「移动端」).
-* **Camera:** use `<input type="file" accept="image/*" capture="environment">` hidden trigger; prefer rear camera on mobile.
+  * **Camera:** use `<input type="file" accept="image/*" capture="environment">` hidden trigger; prefer rear camera on mobile.
+  * **Secure context (HTTPS):** browsers allow `getUserMedia` on `http://localhost` / `127.0.0.1` only. Access via LAN IP (`http://192.168.x.x` with `host='0.0.0.0'`) **requires HTTPS** — see §8.1.
 * **Session table:** `ui.table` horizontal scroll inside card; checkbox column retained; **`row_key` = `instance_k`** when sortable columns enabled.
 
 Breakpoint suggestion (Tailwind): `max-width: 639px` → mobile rules; `sm:` and up → desktop field grid.
@@ -205,9 +211,9 @@ All `docs/nicegui_ui/nicegui_ui_*.html` files must stay aligned with this plan:
 
 | File | Shell | Tab active | Distinct content |
 |------|-------|------------|------------------|
-| `nicegui_ui_index.html` | full `shell-top` + fold + sidebar + rail | 输入 | `.field-grid` auto-fill 400px / mobile 1-col; `textarea.input-box`; session table |
-| `nicegui_ui_toml.html` | same | 输入配置 | 校验并应用 + TOML 高级（无 AI 向导） |
-| `nicegui_ui_db.html` | same | 存储配置 | §3.4 checkbox in「当前数据库」title row |
+| `nicegui_ui_index.html` | full `shell-top` + fold + `ui.splitter` body | 输入 | `.field-grid`; toolbar 保存/刷新/删除 ‖ 添加数据；delete_mode 勾选列 |
+| `nicegui_ui_toml.html` | same | 输入配置 | 校验并应用 + TOML 高级（含 `use_independent_db` 示例；无 AI 向导） |
+| `nicegui_ui_db.html` | same | 存储配置 | §3.4 checkbox → `cfg.Save` / TOML `use_independent_db` |
 | `nicegui_ui_connect.html` | same | Google 连接 | OAuth row + 主 ID 表 + 屏蔽所选数据 |
 
 Sub-tab wireframes omit interactive fold JS unless noted; layout classes must match index.
@@ -219,9 +225,10 @@ Sub-tab wireframes omit interactive fold JS unless noted; layout classes must ma
 ### 3.1 Tab 1: Input (`data_input` / `输入`)
 
 * **Ghost clipboard input**
-  * `ui.input(placeholder='粘贴整行数据…')` with dashed-bottom styling via `.style()` or `.classes()`.
+  * `ui.textarea` with dashed-bottom styling (`.ghost-input`; `borderless autogrow`).
   * **Event:** `on('blur', handler)` — NiceGUI supports server-side blur without hidden bridge components.
   * **Behavior:** `ui_provider.record_from_textbox(raw)` → merge into `draft` → refresh dynamic fields → set `suppress_id_search = True`. Does not write DB directly.
+  * **Context menu:** same「拍照」「OCR」as field cells (`nicegui_ui/components/ocr_menu.py`).
 
 * **Dynamic form fields**
   * **Forbidden:** hardcoded labels like `ID#` / `姓名`.
@@ -256,16 +263,16 @@ Sub-tab wireframes omit interactive fold JS unless noted; layout classes must ma
   * **Canonical mobile entry:** a small **`···` or 📷 button** at the end of each `.field-cell` row (outside the text baseline); **single tap** opens the **same** `ui.menu` / menu actions as desktop. Implement in Python (`ui.button` + `ui.menu`); no custom Vue required for v1.
   * Optional later: long-press on the **button** or label strip only (not on the textarea) if user testing asks for it.
 
-  * **One photo per input (session buffer):** each `input_label` holds **at most one pending image** in `SessionState.field_images[input_label]` (bytes + optional preview). New **拍照** or OCR capture **replaces** the previous pending image for that field. SQLite persistence on **下一行** / **另存为** only. See [`db_store.md`](../db_store.md).
+  * **One photo per input (session buffer):** each `input_label` holds **at most one pending image** in `SessionState.field_images[input_label]` (bytes + optional preview). New **拍照** or OCR capture **replaces** the previous pending image for that field. SQLite persistence on **添加数据** / **保存** only. See [`db_store.md`](../db_store.md).
 
   * **Menu items:**
 
     | Item | Behavior | Calls |
     |------|----------|-------|
     | **拍照** | Camera / file picker → cache in `field_images[input_label]` only. Optional thumbnail on field. **Do not** OCR. | On commit → `core_store.save_image(...)` when `use_independent_db` (§3.4). |
-    | **OCR** | If pending image exists → preview + crop rect (default full) → confirm. If **none** → open camera first, cache, then same flow. Fill active field from OCR text. | `paddle_ocr.main.PaddleOcr(pic_bytes, rectangle)` — `rectangle` is OpenCV `(x,y,w,h)` or `None`. Optional: `core_store.update_image_ocr` after `image_id` exists. |
+    | **OCR** | If pending image exists → preview + crop rect (default full) → confirm. If **none** → open camera first, cache, then same flow. Fill active field from OCR text. 支持双模式回填：顶部粘贴（GHOST）回填全量 JSON，各独立字段（FIELD）回填单格可读文本。 | `paddle_ocr.main.PaddleOcr(pic_bytes, rectangle)` — `rectangle` is OpenCV `(x,y,w,h)` or `None`. Optional: `core_store.update_image_ocr` after `image_id` exists. |
 
-  * **OCR mapping:** per-field menu uses field-sized ROI; merge `string1` (and `string2` if needed) into active input. Full-page table JSON is out of scope for single-field menu unless user crops to one block.
+  * **OCR mapping:** FIELD 模式下从结果 JSON 中抽取对应的 string/table 纯文本，组合填入单输入框。GHOST 模式回填整块 JSON 等待 `on_ghost_blur` 解析映射（见上方 Ghost clipboard input 段落）。
 
   * **Errors:** `ui.notify(result.get('message'))`; never HTTP codes or raw exceptions.
 
@@ -273,7 +280,7 @@ Sub-tab wireframes omit interactive fold JS unless noted; layout classes must ma
 
   * **Gate:** after `python paddle_ocr/main.py` smoke. Import `PaddleOcr` from `paddle_ocr.main` only.
 
-  * **Suggested code:** `nicegui_ui/components/input_context_menu.py` in `tab_input.py`.
+  * **Suggested code:** `nicegui_ui/components/ocr_menu.py` (`open_camera_dialog`, `run_ocr`); wired from `tab_input.py` / `tab_db.py`.
 
 * **Input Tab Layout (tab_input.py)**
   * **Flex Container**: The root container uses `.tab-flex-container` (full height, hidden overflow, flex column).
@@ -302,8 +309,8 @@ Sub-tab wireframes omit interactive fold JS unless noted; layout classes must ma
 
 * **Stable `instance_k` (required for correct write-back)**
   * Every `session_rows` entry includes **`instance_k: int`** (0-based), assigned at load/append and **immutable** for that record.
-  * `read_instances` → row `i` gets `instance_k = i`; new row on **下一行** gets `instance_k = len(existing instances)` or next free slot.
-  * **`write_back`**, template-as-DB direct write, **另存为** export, row edit, **删除选中**: always key off **`instance_k`**, not visual row order after sort.
+  * `read_instances` → row `i` gets `instance_k = i`; new instance on **添加数据** uses **`current_instance_index`** as `instance_k` (sequential), not a scan for the next empty slot.
+  * **`write_back`**, template-as-DB direct write, **保存** export, row edit, **删除选中**: always key off **`instance_k`**, not visual row order after sort.
   * `current_instance_index` / `selected_session_index` should resolve through **`instance_k`** (prefer storing `selected_instance_k` in `SessionState` when sort is enabled).
 
 * **Sheet geometry vs UI table** (see [`toml_config_design.md`](../toml_config_design.md), [`excel_transform.md`](../excel_transform.md) §4.6.5):
@@ -315,6 +322,7 @@ Sub-tab wireframes omit interactive fold JS unless noted; layout classes must ma
 * **Column-header sort (view-only) (已实现)**
   * **Supported:** click `Input_label` column headers to sort displayed rows (asc/desc).
   * **Not sortable:** checkbox column; **`#` / `instance_k` column** if shown.
+  * **`删除选中`:** implements a two-step deletion. Click once to enter `delete_mode` (reveals checkbox column `chkcol` and turns button red/says "确认删除"). Click again to remove checked items in memory. If no rows are checked on the second click, it cancels `delete_mode`. **Note:** Deletion is purely in-memory within the UI session and does NOT automatically write back or delete physical rows from the `.xlsx` file.
   * Sorting **must not** reorder canonical `session_rows` used for `write_back`. It is purely a visual reordering on `tbody` rendering, keeping `instance_k` stable.
   * After sort: row click, delete, and commit still use **`instance_k`** so data is not written to the wrong instance/column on the sheet.
   * **State tracking:** Uses `sort_column` and `sort_descending` in `SessionState` (cleared on template/db switch).
@@ -324,38 +332,36 @@ Sub-tab wireframes omit interactive fold JS unless noted; layout classes must ma
   * Per `Input_label`, if template cell is an Excel formula (`data_only=False`, value starts with `=`): show **computed display value** in the field (`data_only=True`), set control **readonly**; do not write that label on `write_back` (transform layer also skips — see [`excel_transform.md`](../excel_transform.md) §4.6.2).
   * Optional UI hint on label (e.g. 「公式」) so users know why the field is locked.
 
-* **Session list toolbar** (`.list-btns` under the table)
-  * **Left:** `装载文件` — open dialog to pick an xlsx from `exports/{template_id}/`; parse rows via `ExcelWriter.read_instances(path)` into `session_rows` so users can edit multiple exported files in the UI and **另存为** as new files. In **template-as-DB** mode this is optional (data already loaded from template); still allowed for importing an export copy.
-  * **Right:** `清空` then `删除选中` (adjacent).
-  * **`装载文件` merge policy:** if `session_rows` is empty → **replace** (load into empty list). If non-empty → dialog offers **替换当前列表** or **追加到当前列表**; rows are capped at `input_capacity` **in independent-DB mode only**; notify when truncated. Template-as-DB: cap policy TBD at implementation (prefer no artificial cap beyond `read_instances` scan limit).
-  * **`清空`:** clear `session_rows`, reset `selected_instance_k = None`, `selected_instance_indices.clear()`, recompute `current_instance_index`. **Independent DB:** `current_instance_index = 0`, `draft` from `template_defaults`. **Template-as-DB:** after clear, `current_instance_index = 0` and empty table until user re-activates template or toggles mode (does not delete rows from template xlsx on disk).
-  * **`删除选中`:** remove checked rows by **`instance_k`** from `session_rows`; recompute `current_instance_index` from remaining instances. Template-as-DB: in-memory only until next `write_back` policy is applied (implementation must define whether delete syncs to xlsx immediately).
+* **Toolbar (`.toolbar-row`)** — single row, two `ui.row` groups (`justify-between` via parent flex):
+  * **Left group:** `保存` · `刷新数据` · `删除选中`（两步：首次进入 `delete_mode` 并显示表内勾选列；再次为 `确认删除` 或空选取消）
+  * **Right group:** `添加数据`
+  * Status hints sit **above** the table (`.ghost-note` under session-list title), not in the toolbar row.
+  * **Independent DB:** `当前 {current_instance_index + 1} / 容量 {input_capacity}`.
+  * **Template-as-DB:** `当前将录入至第 {current_instance_index + 1} 行`（无容量分母）.
+  * **Below toolbar:** `打印文件` (`ui.select`), `打印区域` (`ui.select`), `打印` — preview dialog + `window.print` / PNG download (`tab_input.py`).
+  * After successful **保存** (independent-DB export path), refresh print-file choices and select the new export.
+  * **Removed:** `清空` button; `装载文件` flow deferred / not in current toolbar.
 
-* **Toolbar**
-  * Row 1: `另存为`, `下一行`, read-only status label — **mode-dependent**:
-    * **Independent DB:** `当前 {current_instance_index + 1} / 容量 {input_capacity}` (`input_capacity = writer.max_instance_count(template)`).
-    * **Template-as-DB:** `已录入 {len(session_rows)} 行 · 正在编辑第 {current_instance_index + 1} 行` — **no capacity denominator**; no 「容量已满」 state.
-  * Row 2: `打印文件` (`ui.select`), `打印区域` (`ui.select`), `打印` (`ui.button`).
-  * After successful 另存为, refresh print-file choices and select the new export.
-
-* **下一行**
+* **添加数据**（原「下一行」；英文概念名 Add Data）
+  * Commits the current `draft` at **`current_instance_index` / `instance_k`**. UI table always shows one row per instance; sheet geometry depends on TOML `move_to`:
+    * `down` / `up` → each commit targets a **row-direction** instance (values stack on sheet rows).
+    * `left` / `right` → each commit targets a **column-direction** instance (table row still represents one instance).
+  * **No empty-slot detection:** the input fields already show whatever is at the active `instance_k` (from activation, row click, or prior `read_values`). If that instance already has data, the user sees it and may overwrite by editing and clicking **添加数据** again — the UI does not search for the next blank instance.
   * Always require `verify_report.ok`.
   * **Independent DB (`use_independent_db=true`):**
-    * Require `current_instance_index < input_capacity`; if at capacity: `ui.notify` 「容量已满，无法录入下一行」, do not clear inputs.
+    * Require `current_instance_index < input_capacity`; if at capacity: `ui.notify` 「容量已满，无法继续添加数据」, do not clear inputs.
     * `ui.persist_fields(draft)` → SQLite `records` (see §3.4).
     * **Images on commit:** for each `input_label` in `field_images` with pending bytes, call `core_store.save_image(...)`. Clear `field_images` after save.
-    * Append/update `session_rows`; increment index; clear `draft` from `template_defaults`; refresh fields and table.
+    * Append/update `session_rows`; increment `current_instance_index`; clear `draft` from `template_defaults`; refresh fields and table.
   * **Template-as-DB (`use_independent_db=false`):**
     * **No capacity check** — button always enabled when verify ok (no 「已满」 blocking).
     * **Skip** `ui.persist_fields` and **skip** `save_image`; discard pending `field_images` on commit.
-    * Merge `draft` into `session_rows` at **`current_instance_index` / `instance_k`** (append if new instance); `write_back` keyed by **`instance_k`** per row, not table display order; refresh DB tab table via `read_instances`.
-    * Set `current_instance_index = len(session_rows)`; reload `draft` from **next** instance via `read_values` + formula mask (not `template_defaults` alone).
-    * If next instance already has partial data in xlsx, fields show those values; formula labels stay readonly.
+    * `write_back` keyed by **`instance_k = current_instance_index`**, not table display order; refresh session table via `read_instances` / `load_template`.
+    * After commit, advance `current_instance_index` (typically `+= 1` or `len(session_rows)` after reload); optional `read_values` for the new index so fields reflect sheet content — user may leave or overwrite.
 
-* **另存为**
-  * Path: `exports/{template_id}/{template_id}_{db_suffix}_{YYYYMMDD}_{HHMMSS}.xlsx`
-  * Persist current row same as **下一行** (text + images per rules above) before or as part of export transaction.
-  * `ExcelWriter.write_back(template_path, output_path, session_rows, instance_k=0)` (or include current `draft` if `session_rows` empty).
+* **保存**（原「另存为」）
+  * **Independent DB:** write timestamped export — path `exports/{template_id}/{template_id}_{db_suffix}_{YYYYMMDD}_{HHMMSS}.xlsx`. Persist current row same as **添加数据** (text + images per rules above) before or as part of export transaction. `ExcelWriter.write_back(template_path, output_path, session_rows, instance_k=0)` (or include current `draft` if `session_rows` empty).
+  * **Template-as-DB:** write **directly to the template workbook** (`templates/{template_id}/{template_id}.xlsx` on `work_sheet`) — not a separate “save as copy” dialog. Same persist rules as **添加数据** for the active `draft` / `session_rows` before `write_back`.
   * **Excel output never embeds images** (`export_attach_images=off` for NiceGUI product — text/cells only). Pending/committed photos remain in `core_store` for UI reload only when independent-DB mode is on.
   * Non-export actions disabled when `verify_report.ok` is false.
 
@@ -406,12 +412,14 @@ Wireframe: `nicegui_ui_db.html`. Same `shell-top` / `shell-body` as index.
 
 * **当前数据库** section title row (wireframe `.section-title` flex row):
   * Left: title text **当前数据库**
-  * Right: checkbox **「使用独立数据库」**, **checked by default** (`use_independent_db = True`; persist per template in `app.storage.user` optional).
+  * Right: checkbox **「使用独立数据库」**, **checked by default** (`use_independent_db = true`).
+
+  **Persistence (implemented):** value lives in **template TOML** as top-level `use_independent_db` (bool). On toggle: `session.cfg.use_independent_db = e.value` → `GetTomlValues.Save(template_id)` → `ForMain.load_template(...)`. Loaded on every activation via `load_toml` → `state.use_independent_db = cfg.use_independent_db`. **Not** stored in `app.storage.user`. See [`toml_config_design.md`](../toml_config_design.md).
 
   | `使用独立数据库` | DB behavior | Images | 「全部数据」 table |
   |------------------|-------------|--------|-------------------|
-  | **Checked (default)** | Normal suffix DB files (`sample_template.A2026`, …); `切换` / `新建库` enabled per existing rules. | On **下一行** / **另存为**, pending `field_images` → `core_store.save_image` keyed by `template_id + record_id + input_label`. Reload via `get_latest_image`. | Shows all rows in the **active suffix database**. |
-  | **Unchecked** | **弃用 SQLite**：不再打开/写入后缀库文件；**下一行** / **另存为** 将数据**直接写入模板 xlsx**（`ExcelWriter.write_back` → `templates/{template_id}/{template_id}.xlsx` 的 `work_sheet`，不经 `SecureSQLite`）。`切换` / `新建库` **disabled**。 | **Not saved** — skip `save_image`; discard pending photos on commit. | Title **「数据表已存数据」**；表格数据 **从模板 xlsx 读取**（见下）。**无「容量已满」**——录入不受 `input_capacity` 阻断（见 §3.1 **下一行**）。 |
+  | **Checked (default)** | Normal suffix DB files (`sample_template.A2026`, …); `切换` / `新建库` enabled per existing rules. | On **添加数据** / **保存**, pending `field_images` → `core_store.save_image` keyed by `template_id + record_id + input_label`. Reload via `get_latest_image`. | Shows all rows in the **active suffix database**. |
+  | **Unchecked** | **弃用 SQLite**：不再打开/写入后缀库文件；**添加数据** / **保存** 将数据**直接写入模板 xlsx**（`ExcelWriter.write_back` → `templates/{template_id}/{template_id}.xlsx` 的 `work_sheet`，不经 `SecureSQLite`）。`切换` / `新建库` **disabled**。 | **Not saved** — skip `save_image`; discard pending photos on commit. | Title **「数据表已存数据」**；表格数据 **从模板 xlsx 读取**（见下）。**无「容量已满」**——录入不受 `input_capacity` 阻断（见 §3.1 **添加数据**）。 |
 
 * **当前数据库 controls (checked mode only):** `ui.select` of `list_db_paths(template_id)`; `切换` enabled only when selection ≠ `active_db_suffix`; `新建库` → `allocate_next_db_path`.
 
@@ -424,7 +432,7 @@ Wireframe: `nicegui_ui_db.html`. Same `shell-top` / `shell-body` as index.
 
   Column-header sort: **view-only**; row identity = **`instance_k`** (template-as-DB) or DB `records.id` (independent DB). Template-store **覆盖保存** must target the selected row’s **`instance_k`**, not sorted row index.
 
-  After **下一行** / **另存为** in template-store mode, refresh this table from `read_instances(template_path)` so the grid reflects what was written into the workbook.
+  After **添加数据** / **保存** in template-store mode, refresh this table from `read_instances(template_path)` so the grid reflects what was written into the workbook.
 
 * **Toggle「使用独立数据库」:** besides `render_db_tab.refresh()`, reload Input tab — independent DB → clear `session_rows` / reset index; template-as-DB → `session_rows ← read_instances(template_path)`, `current_instance_index = len(session_rows)`, reload `draft` + formula mask; call `render_input_tab.refresh()`.
 
@@ -507,8 +515,8 @@ class SessionState:
 | Data | NiceGUI storage | Notes |
 |------|-----------------|-------|
 | `draft`, `session_rows`, engines | `SessionRegistry[principal_id]` (`SessionState`) | per principal; not in `app.storage.user` |
-| Sidebar width / collapsed | `app.storage.user` (`pref_key`) | survives reload; needs `storage_secret` |
-| `use_independent_db` per template | `app.storage.user` optional | default True |
+| Sidebar width / collapsed | `app.storage.user` (`Auth.pref_key`) | survives reload; needs `storage_secret` |
+| `use_independent_db` per template | **`templates/{id}/{id}.toml`** (`use_independent_db` key) | default `true` if key absent; `GetTomlValues.Save` on DB-tab toggle |
 | Visit counters, global flags | `app.storage.general` | optional |
 | Ephemeral UI flags | `app.storage.client` or local variables | lost on reload |
 
@@ -532,14 +540,14 @@ On sidebar click or initial load:
 
 1. Resolve `template_id`, `template_path` from `SortTemplates`
 2. `ensure_exists(template_id, template_path)`
-3. `load_toml(template_id)`
+3. `load_toml(template_id)` → `cfg.use_independent_db` (default true)
 4. `verify_toml(template_path, cfg)`
-5. If failed: show report; disable 输入/另存为/下一行/打印
+5. If failed: show report; disable 输入/保存/添加数据/打印
 6. If passed: open `default_db_path`, construct `SecureSQLite`, `UiProvider`, `Template2DB`, `ExcelWriter(cfg, located)`
-7. `input_capacity = writer.max_instance_count(template_path)` — **independent-DB mode only** for 「下一行」 cap and 装载文件 limit; template-as-DB does not use it to block entry
+7. `input_capacity = writer.max_instance_count(template_path)` — **independent-DB mode only** for **添加数据** cap and 装载文件 limit; template-as-DB does not use it to block entry
 8. Reset session per `use_independent_db`:
    * **Independent DB:** `draft` / `session_rows` / `field_images` cleared; `current_instance_index = 0`; `draft` ← `template_defaults`
-   * **Template-as-DB:** `session_rows ← read_instances(template_path)`; `current_instance_index = len(session_rows)`; `draft` ← next instance (`read_values` + formula mask); clear `field_images`
+   * **Template-as-DB:** `session_rows ← read_instances(template_path)`; `current_instance_index = total_instance_count`（下一顺序 instance，非空位扫描）；`draft` ← `read_values(template_path, current_instance_index)` + formula mask；已有数据会显示在文本框，用户可自行覆盖；clear `field_images`
 9. Refresh all `@ui.refreshable` sections; switch to tab `输入`
 
 ### 4.4 TOML model (unchanged)
@@ -601,13 +609,14 @@ NiceGUI tradeoffs:
 
 1. **Spike shell:** `shell-top` (template name + fold + tabs) + `shell-body` `ui.splitter`; sidebar collapse + width persistence.
 2. **Template activation:** port `activate_template()` logic; real data from `templates/*.xlsx` only.
-3. **Input tab:** responsive `.field-grid`, autogrow textareas, ghost blur, ID dialog, session `ui.table`, 下一行 / 另存为 (text only first).
+3. **Input tab:** responsive `.field-grid`, autogrow textareas, ghost blur, ID dialog, session `ui.table`, **添加数据** / **保存** (text only first).
 4. **DB tab:** `使用独立数据库` checkbox, switch/create DB, data table modes, 覆盖保存.
 5. **TOML tab:** five sections, 校验配置, save + full session reset.
 6. **Mobile pass:** portrait breakpoints, long-press menu, camera capture.
 7. **Google tab:** OAuth + import table (no Gemma TOML wizard in NiceGUI v1).
-8. **Input context menu (拍照 / OCR):** after `paddle_ocr` CLI smoke — session `field_images`, commit images on 下一行/另存为 per §3.4; **OCR** → `PaddleOcr`.
+8. **Input context menu (拍照 / OCR):** after `paddle_ocr` CLI smoke — session `field_images`, commit images on 添加数据/保存 per §3.4; **OCR** → `PaddleOcr`.
 9. **Print / export polish:** print area dropdown, `ui.download.file` fallback; confirm **no images in xlsx**.
+10. **HTTPS / TLS (§8.1):** `ensure_tls_certs()` before `ui.run`; OpenSSL on PATH; `certs/` gitignored; LAN camera smoke on `https://<LAN-IP>:8738`.
 
 Do not modify `app/services/*` during UI migration unless a missing core API is confirmed and documented first.
 
@@ -658,6 +667,83 @@ Use `ui.download.file` for exported xlsx when not printing. Use `ui.notify` for 
 
 ---
 
+## 8.1 HTTPS / TLS — 自签证书，启动时自动管理（方案 B）
+
+**目标：** 局域网或其它非 `localhost` 访问时，浏览器将页面视为 **Secure Context**，从而允许 **拍照**（`getUserMedia`）。不依赖作者定期向用户「下发授权」；证书由程序在启动前自动检测并生成/续期。
+
+**非目标：** 不向操作系统或浏览器静默安装受信任根 CA（需管理员权限，超出应用范围）；不使用 Let's Encrypt（内网 IP 无公网域名）；不将 `mkcert` 作为运行时依赖。
+
+### 8.1.1 何时启用 HTTPS
+
+| 访问方式 | HTTP | HTTPS |
+|----------|------|-------|
+| `http://localhost` / `127.0.0.1` | 允许拍照 | 允许 |
+| `http://<LAN-IP>`（`host='0.0.0.0'`） | **禁止拍照** | 允许（自签即可） |
+
+生产默认：`host='0.0.0.0'`，`port=8738`，**在证书就绪时**以 HTTPS 对外服务。
+
+### 8.1.2 证书文件与配置
+
+| 路径 | 说明 |
+|------|------|
+| `certs/server.key` | RSA 私钥（**不得提交 git**） |
+| `certs/server.crt` | 自签服务器证书（**不得提交 git**） |
+| `certs/san.txt`（可选） | 生成 SAN 用，例如写入：`subjectAltName=DNS:localhost,IP:127.0.0.1,IP:192.168.12.198` |
+
+`.gitignore` 必须包含 `certs/`（或至少 `certs/*.key`、`certs/*.crt`）。
+
+### 8.1.3 `ensure_tls_certs()` 行为（`nicegui_ui/ssl_manager.py`）
+
+在 `ui.run()` **之前**调用；返回 `(cert_path, key_path)` 或 `None`（见失败策略）。
+
+1. **缺失：** `server.crt` 或 `server.key` 任一不存在 → 调用 **OpenSSL** 生成新密钥对 + 自签证书。
+2. **即将过期：** 解析 `server.crt` 的 `notAfter`；若已过期或剩余有效期 **< 30 天** → 自动续期（重新签发，默认再延长 **3650 天** / 约 10 年）。
+3. **SAN：** 证书必须包含 Subject Alternative Name：`DNS:localhost`、`IP:127.0.0.1`，以及 `certs/san.txt` 里的局域网 IP（用 IP 访问时避免名称不匹配）。
+4. **实现方式：** 优先 `subprocess` 调用系统 `openssl`（方案 B）；可选后续用 `cryptography` 库替代，行为保持一致。
+5. **依赖：** `openssl` 须在 **PATH** 中；缺失时记录明确日志，见 §8.1.5。
+
+**续期与用户操作：** 自动续期由本机完成，**无需作者向用户重新分发证书**。浏览器对自签证书的「继续访问」为**每台设备、每个浏览器配置文件**的一次性操作；在证书有效期内通常不再提示。若续期时**更换了密钥对**且用户未安装私有 CA，个别浏览器可能在首次访问新证时再次出现警告——可接受，仍无需作者介入。
+
+### 8.1.4 `ui.run()` 集成
+
+```python
+from nicegui_ui.tls import ensure_tls_certs
+
+ssl = ensure_tls_certs()  # -> (cert, key) | None
+
+ui.run(
+    host='0.0.0.0',
+    port=8738,
+    storage_secret='...',
+    ssl_certfile=str(ssl[0]) if ssl else None,
+    ssl_keyfile=str(ssl[1]) if ssl else None,
+    ...
+)
+```
+
+当 `ssl_certfile` 与 `ssl_keyfile` 均提供时，Uvicorn 自动以 **HTTPS** 监听（NiceGUI 将参数转发给 Uvicorn）。
+
+用户访问：`https://<本机局域网 IP>:8738`（非 `http://`）。
+
+### 8.1.5 失败与降级策略
+
+| 条件 | 行为 |
+|------|------|
+| OpenSSL 不可用或生成失败 | 记录 error；**仍启动 HTTP**（`ssl_*` 为 `None`），保证本机 `http://localhost` 可用 |
+| 仅本机开发 | 可设环境变量 `ETV_TLS_DISABLE=1` 跳过 HTTPS（可选，文档化即可） |
+
+不得因证书失败而阻止整个应用启动（除非未来增加显式 `--require-tls` 运维开关）。
+
+### 8.1.6 验收（TLS）
+
+1. 删除 `certs/` 后启动应用 → 自动生成 `server.crt` / `server.key`。
+2. 将 `server.crt` 的 `notAfter` 改为已过期（或 mock）后重启 → 自动重新签发，进程正常启动。
+3. `https://localhost:8738` 与 `https://<LAN-IP>:8738` 可打开 UI；控制台 `window.isSecureContext === true`。
+4. 在 Secure Context 下，输入页 **拍照** 可弹出摄像头权限（与 §3.1 OCR 菜单一致）。
+5. 仓库中无 `certs/*.key` 被跟踪。
+
+---
+
 ## 9. Forbidden Actions
 
 * No runtime fallback templates or doc wireframe samples as data
@@ -666,6 +752,7 @@ Use `ui.download.file` for exported xlsx when not printing. Use `ui.notify` for 
 * No hidden textbox / JSON event bridges unless `ui.table` proves insufficient after spike
 * No Gradio components in the NiceGUI app
 * No loading templates from outside `templates/`
+* No committing TLS private keys or generated `certs/server.{key,crt}` to the repository
 
 ---
 
@@ -677,13 +764,14 @@ Use `ui.download.file` for exported xlsx when not printing. Use `ui.notify` for 
 4. Desktop field grid: `auto-fill` ~400px cells; textareas autogrow vertically, scroll horizontally when needed.
 5. Template activation always runs `verify_toml`; failure disables 输入 write/export/print.
 6. Input fields from `ui.get_labels()`; primary key blur + dialog flow.
-7. Session table: select, highlight, 删除选中, 清空, 装载文件; column-header sort **view-only** with stable **`instance_k`**; row click / write-back / delete by **`instance_k`**, not sorted index; optional `#` column; `move_to=left/right` ⇒ table row = sheet **column** instance. **Template-as-DB:** table preloaded from `read_instances`; formula fields readonly.
-8. **下一行** / **另存为** persist text per mode; images only when `use_independent_db` (see `db_store.md`). **Independent DB:** cap at `input_capacity`. **Template-as-DB:** no cap; always **下一行** when verify ok; `write_back` to template xlsx.
-9. 另存为 path under `exports/{template_id}/...`; **xlsx has no embedded images**.
+7. Session table: select, highlight, 删除选中 (two-step mode), 刷新数据; column-header sort **view-only** with stable **`instance_k`**; row click / write-back / delete by **`instance_k`**, not sorted index; optional `#` column; `move_to=left/right` ⇒ table row = sheet **column** instance. **Template-as-DB:** table preloaded from `read_instances`; formula fields readonly.
+8. **添加数据** / **保存** persist text per mode; images only when `use_independent_db` (see `db_store.md`). **Independent DB:** cap at `input_capacity`. **Template-as-DB:** no cap; always **添加数据** when verify ok; `write_back` to template xlsx at `current_instance_index` (no empty-slot scan).
+9. **保存** (independent DB): path under `exports/{template_id}/...`; **保存** (template-as-DB): writes template xlsx in place; **xlsx has no embedded images**.
 10. DB tab: **使用独立数据库** default checked; unchecked → template xlsx read/write, table **数据表已存数据**, no images, no capacity-full on Input tab.
 11. TOML save rebuilds engines and resets/reloads input session per storage mode (§3.3 step 5).
 12. All coordinate math delegated to `core_transform` / `located`.
 13. Context menu: **拍照** caches one photo per field; **OCR** → `PaddleOcr`; desktop **右键**; mobile **字段行末按钮**（非 textarea 双击/长按）; errors via `ui.notify`.
+14. **TLS (§8.1):** missing or near-expired certs auto-regenerated via OpenSSL before `ui.run`; HTTPS on `0.0.0.0` when certs exist; `getUserMedia` works on `https://<LAN-IP>:8738` after user accepts self-signed warning once per browser profile.
 
 ---
 
@@ -693,7 +781,7 @@ Use `ui.download.file` for exported xlsx when not printing. Use `ui.notify` for 
 |----------|--------|
 | `docs/nicegui_ui/nicegui_ui_plan.md` | canonical UI specification (this document) |
 | `docs/nicegui_ui/nicegui_ui_*.html` | wireframes; all tabs use `shell-top` + `shell-body`; `index` = field-grid + session table; `db` = §3.4 checkbox in section title |
-| `docs/db_store.md` | image commit API + `record_images` schema; **§2.1** template-as-DB bypasses store; UI defers `save_image` until 下一行/另存为 (independent DB only) |
+| `docs/db_store.md` | image commit API + `record_images` schema; **§2.1** template-as-DB bypasses store; UI defers `save_image` until 添加数据/保存 (independent DB only) |
 | `docs/excel_transform.md` | **§4.6** template-as-DB read/write + formula protection; **§4.6.5** `instance_k` + sheet row/column geometry |
 | `plans/nicegui_ui_migration/` | Speckit plan / spec / tasks / constitution |
 | `nicegui_ui/` | sole runtime UI package |

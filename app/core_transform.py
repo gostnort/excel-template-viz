@@ -49,7 +49,7 @@ def _load_sheet_rows(workbook_path: Path, sheet_name: str) -> list[dict[str, Any
     输出:
         list[dict[str, Any]] - 每行 {列标题: 值}
     """
-    wb = load_workbook(workbook_path, read_only=True, data_only=True)
+    wb = load_workbook(workbook_path, data_only=True)
     try:
         if sheet_name and sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
@@ -296,7 +296,7 @@ class ExcelWriter:
 
     def _worksheet_name(self, workbook_path: Path) -> str:
         """解析 cfg.work_sheet 或回退 active sheet。"""
-        wb = load_workbook(workbook_path, read_only=True)
+        wb = load_workbook(workbook_path)
         try:
             if self.cfg.work_sheet and self.cfg.work_sheet in wb.sheetnames:
                 return self.cfg.work_sheet
@@ -366,8 +366,8 @@ class ExcelWriter:
             tuple - (值字典, 公式掩码字典)
         """
         sheet_name = self._worksheet_name(excel_path)
-        wb_data = load_workbook(excel_path, read_only=True, data_only=True)
-        wb_form = load_workbook(excel_path, read_only=True, data_only=False)
+        wb_data = load_workbook(excel_path, data_only=True)
+        wb_form = load_workbook(excel_path, data_only=False)
         try:
             return self._read_instance(wb_data[sheet_name], wb_form[sheet_name], instance_k)
         finally:
@@ -387,8 +387,8 @@ class ExcelWriter:
         if not self.located:
             return 0
         sheet_name = self._worksheet_name(excel_path)
-        wb_data = load_workbook(excel_path, read_only=True, data_only=True)
-        wb_form = load_workbook(excel_path, read_only=True, data_only=False)
+        wb_data = load_workbook(excel_path, data_only=True)
+        wb_form = load_workbook(excel_path, data_only=False)
         try:
             ws_data = wb_data[sheet_name]
             ws_form = wb_form[sheet_name]
@@ -448,8 +448,8 @@ class ExcelWriter:
             return [], []
             
         sheet_name = self._worksheet_name(excel_path)
-        wb_data = load_workbook(excel_path, read_only=True, data_only=True)
-        wb_form = load_workbook(excel_path, read_only=True, data_only=False)
+        wb_data = load_workbook(excel_path, data_only=True)
+        wb_form = load_workbook(excel_path, data_only=False)
         try:
             ws_data = wb_data[sheet_name]
             ws_form = wb_form[sheet_name]
@@ -494,7 +494,7 @@ class ExcelWriter:
         min_col, min_row, max_col, max_row = range_boundaries(section.input_area)
         sheet_name = self._worksheet_name(excel_path)
         # data_only=False 让公式格呈现 "=..." 文本，便于排除
-        wb = load_workbook(excel_path, read_only=True, data_only=False)
+        wb = load_workbook(excel_path, data_only=False)
         try:
             ws = wb[sheet_name]
             # 读第一块各相对坐标的值；"=" 开头的公式格不参与比较
