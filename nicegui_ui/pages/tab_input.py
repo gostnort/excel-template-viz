@@ -439,7 +439,7 @@ def render_dynamic_fields(session, labels: list[str]):
         with ui.element('div').classes('field-cell id-field' if is_pk else 'field-cell'):
             ui.label(lbl).classes('field-label primary' if is_pk else 'field-label')
             
-            with ui.row().classes('w-full no-wrap items-start gap-1 p-0 m-0'):
+            with ui.row().classes('w-full no-wrap items-center gap-1 p-0 m-0'):
                 inp = ui.textarea(
                     value=str(session.draft.get(lbl, '') or ''),
                     on_change=create_on_change(lbl),

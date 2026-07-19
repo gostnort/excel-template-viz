@@ -8,141 +8,94 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: system-ui, "Microsoft YaHei", sans-serif;
-      font-size: 13px;
-      line-height: 1.4;
-      background: #fff;
-      color: #000;
-      height: 100vh;
-      overflow: hidden;
+      font-size: 13px; line-height: 1.4;
+      background: #fff; color: #000;
+      height: 100vh; overflow: hidden;
     }
-    .shell { display: flex; flex-direction: column; height: 100vh; border: 2px solid #000; }
-    /* 顶栏：左（已选模板 + 折叠）与右（Tab）同一行 */
-    .shell-top {
-      display: flex; flex-shrink: 0;
-      border-bottom: 2px solid #000;
-      min-height: 40px;
+    .shell {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      grid-template-rows: auto 1fr;
+      height: 100vh;
+      border: 2px solid #000;
     }
     .sidebar-header {
+      grid-column: 1; grid-row: 1;
       display: flex; align-items: center; gap: 8px;
-      flex: 0 1 auto; max-width: 40vw;
-      padding: 0 8px 0 10px;
+      padding: 0 8px 0 10px; min-height: 40px;
       font-weight: bold;
       border-right: 1px solid #000;
+      border-bottom: 2px solid #000;
       background: #f0f0f0;
-      overflow: hidden;
-    }
-    .shell.is-sidebar-collapsed .sidebar-header {
-      width: auto;
-      min-width: 8rem;
-      max-width: none;
+      white-space: nowrap;
     }
     .sidebar-fold-btn {
-      width: 24px; height: 24px; flex-shrink: 0;
-      margin-left: auto;
-      border: none; background: transparent; padding: 0;
-      color: #000; cursor: pointer;
+      width: 24px; height: 24px; flex-shrink: 0; margin-left: auto;
+      border: none; background: transparent; padding: 0; cursor: pointer;
       display: inline-flex; align-items: center; justify-content: center;
     }
-    .sidebar-fold-btn:hover { background: #e0e0e0; border-radius: 3px; }
-    .sidebar-fold-btn:active { background: #d0d0d0; }
-    .fold-chevron {
-      width: 18px; height: 18px;
-      display: block;
-      transition: transform 0.15s ease;
-    }
-    /* 侧栏展开：<< 向左；折叠后翻转 >> 向右 */
-    .sidebar-fold-btn[aria-expanded="false"] .fold-chevron {
-      transform: scaleX(-1);
-    }
-    .selected-template-name {
-      flex: 1; min-width: 0;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-    .shell-body { display: flex; flex: 1; min-height: 0; }
-    /* 左侧模板列表：运行时由 ui.splitter.before 承载，宽度由 splitter 控制 */
-    .sidebar {
-      width: 100%;
-      border-right: 1px solid #000;
-      display: flex; flex-direction: column; flex-shrink: 0;
-      overflow: auto;
-    }
-    .shell.is-sidebar-collapsed .sidebar {
-      display: none;
-      border-right: none;
-    }
-    .shell.is-sidebar-collapsed .resize-rail { display: none; }
-    .template-item { padding: 10px 12px; border-bottom: 1px solid #ccc; cursor: pointer; }
-    .template-item.active { font-weight: bold; background: #e8e8e8; }
-    .template-item.muted { color: #555; }
-    /* 线框占位：运行时 = Quasar QSplitter separator（非自定义拖拽脚本） */
-    .resize-rail {
-      width: 6px; flex-shrink: 0; position: relative; cursor: col-resize;
-      background: transparent; align-self: stretch;
-    }
-    .resize-rail::after {
-      content: ""; position: absolute; top: 0; bottom: 0; left: 50%;
-      width: 2px; margin-left: -1px; background: transparent;
-    }
-    .resize-rail:hover::after { background: #999; }
-    .resize-rail .fold-hint {
-      position: absolute; top: 50%; left: 50%;
-      transform: translate(-50%, -50%);
-      font-size: 10px; writing-mode: vertical-rl; opacity: 0; pointer-events: none;
-    }
-    .resize-rail:hover .fold-hint { opacity: 0.6; }
-    /* 右侧主区（Tab 导航已并入顶栏） */
-    .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    .fold-chevron { width: 18px; height: 18px; display: block; }
+    .sidebar-fold-btn[aria-expanded="false"] .fold-chevron { transform: scaleX(-1); }
     .tabs {
-      display: flex; flex: 1; min-width: 0;
-      border-bottom: none; background: #f0f0f0;
+      grid-column: 2; grid-row: 1;
+      display: flex; align-items: stretch;
+      border-bottom: 2px solid #000;
+      background: #fff; min-height: 40px;
     }
     .tab {
-      padding: 10px 24px; border-right: 1px solid #000;
+      width: 126px; min-width: 126px; max-width: 126px;
+      padding: 10px 0; border-right: 1px solid #000;
       font-weight: bold; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      text-align: center;
     }
-    .tab.active { background: #eee; }
+    .tab.active {
+      background: #eee;
+      margin-bottom: -2px;
+      border-bottom: 2px solid #eee;
+      position: relative; z-index: 1;
+    }
+    .sidebar {
+      grid-column: 1; grid-row: 2;
+      min-height: 0; overflow: auto;
+      border-right: 1px solid #000;
+    }
+    .shell.is-sidebar-collapsed .sidebar { display: none; }
+    .template-item { padding: 10px 12px; cursor: pointer; }
+    .template-item.active { font-weight: bold; background: #e8e8e8; }
+    .template-item.muted { color: #555; }
+    .main {
+      grid-column: 2; grid-row: 2;
+      min-height: 0; overflow: hidden;
+      display: flex; flex-direction: column;
+    }
     .tab-body { flex: 1; overflow: auto; padding: 16px 20px; }
-    /* 幽灵输入框 */
     .ghost-input {
       border: none; border-bottom: 1px dashed #bbb;
       padding: 8px 4px; margin-bottom: 6px; color: #666; font-style: italic;
       min-height: 36px;
     }
     .ghost-note { font-size: 11px; color: #888; margin: 0 0 16px 4px; }
-    /* 动态字段：桌面 auto-fill ~400px；手机竖屏每行一个 */
     .field-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
-      gap: 12px 20px;
-      width: 100%;
-      max-width: 100%;
+      gap: 12px 20px; width: 100%;
     }
-    @media (max-width: 639px) {
-      .field-grid { grid-template-columns: 1fr; }
-    }
+    @media (max-width: 639px) { .field-grid { grid-template-columns: 1fr; } }
     .field-cell {
       display: grid;
       grid-template-columns: 100px minmax(0, 1fr);
-      gap: 8px;
-      align-items: start;
-      min-width: 0;
+      gap: 8px; align-items: center; min-width: 0;
     }
-    .field-label { text-align: right; white-space: nowrap; padding-top: 8px; }
+    .field-label { text-align: right; white-space: nowrap; }
     .field-label.primary::after { content: " ★主键"; font-size: 11px; color: #555; }
     .input-box {
-      border: 1px solid #000; padding: 6px 8px; min-height: 32px;
-      min-width: 0; width: 100%; font: inherit;
-      overflow-x: auto; overflow-y: hidden;
-      white-space: pre-wrap; word-break: break-word;
-      resize: none; field-sizing: content;
+      border: 1px solid #000; padding: 6px 8px; min-height: 36px;
+      width: 100%; font: inherit;
+      display: flex; align-items: center;
     }
-    .input-box.has-photo::after {
-      content: "📷"; float: right; font-size: 11px; opacity: 0.7;
-    }
-    .field-menu-hint {
-      font-size: 11px; color: #666; margin: 4px 0 10px 2px;
-    }
-    /* 本次输入列表 */
+    .input-box-inner { color: #666; }
+    .field-menu-hint { font-size: 11px; color: #666; margin: 4px 0 10px 2px; }
     .session-list { margin-top: 18px; }
     .session-list .title { font-weight: bold; margin-bottom: 6px; }
     table.records { border-collapse: collapse; width: 100%; }
@@ -150,250 +103,146 @@
       border: 1px solid #000; padding: 4px 6px; text-align: left;
     }
     table.records th { background: #eee; }
-    table.records th.sortable { cursor: pointer; user-select: none; }
-    table.records th.sortable:hover { background: #e0e0e0; }
-    table.records th.sortable::after { content: " ⇅"; font-size: 10px; color: #666; font-weight: normal; }
-    table.records th.sortable.sort-asc::after { content: " ▲"; }
-    table.records th.sortable.sort-desc::after { content: " ▼"; }
-    table.records th.instcol { width: 36px; text-align: center; }
     table.records tbody tr:hover { background: #f7f7f7; }
     table.records tbody tr.selected { background: #e8e8e8; font-weight: bold; }
     .chkcol { width: 28px; text-align: center; }
-    .list-btns { display: flex; justify-content: space-between; margin-top: 8px; }
-    /* 统一按钮尺寸 */
-    .btn {
-      width: 110px; height: 36px;
-      border: 1px solid #000; background: #fff; font-weight: bold;
-      display: inline-flex; align-items: center; justify-content: center;
-    }
-    .sep { border: 0; border-top: 2px solid #000; margin: 18px 0; }
     .toolbar-row {
       display: flex; justify-content: space-between; align-items: center;
       gap: 8px; flex-wrap: wrap; margin-bottom: 12px;
     }
     .toolbar-group { display: flex; gap: 8px; align-items: center; }
-    .print-row { display: flex; align-items: center; gap: 8px; }
-    .btn.disabled { color: #999; border-color: #999; background: #f5f5f5; }
-    .dropdown { border: 1px solid #000; padding: 8px 12px; min-width: 280px; height: 36px; display: inline-flex; align-items: center; }
-    .dropdown.narrow { min-width: 200px; }
+    .btn {
+      width: 110px; height: 36px;
+      border: 1px solid #000; background: #fff; font-weight: bold;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .btn.danger { border-width: 2px; }
+    .sep { border: 0; border-top: 2px solid #000; margin: 18px 0; }
+    .print-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .dropdown {
+      border: 1px solid #000; padding: 8px 12px; min-width: 200px;
+      height: 36px; display: inline-flex; align-items: center;
+    }
     .modal-hint {
       border: 1px dashed #666; padding: 8px 10px; margin: 8px 0 12px;
       font-size: 12px; color: #444;
     }
     .legend {
       position: fixed; bottom: 8px; right: 8px; font-size: 11px;
-      border: 1px dashed #000; padding: 8px 10px; background: #fff; max-width: 320px;
+      border: 1px dashed #000; padding: 8px 10px; background: #fff; max-width: 340px;
     }
   </style>
 </head>
 <body>
 
-<div class="shell" id="app-shell" style="--sidebar-width: 200px;">
+<div class="shell" id="app-shell">
 
-  <!-- 顶栏：已选模板 + 折叠按钮 | Tab 导航（同一行） -->
-  <header class="shell-top">
-    <div class="sidebar-header">
-      <span class="selected-template-name" id="selected-template-name" title="销售模板">销售模板</span>
-      <button type="button" class="sidebar-fold-btn" id="sidebar-fold-btn"
-              title="折叠左侧模板栏" aria-label="折叠左侧模板栏" aria-expanded="true">
-        <svg class="fold-chevron" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M14 5 L8 12 L14 19" fill="none" stroke="currentColor" stroke-width="2.2"
-                stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M19 5 L13 12 L19 19" fill="none" stroke="currentColor" stroke-width="2.2"
-                stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </button>
-    </div>
-    <nav class="tabs">
-      <div class="tab active">输入</div>
-      <div class="tab">输入配置</div>
-      <div class="tab">存储配置</div>
-      <div class="tab">Google 连接</div>
-    </nav>
-  </header>
+  <div class="sidebar-header">
+    <span class="selected-template-name" id="selected-template-name" title="template_id">template_id</span>
+    <button type="button" class="sidebar-fold-btn" id="sidebar-fold-btn"
+            title="折叠/展开左侧模板栏" aria-expanded="true">
+      <svg class="fold-chevron" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M14 5 L8 12 L14 19" fill="none" stroke="currentColor" stroke-width="2.2"
+              stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M19 5 L13 12 L19 19" fill="none" stroke="currentColor" stroke-width="2.2"
+              stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+  </div>
 
-  <div class="shell-body">
-    <!-- 左侧模板列表 -->
-    <aside class="sidebar" id="sidebar">
-      <div class="template-item active" data-name="销售模板">销售模板</div>
-      <div class="template-item muted" data-name="订单模板">订单模板</div>
-      <div class="template-item muted" data-name="月报模板">月报模板</div>
-      <div class="template-item muted" data-name="…">…</div>
-    </aside>
+  <nav class="tabs">
+    <div class="tab active">输入</div>
+    <div class="tab">输入配置</div>
+    <div class="tab">存储配置</div>
+    <div class="tab">Google 连接</div>
+  </nav>
 
-    <!-- 拖拽 / 折叠条（仅主体区，不贯穿顶栏） -->
-    <div class="resize-rail" id="resize-rail" title="拖拽调宽（20–400px）；运行时由 ui.splitter separator 实现">
-    </div>
+  <aside class="sidebar" id="sidebar">
+    <div class="template-item active" data-name="template_id">显示名甲</div>
+    <div class="template-item muted" data-name="template_b">显示名乙</div>
+    <div class="template-item muted" data-name="template_c">显示名丙</div>
+  </aside>
 
-    <!-- 右侧工作区 -->
-    <main class="main">
-      <div class="tab-body">
-      <!-- 幽灵输入框 -->
+  <main class="main">
+    <div class="tab-body">
+
       <div class="ghost-input">粘贴整行数据…</div>
-      <div class="ghost-note">隐藏样式输入框：切换焦点后按分隔符拆分，自动填入下方各项</div>
+      <div class="ghost-note">幽灵输入：失焦后按分隔符拆分并填入下方字段</div>
 
-      <!-- 动态字段：桌面 auto-fill min 400px；手机 1 列；右键/长按 → 拍照|OCR -->
-      <p class="field-menu-hint">桌面：输入框右键 →「拍照」「OCR」；手机：每行右侧 ··· 按钮（勿用 textarea 双击/长按）。多行自动增高，过长横向滚动。</p>
+      <p class="field-menu-hint">桌面：输入框右键 → 拍照 / OCR；手机：行末 ··· 按钮</p>
       <div class="field-grid">
         <div class="field-cell">
-          <span class="field-label primary">ID#</span>
-          <textarea class="input-box" rows="1">8129</textarea>
+          <span class="field-label primary">字段A</span>
+          <div class="input-box"><span class="input-box-inner">…</span></div>
         </div>
         <div class="field-cell">
-          <span class="field-label">姓名</span>
-          <textarea class="input-box" rows="1">Clark Kent</textarea>
+          <span class="field-label">字段B</span>
+          <div class="input-box"><span class="input-box-inner">…</span></div>
         </div>
         <div class="field-cell">
-          <span class="field-label">报告日期</span>
-          <textarea class="input-box" rows="1">1978/02/29</textarea>
+          <span class="field-label">字段C</span>
+          <div class="input-box"><span class="input-box-inner">…</span></div>
         </div>
         <div class="field-cell">
-          <span class="field-label">近期问题</span>
-          <textarea class="input-box" rows="2">recreate himself…</textarea>
-        </div>
-        <div class="field-cell">
-          <span class="field-label">处理意见</span>
-          <textarea class="input-box" rows="1"></textarea>
-        </div>
-        <div class="field-cell">
-          <span class="field-label">生效日期</span>
-          <textarea class="input-box" rows="1"></textarea>
-        </div>
-        <div class="field-cell">
-          <span class="field-label">签字</span>
-          <textarea class="input-box has-photo" rows="1"></textarea>
+          <span class="field-label">字段D</span>
+          <div class="input-box"><span class="input-box-inner">…</span></div>
         </div>
       </div>
-      <div class="modal-hint">
-        ID# 切换焦点：库有旧数据则询问来源 — 从数据源重新读取 &nbsp;|&nbsp; 从数据库读取
-      </div>
+      <div class="modal-hint">主键失焦：库中已有 → 对话框选择「从数据源读取」/「从数据库读取」</div>
 
-      <!-- 本次输入列表（delete_mode 时才显示勾选列） -->
       <div class="session-list">
-        <div class="title">本次已录入 <span class="ghost-note" style="display:inline;font-weight:normal">（点击数据格载入上方编辑）</span></div>
-        <p class="ghost-note">当前 2 / 容量 N · 独立库模式</p>
-        <p class="field-menu-hint">
-          两步删除：点「删除选中」→ 出现勾选列 →「确认删除」。排序仅改显示；写回用 <code>instance_k</code>。
-        </p>
-        <table class="records" id="session-records-table">
+        <div class="title">本次已录入 <span class="ghost-note" style="display:inline;font-weight:normal">（点击行载入上方编辑）</span></div>
+        <p class="ghost-note">当前 n / 容量 N</p>
+        <table class="records">
           <thead>
             <tr>
-              <th class="instcol">#</th>
-              <th class="sortable">ID#</th>
-              <th class="sortable">姓名</th>
-              <th class="sortable">报告日期</th>
-              <th class="sortable">…</th>
+              <th class="chkcol">☐</th>
+              <th>字段A</th>
+              <th>字段B</th>
+              <th>字段C</th>
+              <th>…</th>
             </tr>
           </thead>
           <tbody>
-            <tr class="selected" data-instance-k="0"><td class="instcol">0</td><td>8129</td><td>Clark Kent</td><td>1978/02/29</td><td>…</td></tr>
-            <tr data-instance-k="1"><td class="instcol">1</td><td>250</td><td>狗蛋</td><td>2026/01/31</td><td>…</td></tr>
+            <tr class="selected"><td class="chkcol">☐</td><td>…</td><td>…</td><td>…</td><td>…</td></tr>
+            <tr><td class="chkcol">☐</td><td>…</td><td>…</td><td>…</td><td>…</td></tr>
           </tbody>
         </table>
-        <p class="field-menu-hint" style="margin-top:6px">delete_mode 示意：表头多一列 ☐，按钮文案为「确认删除」（红色）。</p>
+        <p class="field-menu-hint">删除选中：勾选行后从会话列表移除（不写回 xlsx）</p>
       </div>
 
       <hr class="sep">
 
-      <!-- 工具栏：左 保存|刷新|删除 ；右 添加数据 -->
       <div class="toolbar-row">
         <div class="toolbar-group">
-          <div class="btn excel">保存</div>
-          <div class="btn excel">刷新数据</div>
+          <div class="btn">保存</div>
+          <div class="btn">刷新数据</div>
           <div class="btn">删除选中</div>
         </div>
         <div class="toolbar-group">
-          <div class="btn db">添加数据</div>
+          <div class="btn">添加数据</div>
         </div>
       </div>
-      <div class="ghost-note" style="margin-bottom:10px">
-        保存：独立库 → exports/…xlsx；模板即库 → 写回 templates/…xlsx。刷新数据：模板即库时从 xlsx 重载 session_rows；独立库仅提示保留内存列表。
-      </div>
 
-      <!-- 打印文件 + 打印区域 + 打印（紧挨） -->
       <div class="print-row">
-        <div class="dropdown narrow">打印文件 ▼ &nbsp;（空）</div>
-        <div class="dropdown">打印区域 ▼ &nbsp; Input_sheet, A1:D4</div>
+        <div class="dropdown">打印文件 ▼</div>
+        <div class="dropdown">打印区域 ▼</div>
         <div class="btn">打印</div>
       </div>
     </div>
   </main>
-  </div>
 </div>
 
 <script>
 (function () {
-  var SIDEBAR_MIN = 20;
-  var SIDEBAR_MAX = 400;
   var shell = document.getElementById("app-shell");
-  var sidebar = document.getElementById("sidebar");
   var foldBtn = document.getElementById("sidebar-fold-btn");
   var selectedName = document.getElementById("selected-template-name");
-  var resizeRail = document.getElementById("resize-rail");
-  var savedWidth = "200px";
-  var collapsed = false;
-
-  function clampWidth(px) {
-    return Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, px));
-  }
-
-  function normalizeSavedWidth() {
-    var n = parseInt(savedWidth, 10);
-    if (isNaN(n)) { n = 200; }
-    n = clampWidth(n);
-    savedWidth = n + "px";
-    return n;
-  }
-
-  function setCollapsed(next) {
-    collapsed = next;
-    shell.classList.toggle("is-sidebar-collapsed", collapsed);
-    foldBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
-    foldBtn.title = collapsed ? "展开左侧模板栏" : "折叠左侧模板栏";
-    foldBtn.setAttribute("aria-label", foldBtn.title);
-  }
+  var sidebar = document.getElementById("sidebar");
 
   foldBtn.addEventListener("click", function () {
-    if (!collapsed) {
-      savedWidth = shell.style.getPropertyValue("--sidebar-width") || savedWidth;
-    }
-    normalizeSavedWidth();
-    if (!collapsed) {
-      setCollapsed(true);
-      return;
-    }
-    shell.style.setProperty("--sidebar-width", savedWidth);
-    setCollapsed(false);
-  });
-
-  foldBtn.addEventListener("dblclick", function (e) {
-    e.preventDefault();
-    normalizeSavedWidth();
-    if (collapsed) {
-      shell.style.setProperty("--sidebar-width", savedWidth);
-      setCollapsed(false);
-    }
-  });
-
-  resizeRail.addEventListener("mousedown", function (e) {
-    if (e.button !== 0) { return; }
-    e.preventDefault();
-    var startX = e.clientX;
-    var startW = parseInt(shell.style.getPropertyValue("--sidebar-width"), 10) || 200;
-    if (collapsed) {
-      setCollapsed(false);
-    }
-    function onMove(ev) {
-      var w = clampWidth(startW + (ev.clientX - startX));
-      savedWidth = w + "px";
-      shell.style.setProperty("--sidebar-width", savedWidth);
-    }
-    function onUp() {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-    }
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
+    var collapsed = shell.classList.toggle("is-sidebar-collapsed");
+    foldBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
   });
 
   sidebar.querySelectorAll(".template-item").forEach(function (item) {
@@ -404,49 +253,19 @@
       });
       item.classList.add("active");
       item.classList.remove("muted");
-      var name = item.getAttribute("data-name") || item.textContent.trim();
+      var name = item.getAttribute("data-name") || "template_id";
       selectedName.textContent = name;
       selectedName.title = name;
     });
   });
-
-  /* 线框演示：列头排序仅重排 DOM；data-instance-k 不变 → 写回仍用 k */
-  var recordsTable = document.getElementById("session-records-table");
-  if (recordsTable) {
-    var sortState = { col: null, dir: 1 };
-    recordsTable.querySelectorAll("th.sortable").forEach(function (th) {
-      th.addEventListener("click", function () {
-        var col = parseInt(th.getAttribute("data-sort-col"), 10);
-        if (sortState.col === col) { sortState.dir = -sortState.dir; }
-        else { sortState.col = col; sortState.dir = 1; }
-        recordsTable.querySelectorAll("th.sortable").forEach(function (h) {
-          h.classList.remove("sort-asc", "sort-desc");
-        });
-        th.classList.add(sortState.dir === 1 ? "sort-asc" : "sort-desc");
-        var tbody = recordsTable.querySelector("tbody");
-        var rows = Array.prototype.slice.call(tbody.querySelectorAll("tr"));
-        rows.sort(function (a, b) {
-          var av = (a.children[col] && a.children[col].textContent) || "";
-          var bv = (b.children[col] && b.children[col].textContent) || "";
-          if (av === bv) {
-            return (parseInt(a.getAttribute("data-instance-k"), 10) || 0) -
-                   (parseInt(b.getAttribute("data-instance-k"), 10) || 0);
-          }
-          return av.localeCompare(bv, undefined, { numeric: true }) * sortState.dir;
-        });
-        rows.forEach(function (r) { tbody.appendChild(r); });
-      });
-    });
-  }
 })();
 </script>
 
 <div class="legend">
-  线框 · 主界面（输入）<br>
-  运行时：<code>ui.splitter</code> + CSS 折叠（非 value=0）；顶栏模板名与侧栏宽度解耦<br>
-  工具栏：保存 | 刷新数据 | 删除选中（两步） ‖ 添加数据<br>
-  独立库开关在「存储配置」Tab，持久化于模板 TOML <code>use_independent_db</code><br>
-  规范：nicegui_ui_plan.md §2.2、§3.1、§3.4；toml_config_design.md
+  线框 · 输入 Tab<br>
+  Shell = CSS Grid：左列 auto（顶栏模板名 + 列表同宽）；无 ui.splitter / 无 sidebar_width 存储<br>
+  Tab 宽 126px；选中 Tab 无底边线<br>
+  规范：nicegui_ui_plan.md §2
 </div>
 
 </body>

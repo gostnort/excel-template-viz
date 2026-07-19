@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+from enum import IntEnum
+
+class OcrStage(IntEnum):
+    IDLE = 0b000
+    FAST_OCR = 0b001
+    SEMANTIC_CHECK = 0b010
+    GEMMA_REFINE = 0b011
+    VL_REFINE = 0b100
 
 from paddle_ocr import config
 from paddle_ocr.engines.paddle_vl.backend import LlmRefine
@@ -34,6 +42,7 @@ def _unload_gemma4() -> None:
 def PaddleOcr(
     pic: PicInput,
     rectangle: Rectangle = None,
+    status_callback: Callable[[OcrStage], None] = None,
 ) -> dict[str, Any]:
     """One picture + optional OpenCV ROI → string*/table* JSON (no HealthCheck).
 
@@ -46,6 +55,7 @@ def PaddleOcr(
       无问题 → 返回 fast。
     实测峰值：Gemma4 4.6GB VRAM，VL 10.8GB VRAM（合计 15.4 → ≥14GB 才能同时驻留）。
     """
+    if status_callback: status_callback(OcrStage.FAST_OCR)
     try:
         fast = GetStructureBackend().Run(pic, rectangle)
     except Exception:
@@ -57,6 +67,7 @@ def PaddleOcr(
     if tier == "none":
         return fast
     # Gemma4 语义检查（首次调用自动加载 Gemma4 单例）。
+    if status_callback: status_callback(OcrStage.SEMANTIC_CHECK)
     if not HasOcrSemanticProblem(fast):
         return fast
     # 存在语义问题 → 按档位精修。
@@ -64,6 +75,7 @@ def PaddleOcr(
         # C3.3：Pic2Str 视觉读图 + 逐单元择优合并（保结构）。幻觉可接受——角色
         # character 是关键约束（见 docs/embed_paddle_ocr.md §3.2a / embed_gemma4.md §3.1d）。
         from paddle_ocr.gate.gemma_vision_correct import GemmaVisionCorrect
+        if status_callback: status_callback(OcrStage.GEMMA_REFINE)
         try:
             return GemmaVisionCorrect(pic, rectangle, fast)
         except Exception:
@@ -74,6 +86,7 @@ def PaddleOcr(
     if tier == "sequential":
         # VL 峰值 10.8GB + Gemma4 4.6GB = 15.4 不能同时驻留 → 先卸载 Gemma4。
         _unload_gemma4()
+    if status_callback: status_callback(OcrStage.VL_REFINE)
     try:
         vl = LlmRefine(pic, rectangle, draft=fast)
     except Exception:

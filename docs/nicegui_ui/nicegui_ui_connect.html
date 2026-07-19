@@ -8,157 +8,222 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: system-ui, "Microsoft YaHei", sans-serif;
-      font-size: 13px; line-height: 1.4; background: #fff; color: #000;
+      font-size: 13px; line-height: 1.4;
+      background: #fff; color: #000;
       height: 100vh; overflow: hidden;
     }
-    .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-    .shell { display: flex; flex-direction: column; height: 100vh; border: 2px solid #000; }
-    .shell-top { display: flex; flex-shrink: 0; border-bottom: 2px solid #000; min-height: 40px; }
-    .sidebar-header {
-      width: 200px; min-width: 200px; padding: 0 10px; font-weight: bold;
-      border-right: 1px solid #000; background: #f0f0f0;
-      display: flex; align-items: center;
+    .shell {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      grid-template-rows: auto 1fr;
+      height: 100vh;
+      border: 2px solid #000;
     }
-    .shell-body { display: flex; flex: 1; min-height: 0; }
-    .sidebar { width: 200px; border-right: 1px solid #000; flex-shrink: 0; }
-    .template-item { padding: 10px 12px; border-bottom: 1px solid #ccc; }
+    .sidebar-header {
+      grid-column: 1; grid-row: 1;
+      display: flex; align-items: center; gap: 8px;
+      padding: 0 8px 0 10px; min-height: 40px;
+      font-weight: bold;
+      border-right: 1px solid #000;
+      border-bottom: 2px solid #000;
+      background: #f0f0f0;
+      white-space: nowrap;
+    }
+    .sidebar-fold-btn {
+      width: 24px; height: 24px; flex-shrink: 0; margin-left: auto;
+      border: none; background: transparent; padding: 0; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .fold-chevron { width: 18px; height: 18px; display: block; }
+    .tabs {
+      grid-column: 2; grid-row: 1;
+      display: flex; align-items: stretch;
+      border-bottom: 2px solid #000;
+      background: #fff; min-height: 40px;
+    }
+    .tab {
+      width: 126px; min-width: 126px; max-width: 126px;
+      padding: 10px 0; border-right: 1px solid #000;
+      font-weight: bold; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .tab.active {
+      background: #eee;
+      margin-bottom: -2px;
+      border-bottom: 2px solid #eee;
+      position: relative; z-index: 1;
+    }
+    .sidebar {
+      grid-column: 1; grid-row: 2;
+      min-height: 0; overflow: auto;
+      border-right: 1px solid #000;
+    }
+    .shell.is-sidebar-collapsed .sidebar { display: none; }
+    .template-item { padding: 10px 12px; cursor: pointer; }
     .template-item.active { font-weight: bold; background: #e8e8e8; }
-    .resize-rail { width: 6px; flex-shrink: 0; }
-    .tabs { display: flex; flex: 1; background: #f0f0f0; }
-    .tab { padding: 10px 24px; border-right: 1px solid #000; font-weight: bold; }
-    .tab.active { background: #eee; }
+    .main {
+      grid-column: 2; grid-row: 2;
+      min-height: 0; overflow: hidden;
+      display: flex; flex-direction: column;
+    }
     .tab-body { flex: 1; overflow: auto; padding: 16px 20px; }
     .section { border: 1px solid #000; margin-bottom: 14px; }
-    .section-title { border-bottom: 1px solid #000; padding: 6px 10px; font-weight: bold; background: #f5f5f5; }
+    .section-title {
+      border-bottom: 1px solid #000; padding: 6px 10px;
+      font-weight: bold; background: #f5f5f5;
+    }
     .section-body { padding: 10px; }
-    .section-body.sheet-panel { position: relative; }
+    .form-row {
+      display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+      margin-bottom: 8px;
+    }
+    .form-row:last-child { margin-bottom: 0; }
+    .btn {
+      width: 110px; height: 36px;
+      border: 1px solid #000; background: #fff; font-weight: bold;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .btn.wide { width: auto; min-width: 130px; padding: 0 12px; }
+    .btn.linkish {
+      min-width: auto; width: auto; padding: 0 10px;
+      font-weight: normal; font-size: 12px;
+    }
+    .sheet-table-scroll {
+      overflow-x: auto; width: 100%; margin-bottom: 4px;
+      border: 1px dashed #999;
+    }
+    table.t { border-collapse: collapse; min-width: 100%; }
+    table.t th, table.t td {
+      border: 1px solid #000; padding: 4px 6px; text-align: left;
+      white-space: nowrap;
+    }
+    table.t th { background: #eee; }
+    table.t tbody tr:hover { background: #f7f7f7; }
+    table.t tbody tr.selected { background: #e8e8e8; font-weight: bold; }
+    .chkcol { width: 28px; text-align: center; }
     .sheet-toolbar-bar {
-      display: flex; width: 100%; align-items: center; margin-top: 8px; flex-wrap: nowrap;
+      display: flex; width: 100%; align-items: center;
+      margin-top: 8px; flex-wrap: nowrap;
     }
     .sheet-toolbar-bar .toolbar-main {
       display: flex; flex-wrap: nowrap; gap: 10px; align-items: center;
     }
     .sheet-toolbar-bar .toolbar-trash-anchor { margin-left: auto; flex-shrink: 0; }
-    .btn.linkish { min-width: auto; width: auto; padding: 0 10px; font-weight: normal; font-size: 12px; }
-    .form-row:last-child { margin-bottom: 0; }
-    .field-label { min-width: 88px; }
-    .ctrl { border: 1px solid #000; padding: 6px 8px; min-height: 32px; display: inline-flex; align-items: center; }
-    .ctrl.medium { min-width: 180px; }
-    .ctrl.wide { min-width: 420px; flex: 1; }
-    .ctrl.status-ok { background: #f0fff0; }
-    .ctrl.status-warn { background: #fff8e6; color: #664; }
-    .ctrl.status-off { color: #666; }
-    .btn { width: 110px; height: 36px; border: 1px solid #000; background: #fff; font-weight: bold; display: inline-flex; align-items: center; justify-content: center; }
-    .btn.primary { min-height: auto; min-width: 130px; padding: 0 12px; }
-    .btn.disabled { color: #999; border-color: #999; background: #f5f5f5; }
-    table.t { border-collapse: collapse; width: 100%; }
-    table.t th, table.t td { border: 1px solid #000; padding: 4px 6px; text-align: left; }
-    table.t th { background: #eee; }
-    table.t tbody tr:hover { background: #f7f7f7; }
-    table.t tbody tr.selected { background: #e8e8e8; font-weight: bold; }
-    .chkcol { width: 28px; text-align: center; }
     .hint { font-size: 11px; color: #666; margin-top: 6px; }
-    .legend { position: fixed; bottom: 8px; right: 8px; font-size: 11px; border: 1px dashed #000; padding: 8px 10px; background: #fff; max-width: 360px; }
-    .file-pick { border: 1px dashed #000; padding: 6px 10px; min-width: 200px; }
+    .legend {
+      position: fixed; bottom: 8px; right: 8px; font-size: 11px;
+      border: 1px dashed #000; padding: 8px 10px; background: #fff; max-width: 360px;
+    }
   </style>
 </head>
 <body>
 
-<div class="shell">
-  <header class="shell-top">
-    <div class="sidebar-header"><span>销售模板</span></div>
-    <nav class="tabs">
-      <div class="tab">输入</div>
-      <div class="tab">输入配置</div>
-      <div class="tab">存储配置</div>
-      <div class="tab active">Google 连接</div>
-    </nav>
-  </header>
-  <div class="shell-body">
-    <aside class="sidebar">
-      <div class="template-item active">销售模板</div>
-    </aside>
-    <div class="resize-rail"></div>
-    <div class="main">
-  <div class="tab-body">
-    <div class="section">
-      <div class="section-title">授权与连接</div>
-      <div class="section-body">
-        <div class="form-row">
-          <div class="btn">选择授权文件</div>
-          <div class="btn primary">连接</div>
-          <div class="btn">删除</div>
-        </div>
-        <p class="hint">
-          <strong>选择授权文件</strong>：系统文件对话框选择 OAuth 客户端 JSON → 写入 <code>credentials/oauth_client.json</code>，「连接」变为可用。<br>
-          <strong>连接</strong>：首次可能打开浏览器完成 OAuth；成功后 <code>AutoConnect(conn).run(cfg)</code> 加载 TOML 中 id 所在工作表（无 id 则第一个 field_rules 需要的工作表）并刷新下方 HTML5 表。<br>
-          <strong>删除</strong>：<code>cancel_auth()</code>，移除授权文件并清空连接。<br>
-          模板激活后若已存在授权文件，自动调用 <code>core_connect.AutoConnect.run()</code>，无需再点「连接」。
-        </p>
-      </div>
-    </div>
+<div class="shell" id="app-shell">
 
-    <div class="section">
-      <div class="section-title">主 ID 工作表</div>
-      <div class="section-body">
-        <table class="t">
-          <thead>
-            <tr>
-              <th class="chkcol">☐</th>
-              <th>PO</th>
-              <th>recv. date</th>
-              <th>Container</th>
-              <th>…</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr class="selected">
-              <td class="chkcol">☑</td>
-              <td>10034</td>
-              <td>3/15/2025</td>
-              <td>…</td>
-              <td>…</td>
-            </tr>
-            <tr class="selected">
-              <td class="chkcol">☑</td>
-              <td>9982</td>
-              <td>3/14/2025</td>
-              <td>…</td>
-              <td>…</td>
-            </tr>
-            <tr>
-              <td class="chkcol">☐</td>
-              <td>9971</td>
-              <td>…</td>
-              <td>…</td>
-              <td>…</td>
-            </tr>
-          </tbody>
-        </table>
-        <div class="sheet-toolbar-bar">
-          <div class="toolbar-main">
-            <div class="btn">全选</div>
-            <div class="btn">取消全选</div>
-            <div class="btn primary">导入选中行</div>
+  <div class="sidebar-header">
+    <span class="selected-template-name">template_id</span>
+    <button type="button" class="sidebar-fold-btn" id="sidebar-fold-btn"
+            title="折叠/展开" aria-expanded="true">
+      <svg class="fold-chevron" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M14 5 L8 12 L14 19" fill="none" stroke="currentColor" stroke-width="2.2"
+              stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M19 5 L13 12 L19 19" fill="none" stroke="currentColor" stroke-width="2.2"
+              stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+  </div>
+
+  <nav class="tabs">
+    <div class="tab">输入</div>
+    <div class="tab">输入配置</div>
+    <div class="tab">存储配置</div>
+    <div class="tab active">Google 连接</div>
+  </nav>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="template-item active">显示名甲</div>
+    <div class="template-item">显示名乙</div>
+    <div class="template-item">显示名丙</div>
+  </aside>
+
+  <main class="main">
+    <div class="tab-body">
+
+      <div class="section">
+        <div class="section-title">授权与连接</div>
+        <div class="section-body">
+          <div class="form-row">
+            <div class="btn wide">选择授权文件</div>
+            <div class="btn">连接</div>
+            <div class="btn">删除</div>
           </div>
-          <div class="btn linkish toolbar-trash-anchor">屏蔽所选数据</div>
+          <p class="hint">OAuth 客户端 JSON → credentials/oauth_client.json；连接后 AutoConnect 加载主 ID 工作表。</p>
         </div>
-        <p class="hint">
-          数据来自 <code>session.google_table</code>；已入库 ID 由 <code>db.query_by_id</code> 判定并隐藏；<code>trash_ids</code> 来自 <code>templates/{id}/{id}.history.json</code>（无 <code>processed_ids</code>），用于避免大量无关行涌入主 ID 表。<br>
-          勾选行载入「输入」Tab <code>draft</code>；「导入选中行」合并 <code>template_defaults</code> 后 persist。<br>
-          右下角 <strong>屏蔽所选数据</strong>：将当前勾选的可见行主 ID 追加到 <code>trash_ids</code> 并写回 history 文件，对应行随即从表中隐藏。
-        </p>
       </div>
+
+      <div class="section">
+        <div class="section-title">主 ID 工作表</div>
+        <div class="section-body">
+          <div class="sheet-table-scroll">
+            <table class="t">
+              <thead>
+                <tr>
+                  <th class="chkcol">☐</th>
+                  <th>列1</th>
+                  <th>列2</th>
+                  <th>列3</th>
+                  <th>列4</th>
+                  <th>列5</th>
+                  <th>…</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="selected">
+                  <td class="chkcol">☑</td>
+                  <td>…</td><td>…</td><td>…</td><td>…</td><td>…</td><td>…</td>
+                </tr>
+                <tr>
+                  <td class="chkcol">☐</td>
+                  <td>…</td><td>…</td><td>…</td><td>…</td><td>…</td><td>…</td>
+                </tr>
+                <tr>
+                  <td class="chkcol">☐</td>
+                  <td>…</td><td>…</td><td>…</td><td>…</td><td>…</td><td>…</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="sheet-toolbar-bar">
+            <div class="toolbar-main">
+              <div class="btn">全选</div>
+              <div class="btn">取消全选</div>
+              <div class="btn wide">导入选中行</div>
+            </div>
+            <div class="btn linkish toolbar-trash-anchor">屏蔽所选数据</div>
+          </div>
+          <p class="hint">宽表横向滚动（.sheet-table-scroll）；已入库 ID 隐藏；trash_ids 写 history.json。</p>
+        </div>
+      </div>
+
     </div>
-  </div>
-    </div>
-  </div>
+  </main>
 </div>
 
+<script>
+(function () {
+  var shell = document.getElementById("app-shell");
+  var foldBtn = document.getElementById("sidebar-fold-btn");
+  foldBtn.addEventListener("click", function () {
+    var collapsed = shell.classList.toggle("is-sidebar-collapsed");
+    foldBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  });
+})();
+</script>
+
 <div class="legend">
-  线框 · Google 连接 · shell 与 index 一致（显示 vs 存储 §2.2）<br>
-  选择授权文件 · 连接 · 删除 · AutoConnect.run()<br>
-  tab_google 仅 HTML5 表 · 详见 docs/connect_google.md · nicegui_ui_plan.md §2.2
+  线框 · Google 连接 Tab<br>
+  Shell = CSS Grid；主 ID 表 .sheet-table-scroll 横向滚动<br>
+  规范：nicegui_ui_plan.md §3.2
 </div>
 
 </body>
