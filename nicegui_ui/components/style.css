@@ -120,9 +120,6 @@ html, body {
 .shell.is-sidebar-collapsed .main {
   grid-column: 1 / -1;
 }
-.shell.is-sidebar-collapsed .tabs {
-  grid-column: 1 / -1;
-}
 .template-item { padding: 10px 12px; cursor: pointer; }
 .template-item.active { font-weight: bold; background: #e8e8e8; }
 .template-item.muted { color: #555; }
@@ -213,20 +210,17 @@ html, body {
 .ghost-note { font-size: 11px; color: #888; margin: 0 0 16px 4px; }
 
 /* 标签 + 输入 */
-/* 动态字段：桌面每组最多 600px，auto-fill 多列；移动每行一组 */
+/* 动态字段：基于 auto-fit 和 minmax(min(100%, 400px), 1fr) 的流式布局 */
 .field-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 600px));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr));
   justify-content: start;
   gap: 12px 20px;
   width: 100%;
   max-width: 100%;
   margin-top: 5px;
 }
-.mobile-menu-btn { display: none; }
 @media (max-width: 639px) {
-  .field-grid { grid-template-columns: 1fr; }
-  .mobile-menu-btn { display: inline-flex; }
   .tabs {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
@@ -295,13 +289,24 @@ html, body {
   }
 }
 .field-cell {
+  container-type: inline-size;
+  container-name: field-suite;
   display: grid;
-  grid-template-columns: 100px minmax(0, 1fr);
+  grid-template-columns: fit-content(35%) minmax(0, 1fr) auto;
   gap: 8px;
   align-items: center;
   min-width: 0;
-  max-width: 600px;
   width: 100%;
+}
+
+@container field-suite (max-width: 350px) {
+  .field-cell {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .field-label {
+    text-align: left;
+  }
 }
 .field-input-row {
   display: flex;

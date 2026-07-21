@@ -402,10 +402,12 @@ def _show_preview_dialog(
             dialog.close()
             run_ocr(session, label, input_element)
 
-        with ui.row().classes("w-full justify-between mt-4 flex-wrap gap-2"):
-            ui.button("取消", on_click=dialog.close).props("flat")
-            AppBtn("保存", on_click=save_crop)
-            AppBtn("OCR", on_click=start_ocr)
+        with ui.row().classes("w-full items-center mt-4 flex-wrap gap-2"):
+            AppBtn("取消", on_click=dialog.close).props("flat")
+            ui.space()
+            with ui.row().classes("gap-2"):
+                AppBtn("保存", variant="db", on_click=save_crop)
+                AppBtn("OCR", on_click=start_ocr)
     dialog.open()
 
 
