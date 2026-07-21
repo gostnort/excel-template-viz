@@ -1,4 +1,4 @@
-"""应用按钮：Python 只组合类名，颜色与尺寸由 style.css 变量控制。"""
+"""应用按钮：基于 NiceGUI/Quasar 原生 ui.button 的面向对象封装。"""
 
 from __future__ import annotations
 
@@ -6,84 +6,55 @@ from collections.abc import Callable
 from typing import Any, Literal
 
 from nicegui import ui
-from nicegui.elements.label import Label as NiceLabel
 
 BtnVariant = Literal["default", "excel", "db", "google", "danger"]
 
-_VARIANT_CLASS: dict[BtnVariant, str] = {
-    "default": "",
-    "excel": "excel",
-    "db": "db",
-    "google": "google",
-    "danger": "danger",
-}
 
-
-def _build_btn_classes(
-    variant: BtnVariant = "default",
-    *,
-    primary: bool = False,
-    disabled: bool = False,
-    extra_classes: str = "",
-) -> str:
-    # 只输出类名，不含任何颜色或尺寸字面量
-    parts = ["btn"]
-    variant_cls = _VARIANT_CLASS.get(variant, "")
-    if variant_cls:
-        parts.append(variant_cls)
-    if primary:
-        parts.append("primary")
-    if disabled:
-        parts.append("disabled")
-    if extra_classes.strip():
-        parts.extend(extra_classes.split())
-    return " ".join(parts)
-
-
-def app_btn(
-    text: str,
-    *,
-    on_click: Callable[..., Any] | None = None,
-    variant: BtnVariant = "default",
-    primary: bool = False,
-    disabled: bool = False,
-    extra_classes: str = "",
-) -> NiceLabel:
+class AppBtn(ui.button):
     """
-    函数名: app_btn
-    作用: 创建应用统一样式按钮（ui.label + .btn 变体类）
-    输入:
-        text (str): 按钮文案
-        on_click: 点击回调，None 则不绑定
-        variant: default | excel | db | google | danger
-        primary (bool): 加宽内边距修饰符
-        disabled (bool): 禁用修饰符
-        extra_classes (str): 布局类（如 toolbar-trash-anchor）
-    输出:
-        NiceLabel: NiceGUI 元素
+    类名: AppBtn
+    作用: 应用统一样式按钮，继承自 ui.button，自动映射 variant 到 Quasar 主题色。
     """
-    cls = _build_btn_classes(
-        variant,
-        primary=primary,
-        disabled=disabled,
-        extra_classes=extra_classes,
-    )
-    el = ui.label(text).classes(cls)
-    if on_click is not None:
-        el.on("click", on_click)
-    return el
 
+    def __init__(
+        self,
+        text: str = '',
+        *,
+        on_click: Callable[..., Any] | None = None,
+        variant: BtnVariant = "default",
+        primary: bool = False,
+        disabled: bool = False,
+        extra_classes: str = "",
+    ) -> None:
+        """
+        函数名: __init__
+        作用: 初始化应用按钮
+        输入:
+            text (str): 按钮文案
+            on_click: 点击回调，None 则不绑定
+            variant (BtnVariant): 预设颜色变体
+            primary (bool): 预留的主要按钮修饰（增加边距等）
+            disabled (bool): 初始禁用状态
+            extra_classes (str): 附加 CSS 类名
+        输出: 
+            无
+        """
+        super().__init__(text=text, color=None, on_click=on_click)
+        
+        # 基础样式与无阴影设计
+        self.classes('app-btn')
+        self.props('unelevated')
+        
+        if variant == "default":
+            self.props('outline text-color="black" color="grey-8"')
+        else:
+            self.classes(f'app-btn-{variant}')
 
-def app_btn_set_disabled(el: NiceLabel, disabled: bool) -> None:
-    """
-    函数名: app_btn_set_disabled
-    作用: 切换按钮 .disabled 修饰类
-    输入:
-        el (NiceLabel): app_btn 返回值
-        disabled (bool): 是否禁用
-    输出: 无
-    """
-    if disabled:
-        el.classes("disabled")
-    else:
-        el.classes(remove="disabled")
+        if primary:
+            self.classes('primary')
+            
+        if extra_classes.strip():
+            self.classes(extra_classes)
+            
+        if disabled:
+            self.disable()

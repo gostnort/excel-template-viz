@@ -12,7 +12,7 @@ from app.core_connect import (
     save_trash_history,
 )
 from app.core_store import _normalize_id
-from nicegui_ui.components.buttons import app_btn
+from nicegui_ui.components.buttons import AppBtn
 from nicegui_ui.components.for_main import IdLookup
 from nicegui_ui.components.general import SessionRegistry
 
@@ -265,7 +265,7 @@ def render_google_tab():
                     )
                 )
                 with ui.element("div").classes("form-row"):
-                    app_btn(
+                    AppBtn(
                         "选择授权文件",
                         variant="google",
                         on_click=lambda: upload.run_method("pickFiles"),
@@ -300,9 +300,9 @@ def render_google_tab():
                             except Exception as exc:
                                 ui.notify(f"连接失败: {exc}", type="negative")
 
-                        app_btn("连接", variant="google", primary=True, on_click=handle_connect)
+                        AppBtn("连接", variant="google", primary=True, on_click=handle_connect)
                     else:
-                        app_btn("连接", variant="google", primary=True, disabled=True)
+                        AppBtn("连接", variant="google", primary=True, disabled=True)
                     def handle_delete() -> None:
                         """
                         函数名: handle_delete
@@ -317,9 +317,9 @@ def render_google_tab():
                         render_google_tab.refresh()
 
                     if client_ready:
-                        app_btn("删除", variant="google", on_click=handle_delete)
+                        AppBtn("删除", variant="google", on_click=handle_delete)
                     else:
-                        app_btn("删除", variant="google", disabled=True)
+                        AppBtn("删除", variant="google", disabled=True)
                 ui.label(
                     "选择授权文件后「连接」可用；模板激活且已授权时由 AutoConnect 自动连接。"
                 ).classes("hint")
@@ -407,15 +407,15 @@ def render_google_tab():
                             except Exception as exc:
                                 ui.notify(f"导入失败: {exc}", type="negative")
 
-                        app_btn("全选", on_click=handle_select_all)
-                        app_btn("取消全选", on_click=handle_deselect_all)
-                        app_btn(
+                        AppBtn("全选", on_click=handle_select_all)
+                        AppBtn("取消全选", on_click=handle_deselect_all)
+                        AppBtn(
                             "导入选中行",
                             variant="google",
                             primary=True,
                             on_click=handle_import,
                         )
-                    app_btn(
+                    AppBtn(
                         "屏蔽所选数据",
                         extra_classes="toolbar-trash-anchor",
                         on_click=lambda: _block_selected_rows(session),

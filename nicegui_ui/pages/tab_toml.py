@@ -2,7 +2,7 @@ import subprocess
 import sys
 
 from nicegui import ui
-from nicegui_ui.components.buttons import app_btn
+from nicegui_ui.components.buttons import AppBtn
 from nicegui_ui.components.general import SessionRegistry
 
 
@@ -19,7 +19,7 @@ def render_toml_tab():
             ui.label("校验与应用").classes("section-title")
             with ui.element("div").classes("section-body"):
                 with ui.element("div").classes("form-row"):
-                    app_btn(
+                    AppBtn(
                         "校验并应用配置",
                         primary=True,
                         on_click=lambda: trigger_toml_save(session),
@@ -91,8 +91,8 @@ def render_toml_tab():
                         ui.notify(f"保存文件失败: {str(e)}", type="negative")
 
                 with ui.element('div').classes('form-row').style('margin-top:8px'):
-                    app_btn('保存', on_click=save_raw_toml)
-                    app_btn('重置', on_click=render_toml_tab.refresh)
+                    AppBtn('保存', on_click=save_raw_toml)
+                    AppBtn('重置', on_click=render_toml_tab.refresh)
 
 
 def trigger_toml_save(session):

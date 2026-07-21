@@ -462,85 +462,58 @@ table.records tbody tr.selected, table.t tbody tr.selected { background: #e8e8e8
 .list-btns { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
 .list-btns-end { display: flex; gap: 8px; }
 
-/* 统一按钮：hex 仅在 :root；类只引用 var(--color-btn-*) */
-.btn {
-  width: var(--btn-width);
-  height: var(--btn-height);
-  min-width: var(--btn-width);
-  min-height: var(--btn-height);
-  border: 1px solid var(--color-btn-default-border);
-  background-color: var(--color-btn-default-bg);
-  color: var(--color-btn-default-fg);
-  font-size: var(--btn-font-size);
-  font-weight: var(--btn-font-weight);
-  line-height: var(--btn-line-height);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  cursor: pointer;
-  box-sizing: border-box;
-}
-.btn:hover:not(.disabled) {
-  background-color: var(--color-btn-default-bg-hover);
-}
-.btn.primary {
-  padding: 0 var(--btn-padding-x);
-}
-.btn.disabled {
-  color: var(--color-btn-disabled-fg);
-  border-color: var(--color-btn-disabled-border);
-  background-color: var(--color-btn-disabled-bg);
-  cursor: not-allowed;
-}
-.btn.excel {
+/* 业务专属按钮样式 (无需 !important，因为我们不再传递冲突的 color prop) */
+.app-btn-excel {
   background-color: var(--color-btn-excel-bg);
   border-color: var(--color-btn-excel-border);
   color: var(--color-btn-excel-fg);
 }
-.btn.excel:hover:not(.disabled) {
+.app-btn-excel:hover:not([disabled]) {
   background-color: var(--color-btn-excel-bg-hover);
 }
-.btn.excel.disabled {
-  color: var(--color-btn-disabled-muted-fg);
-  border-color: var(--color-btn-disabled-border);
-  background-color: var(--color-btn-excel-disabled-bg);
-}
-.btn.db {
+
+.app-btn-db {
   background-color: var(--color-btn-db-bg);
   border-color: var(--color-btn-db-border);
   color: var(--color-btn-db-fg);
 }
-.btn.db:hover:not(.disabled) {
+.app-btn-db:hover:not([disabled]) {
   background-color: var(--color-btn-db-bg-hover);
 }
-.btn.db.disabled {
-  color: var(--color-btn-disabled-muted-fg);
-  border-color: var(--color-btn-disabled-border);
-  background-color: var(--color-btn-db-disabled-bg);
-}
-.btn.google {
+
+.app-btn-google {
   background-color: var(--color-btn-google-bg);
   border-color: var(--color-btn-google-border);
   color: var(--color-btn-google-fg);
 }
-.btn.google:hover:not(.disabled) {
+.app-btn-google:hover:not([disabled]) {
   background-color: var(--color-btn-google-bg-hover);
 }
-.btn.google.disabled {
-  color: var(--color-btn-disabled-muted-fg);
-  border-color: var(--color-btn-disabled-border);
-  background-color: var(--color-btn-google-disabled-bg);
-}
-.btn.danger {
+
+.app-btn-danger {
   background-color: var(--color-btn-danger-bg);
   border-color: var(--color-btn-danger-border);
   color: var(--color-btn-danger-fg);
 }
-.btn.danger:hover:not(.disabled) {
+.app-btn-danger:hover:not([disabled]) {
   background-color: var(--color-btn-danger-bg-hover);
 }
-.btn.linkish {
+
+
+/* 统一按钮：hex 仅在 :root；类只引用 var(--color-btn-*) */
+.app-btn {
+  width: var(--btn-width);
+  height: var(--btn-height);
+  min-width: var(--btn-width);
+  min-height: var(--btn-height);
+  font-size: var(--btn-font-size);
+  font-weight: var(--btn-font-weight);
+  line-height: var(--btn-line-height);
+}
+.app-btn.primary {
+  padding: 0 var(--btn-padding-x);
+}
+.app-btn.linkish {
   font-weight: normal;
   font-size: var(--btn-font-size-linkish);
 }

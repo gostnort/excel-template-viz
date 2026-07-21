@@ -5,7 +5,7 @@ from typing import Any
 
 from nicegui import run, ui
 
-from nicegui_ui.components.buttons import app_btn
+from nicegui_ui.components.buttons import AppBtn
 
 GHOST_OCR_LABEL = "顶部粘贴"
 
@@ -404,8 +404,8 @@ def _show_preview_dialog(
 
         with ui.row().classes("w-full justify-between mt-4 flex-wrap gap-2"):
             ui.button("取消", on_click=dialog.close).props("flat")
-            app_btn("保存", on_click=save_crop)
-            app_btn("OCR", on_click=start_ocr)
+            AppBtn("保存", on_click=save_crop)
+            AppBtn("OCR", on_click=start_ocr)
     dialog.open()
 
 

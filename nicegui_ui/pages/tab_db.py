@@ -1,5 +1,5 @@
 from nicegui import ui
-from nicegui_ui.components.buttons import app_btn, app_btn_set_disabled
+from nicegui_ui.components.buttons import AppBtn
 from nicegui_ui.components.general import SessionRegistry
 from app.core_store import list_db_paths, allocate_next_db_path
 
@@ -87,18 +87,18 @@ def render_db_tab():
                         render_db_tab.refresh()
                         from nicegui_ui.pages.tab_input import render_input_tab
                         render_input_tab.refresh()
-                    switch_lbl = app_btn("切换", variant="db", disabled=True, on_click=on_switch)
+                    switch_lbl = AppBtn("切换", variant="db", disabled=True, on_click=on_switch)
                     if not session.use_independent_db:
                         db_select.props("disable")
-                        app_btn_set_disabled(switch_lbl, True)
+                        switch_lbl.disable()
                     def on_db_select_change() -> None:
                         if (
                             db_select.value != current_db_str
                             and session.use_independent_db
                         ):
-                            app_btn_set_disabled(switch_lbl, False)
+                            switch_lbl.enable()
                         else:
-                            app_btn_set_disabled(switch_lbl, True)
+                            switch_lbl.disable()
 
                     db_select.on("update:model-value", lambda _e: on_db_select_change())
 
@@ -134,9 +134,9 @@ def render_db_tab():
                         except Exception as e:
                             ui.notify(f"创建失败: {str(e)}", type="negative")
 
-                    new_db_btn = app_btn("新建库", variant="db", on_click=on_new_db)
+                    new_db_btn = AppBtn("新建库", variant="db", on_click=on_new_db)
                     if not session.use_independent_db:
-                        app_btn_set_disabled(new_db_btn, True)
+                        new_db_btn.disable()
 
                 ui.label(
                     "「切换」平时不可用；仅当 Dropdown 选中项 ≠ 当前使用库时才变为可点。"
@@ -334,4 +334,4 @@ def render_db_tab():
 
                         add_image_pick_menu_items(session, "覆盖录入", overwrite_input)
                 with ui.element("div").classes("form-row").style("margin-top:8px"):
-                    app_btn("覆盖保存", variant="db", on_click=on_overwrite)
+                    AppBtn("覆盖保存", variant="db", on_click=on_overwrite)

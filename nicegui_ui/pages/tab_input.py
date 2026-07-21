@@ -5,7 +5,7 @@ from typing import Any
 
 from nicegui import ui
 
-from nicegui_ui.components.buttons import app_btn
+from nicegui_ui.components.buttons import AppBtn
 from nicegui_ui.components.for_main import IdLookup
 from nicegui_ui.components.general import SessionRegistry, list_export_files
 from nicegui_ui.components.ocr_menu import (
@@ -48,9 +48,9 @@ def _open_print_preview(png_bytes: bytes, download_name: str) -> None:
         ui.label("打印预览").classes("text-h6 no-print")
         ui.image(data_url).classes("w-full excel-print-image")
         with ui.row().classes("w-full justify-end gap-2 mt-2 no-print"):
-            app_btn("关闭", on_click=dialog.close)
-            app_btn("下载 PNG", on_click=lambda: ui.download(png_bytes, download_name))
-            app_btn("打印", variant="excel", on_click=lambda: ui.run_javascript("window.print()"))
+            AppBtn("关闭", on_click=dialog.close)
+            AppBtn("下载 PNG", on_click=lambda: ui.download(png_bytes, download_name))
+            AppBtn("打印", variant="excel", on_click=lambda: ui.run_javascript("window.print()"))
     dialog.open()
 
 
@@ -321,7 +321,7 @@ def render_print_row(session) -> None:
             .classes("dropdown narrow")
             .props("dense borderless hide-bottom-space")
         )
-        app_btn(
+        AppBtn(
             "打印",
             variant="excel",
             on_click=lambda: handle_print(session, selected_area.value, selected_path),
@@ -414,30 +414,30 @@ def render_input_tab():
 
             with ui.row().classes("gap-2 items-center"):
                 if validation_ok:
-                    app_btn("保存", variant="excel", on_click=lambda: handle_save_as(session))
+                    AppBtn("保存", variant="excel", on_click=lambda: handle_save_as(session))
                 else:
-                    app_btn("保存", variant="excel", disabled=True)
+                    AppBtn("保存", variant="excel", disabled=True)
                 def on_refresh():
                     from nicegui_ui.components.for_main import ForMain
                     ForMain.refresh_session_from_source(session)
                     render_input_tab.refresh()
-                app_btn("刷新数据", variant="excel", on_click=on_refresh)
+                AppBtn("刷新数据", variant="excel", on_click=on_refresh)
                 if getattr(session, "delete_mode", False):
-                    app_btn(
+                    AppBtn(
                         "确认删除",
                         variant="danger",
                         on_click=lambda: handle_delete_checked_session_rows(session),
                     )
                 else:
-                    app_btn(
+                    AppBtn(
                         "删除选中",
                         on_click=lambda: handle_delete_checked_session_rows(session),
                     )
             with ui.row().classes("gap-2 items-center"):
                 if validation_ok:
-                    app_btn("添加数据", variant="db", on_click=lambda: handle_next_row(session))
+                    AppBtn("添加数据", variant="db", on_click=lambda: handle_next_row(session))
                 else:
-                    app_btn("添加数据", variant="db", disabled=True)
+                    AppBtn("添加数据", variant="db", disabled=True)
 
         ui.element("div").classes("w-full shrink-0").style(
             "height:1px; background:#000; margin: 10px 0;"
@@ -506,8 +506,8 @@ def render_dynamic_fields(session, labels: list[str]):
                                 ui.notify(f"数据源中未找到 ID {val}", type="warning")
 
                         with ui.row().classes("gap-2"):
-                            app_btn("从数据源重新读取", on_click=refetch_from_source)
-                            app_btn(
+                            AppBtn("从数据源重新读取", on_click=refetch_from_source)
+                            AppBtn(
                                 "从数据库读取",
                                 on_click=lambda: load_and_close(dialog, existing),
                             )
