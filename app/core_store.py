@@ -754,7 +754,14 @@ class UiProvider:
         输出:
             list[str] - 拆分后的段列表
         """
-        return raw.split(self.cfg.determiner)
+        det = self.cfg.determiner
+        if isinstance(det, list):
+            import re
+            # 按长度降序排序，确保长分隔符优先匹配（如 \r\n 优先于 \n）
+            pattern = "|".join(re.escape(d) for d in sorted(det, key=len, reverse=True))
+            return re.split(pattern, raw)
+        else:
+            return raw.split(det)
 
 
     def record_from_textbox(self, raw: str) -> dict[str, Any]:

@@ -1,4 +1,4 @@
-"""LiteRtBackend: long-lived Engine + Conversation-per-call `generate()`.
+ï»¿"""LiteRtBackend: long-lived Engine + Conversation-per-call `generate()`.
 
 Real API facts this file relies on (verified 2026-07-11 against `litert-lm`
 0.14.0 + gemma-4-E4B-it.litertlm, see docs/embed_gemma4.md ?1.3/?3.1/?3.2.1/?3.6.1a):
@@ -166,7 +166,7 @@ class LiteRtBackend:
             self._engine = None
 
     def _ensure_engine(self) -> "lm.Engine":
-        # Blocks here, on first real use, on any in-flight async download ÿÿÿ
+        # Blocks here, on first real use, on any in-flight async download ï£µï£µï£µ
         # construction (`__init__`) itself never blocks (see hf_download.py).
         if self._engine is not None:
             return self._engine

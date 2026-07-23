@@ -387,7 +387,11 @@ def _config_from_dict(raw: dict[str, Any]) -> GetTomlValues | None:
     # 三项必备：work_sheet、单条 input_section、至少一条 fields
     if not work_sheet or input_section is None or not field_rules:
         return None
-    determiner = str(raw.get("determiner", DEFAULT_DETERMINER)) or DEFAULT_DETERMINER
+    determiner_raw = raw.get("determiner", DEFAULT_DETERMINER)
+    if isinstance(determiner_raw, list):
+        determiner = [str(x) for x in determiner_raw]
+    else:
+        determiner = str(determiner_raw) or DEFAULT_DETERMINER
     db_id = _optional_string(raw.get("db_id"))
     use_independent_db = _parse_bool(raw.get("use_independent_db", True))
     return GetTomlValues(
@@ -413,7 +417,14 @@ def _dict_to_toml(config: dict[str, Any]) -> str:
     """
     # ---- 顶层标量：determiner、work_sheet、print_sheet ----
     doc = document()
-    doc["determiner"] = str(config.get("determiner", DEFAULT_DETERMINER))
+    determiner_raw = config.get("determiner", DEFAULT_DETERMINER)
+    if isinstance(determiner_raw, list):
+        from tomlkit import array
+        arr = array()
+        for x in determiner_raw: arr.append(str(x))
+        doc["determiner"] = arr
+    else:
+        doc["determiner"] = str(determiner_raw)
     work_sheet = config.get("work_sheet", config.get("worksheet", ""))
     doc["work_sheet"] = str(work_sheet or "")
     print_sheet = config.get("print_sheet")
@@ -988,7 +999,7 @@ class GetTomlValues:
 
     def __init__(
         self,
-        determiner: str = DEFAULT_DETERMINER,
+        determiner: str | list[str] = DEFAULT_DETERMINER,
         sources: list[dict[str, str | None]] | None = None,
         field_rules: list[TomlDefault] | None = None,
         work_sheet: str | None = None,
@@ -1001,7 +1012,7 @@ class GetTomlValues:
         函数名: GetTomlValues.__init__
         作用: 构造已加载配置对象；可选参数缺省时给出安全默认
         输入:
-            determiner (str) - 文本拆分分隔符
+            determiner (str | list[str]) - 文本拆分分隔符，可以是单字符串或字符串列表
             sources (list[dict[str, str | None]] | None) - 数据源别名列表
             field_rules (list[TomlDefault] | None) - 字段规则列表
             work_sheet (str | None) - 数据录入 / TOML 定位工作表名

@@ -51,5 +51,7 @@ exports/
 temp/
 
 # Local TLS Certificates
-certs/*.crt
-certs/*.key
+certs/
+
+# Pytest cache
+.pytest_cache/

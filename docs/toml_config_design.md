@@ -292,7 +292,7 @@ UI **只**调用一个函数 `verify_toml()`，由 `core_toml` 完成「打开 x
 ### 配置示例
 
 ```# toml
-determiner = "\t"           # 纯文本粘贴的分隔符；支持 \t(tab) 等转义字符和其他单字符分隔符
+determiner = "\t"           # 纯文本粘贴的分隔符；支持单字符串（如 "\t"）或多个分隔符组成的列表（如 ["\r\n", "\n", "\t"]）
 work_sheet = "Input_sheet"   # 模板中需要输入数据的表格（TOML 定位 / 读写）
 print_sheet = "Print_sheet"  # UI 打印区选择与 Windows 打印时激活的工作表（可选）
 use_independent_db = true    # 是否使用独立后缀数据库（false = 模板 xlsx 即数据表）
