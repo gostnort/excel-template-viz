@@ -5,7 +5,8 @@
 | 版本 | 分支 / 标签 | 说明 |
 |------|-------------|------|
 | **0.1** | `split-logic-core` · `v0.1` | NiceGUI 核心基线（无 OCR / Gemma4 平台） |
-| 开发中 | `add-paddle-ocr` 等 | 见 [`docs/RELEASE.md`](docs/RELEASE.md) |
+| **0.1.1** | `add-paddle-ocr` · `0.1.1` | 引入 PaddleOCR 视觉平台与 UI 拍照回填集成 |
+| 开发中 | `toml-guide` | Gemma 4 智能向导（7 步全局悬浮窗）开发中 |
 
 ## 安装
 
@@ -98,7 +99,7 @@ python -m llm_gemma4 "用一句话介绍你自己"
 | `cuda` | 强制 GPU（含 NVIDIA 独显） | `Backend.GPU()` |
 | `openvino` | 保留名；本运行时走 GPU 档 | `Backend.GPU()` |
 
-TOML 配置向导（应用层编排）规格见 `docs/gemma4_e4b_workflow.md`；NiceGUI「TOML」页当前提供校验与全文编辑，向导 UI 尚未接入。
+TOML 配置向导（应用层编排）规格见 `docs/gemma4_e4b_workflow.md`；NiceGUI「TOML」页当前提供校验与全文编辑，向导智能悬浮窗正在 `toml-guide` 分支开发中。
 
 ### 可选：PaddleOCR（`paddle_ocr/`）
 
@@ -132,7 +133,7 @@ TOML 配置向导（应用层编排）规格见 `docs/gemma4_e4b_workflow.md`；
 2. **Web 表单替代手工填表**：NiceGUI 提供可折叠侧边栏选模板、输入区动态字段、会话行列表、数据库存储与 Google 表格按 ID 拉取；字段支持拍照缓存与一次 OCR 回填。
 3. **落库与回写分离**：`app/core_store.py` 负责 SQLite 落库、附图与 UI 字段供给；`app/core_transform.py` 负责按 TOML 坐标写回 xlsx、计算打印区域。
 4. **导出与打印**：「另存为」生成 `exports/{template_id}/` 下带时间戳的 xlsx；可在浏览器内预览打印区域并打印，无需安装 Excel。
-5. **可扩展**：TOML 支持 `regex` 规范化粘贴内容、`[[sources]]` 连接 Google Sheet；可选 **Gemma 4**（`llm_gemma4/`）作 OCR 语义门禁与视觉纠错，**PaddleOCR**（`paddle_ocr/`）作 fast/VL 识别管线。
+5. **可扩展**：TOML 支持 `regex` 规范化粘贴内容、**`determiner` 多分隔符（如 `\r\n` 与 `\t` 数组支持）拆分**、`[[sources]]` 连接 Google Sheet；可选 **Gemma 4**（`llm_gemma4/`）作 OCR 语义纠正与向导推理，**PaddleOCR**（`paddle_ocr/`）作 fast/VL 识别管线。
 
 业务逻辑集中在 `app/`；界面在 `nicegui_ui/`。结构依赖图见 `plans/codegraph.html` 与 `plans/CODEGRAPH_OVERVIEW.md`。
 
@@ -144,5 +145,5 @@ TOML 配置向导（应用层编排）规格见 `docs/gemma4_e4b_workflow.md`；
 - `docs/nicegui_ui/nicegui_ui_plan.md` — NiceGUI 迁移与交互规格
 - `docs/embed_gemma4.md` — Gemma 4 LiteRT 运行时
 - `docs/embed_paddle_ocr.md` — PaddleOCR 平台与内存分级精修
-- `docs/gemma4_e4b_workflow.md` — TOML 向导应用层（规划中）
+- `docs/gemma4_e4b_workflow.md` — TOML 智能向导 7 步工作流与全局悬浮窗规格
 - `docs/db_store.md` — 附图落库与 `input_label` 关联
