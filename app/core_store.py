@@ -16,6 +16,7 @@ from PIL import Image
 
 from app.core_connect import _apply_regex
 from app.core_registry import TEMPLATES_DIR
+from app.core_split import is_brace_json, json_to_indexed_dict, split_by_determiner
 from app.core_toml import GetTomlValues, resolve_db_id
 
 
@@ -754,27 +755,24 @@ class UiProvider:
         输出:
             list[str] - 拆分后的段列表
         """
-        det = self.cfg.determiner
-        if isinstance(det, list):
-            import re
-            # 按长度降序排序，确保长分隔符优先匹配（如 \r\n 优先于 \n）
-            pattern = "|".join(re.escape(d) for d in sorted(det, key=len, reverse=True))
-            return re.split(pattern, raw)
-        else:
-            return raw.split(det)
+        return split_by_determiner(raw, self.cfg.determiner)
 
 
     def record_from_textbox(self, raw: str) -> dict[str, Any]:
         """
         函数名: record_from_textbox
-        作用: 路径 A：determiner 拆分后按 index 映射为 dict[Input_label]。若输入为合法 OCR JSON，则按字段名进行匹配填充。
+        作用: 路径 A：legacy OCR flat_kv（全 index<0）或 index 字典 / determiner 拆分映射
         输入:
             raw (str) - textbox 纯字符串
         输出:
             dict[str, Any] - 仅含参与拆分的 Input_label 键
         """
-        stripped = raw.strip()
-        if stripped.startswith("{") and stripped.endswith("}"):
+        max_index = max(
+            (rule.index for rule in self.cfg.field_rules if rule.index >= 0), default=-1
+        )
+        # legacy OCR：全部 index<0 时仍可用 flat_kv 键名匹配
+        if max_index < 0 and is_brace_json(raw):
+            stripped = raw.strip()
             try:
                 data = json.loads(stripped)
                 if isinstance(data, dict) and data.get("ok") is not False:
@@ -783,12 +781,12 @@ class UiProvider:
                         return _map_flat_kv_to_fields(flat, self.cfg.field_rules)
             except (json.JSONDecodeError, TypeError):
                 pass
-                
-        parts = self.split_by_determiner(raw)
+        if is_brace_json(raw):
+            indexed = json_to_indexed_dict(raw)
+            parts = [indexed[i] for i in sorted(indexed.keys())]
+        else:
+            parts = self.split_by_determiner(raw)
         fields: dict[str, Any] = {}
-        max_index = max(
-            (rule.index for rule in self.cfg.field_rules if rule.index >= 0), default=-1
-        )
         if max_index >= 0 and len(parts) <= max_index:
             raise ValueError(
                 f"textbox split into {len(parts)} part(s), need at least {max_index + 1}"

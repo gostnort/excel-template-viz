@@ -22,21 +22,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from llm_gemma4 import config, hf_download
-from llm_gemma4.backends.base import GenerateResult, HealthReport, JudgmentToolSpec, LlmSession
+from llm_gemma4.backends.base import GenerateResult, HealthReport, JudgmentToolSpec, LlmSession, SessionOptions
 from llm_gemma4.runtime import hardware_probe
 from llm_gemma4.runtime.thinking import split_thought_answer
 
 if TYPE_CHECKING:
     import litert_lm as lm
+    from llm_gemma4.backends.litert.session import LiteRtSession
 
 
-# Self-determined output-token budget when a caller passes max_tokens=None
-# (docs/embed_gemma4.md ?3.1a/?1.2): GPU decodes ~9x faster than CPU (?1.1
-# breakeven test), so it can afford a larger default reply length for the
-# same wall-clock cost. Reused from the existing cpu/cuda/openvino profile
-# thinking_budget numbers rather than inventing a new table.
-_DEFAULT_MAX_TOKENS_BY_BACKEND = {"cpu": 512, "gpu": 1024, "npu": 512}
-_DEFAULT_MAX_TOKENS_FALLBACK = 512
+def _output_budget(backend_label: str | None) -> int:
+    return config.default_output_tokens_for_backend(backend_label)
 
 
 class LiteRtBackend:
@@ -53,7 +49,7 @@ class LiteRtBackend:
         self._engine: "lm.Engine | None" = None
         self._engine_lock = threading.Lock()
         self._backend_label: str | None = None
-        self._sessions: dict[str, Any] = {}
+        self._sessions: dict[str, LiteRtSession] = {}
 
     def generate(
         self,
@@ -77,7 +73,7 @@ class LiteRtBackend:
         else:
             # Caller left it unset -> self-determine from the realized hardware,
             # not the machine this code happened to be written on (user ask).
-            budget = _DEFAULT_MAX_TOKENS_BY_BACKEND.get(self._backend_label, _DEFAULT_MAX_TOKENS_FALLBACK)
+            budget = _output_budget(self._backend_label)
         if judgment_tool is not None:
             create_kwargs["tools"] = [_build_judgment_tool_function(judgment_tool)]
             create_kwargs["automatic_tool_calling"] = False
@@ -120,7 +116,7 @@ class LiteRtBackend:
         if max_tokens is not None:
             budget = max_tokens
         else:
-            budget = _DEFAULT_MAX_TOKENS_BY_BACKEND.get(self._backend_label, _DEFAULT_MAX_TOKENS_FALLBACK)
+            budget = _output_budget(self._backend_label)
         conversation = engine.create_conversation(**create_kwargs)
         try:
             response = conversation.send_message(multimodal_input, max_output_tokens=budget)
@@ -128,20 +124,34 @@ class LiteRtBackend:
             conversation.close()
         return _to_generate_result(response)
 
-    def open_session(self, session_id: str) -> LlmSession:
+    def open_session(
+        self, session_id: str, *, options: SessionOptions | None = None,
+    ) -> LlmSession:
         from llm_gemma4.backends.litert.session import LiteRtSession
-        if session_id not in self._sessions:
-            conversation = self._ensure_engine().create_conversation()
-            self._sessions[session_id] = LiteRtSession(conversation)
-        return self._sessions[session_id]
+        existing = self._sessions.get(session_id)
+        if existing is not None and not existing.is_closed:
+            return existing
+        import litert_lm as lm
+        opts = options or SessionOptions()
+        engine = self._ensure_engine()
+        if opts.max_tokens is not None:
+            budget = opts.max_tokens
+        else:
+            budget = _output_budget(self._backend_label)
+        create_kwargs: dict[str, Any] = {
+            "system_message": opts.system_message,
+            "sampler_config": lm.SamplerConfig(temperature=opts.temperature),
+            "extra_context": {"enable_thinking": True} if opts.thinking else None,
+        }
+        conversation = engine.create_conversation(**create_kwargs)
+        def _on_close() -> None:
+            self._sessions.pop(session_id, None)
+        session = LiteRtSession(conversation, on_close=_on_close, default_max_tokens=budget)
+        self._sessions[session_id] = session
+        return session
 
     def warm(self) -> None:
         self._ensure_engine()
-
-    def count_tokens(self, text: str) -> int:
-        # No standalone tokenizer call confirmed in litert_lm 0.14.0 (?4.2); this
-        # estimate is only used before a Conversation exists to query token_count.
-        return max(1, len(text) // 3)
 
     def health_check(self) -> HealthReport:
         ready = config.model_exists()

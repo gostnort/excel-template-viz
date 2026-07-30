@@ -1,0 +1,68 @@
+Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)
+handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>
+Traceback (most recent call last):
+  File "C:\Users\gostn\AppData\Local\Programs\Python\Python310\lib\asyncio\events.py", line 80, in _run
+    self._context.run(self._callback, *self._args)
+  File "C:\Users\gostn\AppData\Local\Programs\Python\Python310\lib\asyncio\proactor_events.py", line 165, in _call_connection_lost
+    self._sock.shutdown(socket.SHUT_RDWR)
+ConnectionResetError: [WinError 10054] 远程主机强迫关闭了一个现有的连接。
+An element has been deleted but is still being used. This is most likely a bug in your application code. See https://github.com/zauberzeug/nicegui/issues/3028 for more information.
+Stack (most recent call last):
+  File "C:\Users\gostn\AppData\Local\Programs\Python\Python310\lib\runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "C:\Users\gostn\AppData\Local\Programs\Python\Python310\lib\runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "E:\my_github\excel-template-viz\nicegui_ui\app.py", line 54, in <module>
+    ui.run(**run_kwargs)
+  File "E:\my_github\excel-template-viz\.venv\lib\site-packages\nicegui\ui_run.py", line 310, in run
+    Server.instance.run()
+  File "E:\my_github\excel-template-viz\.venv\lib\site-packages\nicegui\server.py", line 45, in run
+    super().run(sockets=sockets)
+  File "E:\my_github\excel-template-viz\.venv\lib\site-packages\uvicorn\server.py", line 75, in run
+    return asyncio_run(self.serve(sockets=sockets), loop_factory=self.config.get_loop_factory())
+  File "E:\my_github\excel-template-viz\.venv\lib\site-packages\uvicorn\_compat.py", line 60, in asyncio_run
+    return loop.run_until_complete(main)
+  File "C:\Users\gostn\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 636, in run_until_complete
+    self.run_forever()
+  File "C:\Users\gostn\AppData\Local\Programs\Python\Python310\lib\asyncio\windows_events.py", line 321, in run_forever
+    super().run_forever()
+  File "C:\Users\gostn\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 603, in run_forever
+    self._run_once()
+  File "C:\Users\gostn\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 1909, in _run_once
+    handle._run()
+  File "C:\Users\gostn\AppData\Local\Programs\Python\Python310\lib\asyncio\events.py", line 80, in _run
+    self._context.run(self._callback, *self._args)
+  File "E:\my_github\excel-template-viz\.venv\lib\site-packages\nicegui\events.py", line 480, in _await_and_handle_in_context
+    await awaitable
+  File "E:\my_github\excel-template-viz\nicegui_ui\components\model_runtime.py", line 304, in _on_gemma
+    await set_gemma_preload(target, client=client)
+  File "E:\my_github\excel-template-viz\nicegui_ui\components\model_runtime.py", line 189, in set_gemma_preload
+    ok = await ensure_gemma_loaded(notify=True, client=resolved)
+  File "E:\my_github\excel-template-viz\nicegui_ui\components\model_runtime.py", line 170, in ensure_gemma_loaded
+    _dismiss_notification(progress)
+  File "E:\my_github\excel-template-viz\nicegui_ui\components\model_runtime.py", line 74, in _dismiss_notification
+    handle.dismiss()
+  File "E:\my_github\excel-template-viz\.venv\lib\site-packages\nicegui\elements\notification.py", line 198, in dismiss
+    self.run_method('dismiss')
+  File "E:\my_github\excel-template-viz\.venv\lib\site-packages\nicegui\element.py", line 448, in run_method
+    if not core.is_loop_running() or not self._is_safe_to_interact():
+  File "E:\my_github\excel-template-viz\.venv\lib\site-packages\nicegui\element.py", line 425, in _is_safe_to_interact
+    helpers.warn_once('An element has been deleted but is still being used. '
+  File "E:\my_github\excel-template-viz\.venv\lib\site-packages\nicegui\helpers\warnings.py", line 9, in warn_once
+    log.warning(message, stack_info=stack_info)
+Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)
+handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>
+Traceback (most recent call last):
+  File "C:\Users\gostn\AppData\Local\Programs\Python\Python310\lib\asyncio\events.py", line 80, in _run
+    self._context.run(self._callback, *self._args)
+  File "C:\Users\gostn\AppData\Local\Programs\Python\Python310\lib\asyncio\proactor_events.py", line 165, in _call_connection_lost
+    self._sock.shutdown(socket.SHUT_RDWR)
+ConnectionResetError: [WinError 10054] 远程主机强迫关闭了一个现有的连接。
+Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)
+handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>
+Traceback (most recent call last):
+  File "C:\Users\gostn\AppData\Local\Programs\Python\Python310\lib\asyncio\events.py", line 80, in _run
+    self._context.run(self._callback, *self._args)
+  File "C:\Users\gostn\AppData\Local\Programs\Python\Python310\lib\asyncio\proactor_events.py", line 165, in _call_connection_lost
+    self._sock.shutdown(socket.SHUT_RDWR)
+ConnectionResetError: [WinError 10054] 远程主机强迫关闭了一个现有的连接。

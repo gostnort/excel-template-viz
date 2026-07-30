@@ -1,0 +1,101 @@
+WebUI test loop1 — Gemma wizard sidebar chat fixes
+Date: 2026-07-29
+Repo: e:\my_github\excel-template-viz
+URL: https://localhost:8738/
+MCP: user-chrome-devtools
+Template: Lost&Foundrecord
+
+=== Server restart ===
+server_restarted: YES
+- Killed prior OwningProcess PID 22200 on port 8738
+- Started: .venv\Scripts\python.exe -m nicegui_ui.app (cwd repo root)
+- Log confirmed: NiceGUI ready to go on https://localhost:8738
+- Fresh process PID (shell): 19904
+
+=== Scenario executed ===
+1. Selected Lost&Foundrecord
+2. Started wizard from 输入配置 → 启动配置向导
+3. Step1 Google skip → Step2 pasted Ghost OCR JSON + filled draft fields
+   (日期=7.5, 航班号=CA987, 捡拾点=40JKL行李架, 物品=一袋免税品)
+4. Step3 closed dialog → 下一步配置 ran 3.1/3.2/3.3 matching
+5. Step3 finished and auto-advanced to Step 5 dialog
+
+=== Pass criteria ===
+
+1) atBottom true (or near bottom)
+RESULT: PASS
+- Final metrics after step3 complete:
+  scrollTop=6904.38623046875
+  scrollHeight=7249
+  clientHeight=345
+  atBottom=true
+  nearBottom=true
+NOTE: During mid-match (chatLen~2124..5219) scrollTop stayed stuck ~246 while
+scrollHeight grew to 2858→6908, so auto-scroll lagged for a long time; by the
+time all Matched lines were written and Step5 dialog appeared, viewport was at bottom.
+
+2) hasMatched true
+RESULT: PASS
+- matchedLines observed:
+  Matched [日期]
+  Matched [航班号]
+  Matched [物品]
+  Matched [捡拾点]
+- hasMatched=true
+
+3) notifications non-empty related to match (or observed during match)
+RESULT: FAIL
+- Live .q-notification list at end: []
+- MutationObserver capture window.__matchNotifies during late match: []
+- Observer was installed while 物品 was still matching; Matched [物品] and
+  Matched [捡拾点] completed AFTER observer install with still zero toasts.
+- Code path exists (orchestrator._announce_match → _match_notify →
+  TomlWizardController._match_notify → ui.notify), but no toast was visible
+  in the DOM during/after those announces.
+
+4) hasPlanGemmaPrompt false
+RESULT: PASS
+- hasPlanGemmaPrompt=false
+- Chat did NOT contain PLAN_GHOST or "You plan ghost index-matching"
+- Confirms new code path (draft-only plan, no Gemma plan prompt) is loaded
+
+=== Raw final metrics ===
+{
+  "scrollTop": 6904.38623046875,
+  "scrollHeight": 7249,
+  "clientHeight": 345,
+  "atBottom": true,
+  "hasMatched": true,
+  "hasPlanGemmaPrompt": false,
+  "notifications": [],
+  "capturedNotifies": [],
+  "matchedLines": ["Matched [日期]", "Matched [航班号]", "Matched [物品]", "Matched [捡拾点]"],
+  "chatLen": 5592,
+  "dialogHasStep5": true
+}
+
+=== Errors / log issues ===
+1. start_wizard: _dismiss_notification on deleted element
+   (nicegui warning: An element has been deleted but is still being used)
+2. Early page reload caused "Client has been deleted but is still being used"
+   when ui.timer scheduled from _schedule_chat_scroll / advance (recoverable
+   after continuing on the new client; wizard eventually progressed).
+3. Gemma match quality still weak for some fields (捡拾点/物品 both index=30);
+   parse-error retries with noisy previous output for 40JKL行李架.
+4. Match toast notify not appearing in UI despite Matched [label] chat blocks.
+
+=== Remaining bugs ===
+1. CRITICAL for this test intent: match toast (ui.notify / 已匹配 [label]…) never
+   observed in Chrome DOM — FAIL criterion #3.
+2. Auto-scroll still lags mid-stream (scrollTop frozen ~246 while content grows);
+   only ends near bottom after step3 completes — partial fix only.
+3. start_wizard notification dismiss-on-deleted-element warning still present.
+4. Field match quality / concurrent agent prompt pollution (捡拾点 vs 物品 index
+   confusion, parse-error retry spam) still present (out of scope for this
+   sidebar-chat fix check, but observed).
+
+=== Overall ===
+PARTIAL PASS (3/4 criteria)
+PASS: atBottom (final), hasMatched, hasPlanGemmaPrompt=false
+FAIL: match-related notifications
+Server was restarted with new code before the test.

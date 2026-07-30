@@ -1,9 +1,10 @@
 # 数据流设计（core_store）
 
 > 状态：plan（存图 API **尚未在 `core_store` 落地**）  
-> 日期：2026-07-09  
+> 日期：2026-07-30  
 > OCR 平台：[`embed_paddle_ocr.md`](embed_paddle_ocr.md)（推理；本文件只定落库与写回）  
-> UI 菜单：[`nicegui_ui/nicegui_ui_plan.md`](nicegui_ui/nicegui_ui_plan.md) §3.1
+> UI 菜单：[`nicegui_ui/nicegui_ui_plan.md`](nicegui_ui/nicegui_ui_plan.md) §3.1  
+> 模板即库写回：[`excel_transform.md`](excel_transform.md) §4.6；向导落盘后的运行时边界见 [`gemma4_e4b_workflow.md`](gemma4_e4b_workflow.md) §5
 
 ## 1) 目标
 
@@ -34,13 +35,30 @@
 
 | 能力 | 独立数据库（默认） | 模板即库 |
 |------|-------------------|----------|
-| 文本持久化 | `insert_or_update` → 后缀 SQLite | `ExcelWriter.write_back` → 模板 xlsx（见 [`excel_transform.md`](excel_transform.md) §4.6） |
+| 文本持久化 | `insert_or_update` → 后缀 SQLite | `ExcelWriter.write_back` → **模板 xlsx 原地**（`templates/{id}/{id}.xlsx` 的 `work_sheet`；见 [`excel_transform.md`](excel_transform.md) §4.6） |
 | 图片 | `save_image` / `get_latest_image` 等 | **不调用**；提交时丢弃 pending `field_images` |
-| 输入页容量满 | `input_capacity` 达上限时禁用「下一行」 | **不适用**——无「容量已满」；录入行数由 xlsx instance 自然增长 |
+| 输入页容量满 | `input_capacity` 达上限时禁用「添加数据」 | **不适用**——无「容量已满」；录入行数由 xlsx instance 自然增长 |
 | 写回定位键 | `records.id`（SQLite） | **`instance_k`**（immutable；列头排序后仍用 k 写回，见 [`excel_transform.md`](excel_transform.md) §4.6.5） |
 | DB 页「全部数据」 | `ui_provider.get_data()` | `read_instances(template_path)` |
 
-本文件 §4–§9 的 SQLite / `record_images` 契约仅在 **独立数据库** 模式下生效。模板即库的 UI 行为见 [`nicegui_ui/nicegui_ui_plan.md`](nicegui_ui/nicegui_ui_plan.md) §3.1、§3.4。
+#### 输入页「保存」/「添加数据」（模板即库 · UI 契约）
+
+实现位置：`nicegui_ui/pages/tab_input.py`（`handle_save_as` / `handle_next_row`）。**不**调用本模块的 `insert_or_update` / `save_image`。
+
+| 按钮 | 语义 | 写回目标 `instance_k` | 成功后 |
+|------|------|----------------------|--------|
+| **保存** | **提交当前编辑到模板**（不是「另存导出」主路径） | 有 `selected_instance_k` → 该行；否则 → `current_instance_index`（下一待录入） | `write_back(template→template, draft, instance_k=k)` → `ForMain.refresh_session_from_source` 重载表；提示「已写入模板第 N 行」 |
+| **添加数据** | 同样按 `instance_k` 写回模板 | 同上（选中行覆盖；未选中则写当前待录入 index） | 同上轻量刷新；提示「已记录」 |
+
+**必守规则：**
+
+1. 点表行载入草稿会设置 `selected_instance_k`。此后「保存」/「添加数据」**必须**写回该 `instance_k`，禁止因「已选中」而跳过 `write_back`，也禁止误写到末尾空行（`current_instance_index`）。
+2. 提交前用 `read_field_drafts` 把字段控件当前值合并进 `session.draft`（与向导 Step 3 同源 helper）。
+3. 写回 dict 时去掉 `instance_k` / `_index` 元键，由 API 参数 `instance_k=k` 定位值格（`write_back` 若见记录内 `instance_k` 也会优先用它——勿混入错误 k）。
+4. 独立库模式下「保存」仍为导出 `exports/{template_id}/{template_id}_{suffix}_{YYYYMMDD}_{HHMMSS}.xlsx`；**模板即库不得把「保存成功: 导出文件名」当成唯一成功信号而跳过模板写回**。
+5. DB 页「覆盖保存」：选中行 + 粘贴 → `write_back` 同一 `selected_instance_k`（仍不经本模块）。
+
+本文件 §4–§9 的 SQLite / `record_images` 契约仅在 **独立数据库** 模式下生效。模板即库的其余 UI 行为见 [`nicegui_ui/nicegui_ui_plan.md`](nicegui_ui/nicegui_ui_plan.md) §3.1、§3.4。
 
 ## 3) 输入输出
 
@@ -270,6 +288,8 @@
 - 导出开关验证：`export_attach_images=off` 时无图片输出，且纯文本导出结果与历史一致。
 - 缺图/坏图容错：存在异常图片时导出流程不中断，告警信息可追踪到 `image_id`。
 - **模板即库**：确认 `use_independent_db=false` 时无 `insert_or_update` / `save_image` 调用路径。
+- **模板即库 · 选中行保存**：点击已有 `instance_k` → 改 draft →「保存」后，模板 xlsx 与输入表该行均更新为新值；未选中时「保存」写 `current_instance_index`。
+- **模板即库 · 选中行添加数据**：选中 `k` 后点「添加数据」写回同一 `k`，不得写到末尾空 instance。
 
 ## 10) 后续扩展
 

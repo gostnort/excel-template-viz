@@ -19,9 +19,16 @@ def render_toml_tab():
             ui.label("校验与应用").classes("section-title")
             with ui.element("div").classes("section-body"):
                 with ui.element("div").classes("form-row"):
+                    from nicegui_ui.components.wizard_ui import start_wizard
+
+                    AppBtn(
+                        "启动配置向导",
+                        primary=True,
+                        on_click=start_wizard,
+                    )
                     AppBtn(
                         "校验并应用配置",
-                        primary=True,
+                        primary=False,
                         on_click=lambda: trigger_toml_save(session),
                     )
 

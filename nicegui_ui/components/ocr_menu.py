@@ -504,6 +504,8 @@ def run_ocr(session, label: str, input_element: Any = None) -> None:
                     return
                 if input_element and hasattr(input_element, "value"):
                     input_element.value = display_text
+                if is_ghost:
+                    session.last_ghost_paste = display_text
                 if not is_ghost:
                     session.draft[label] = display_text
                 session.field_images[label]["ocr_text"] = json.dumps(
@@ -523,5 +525,11 @@ def run_ocr(session, label: str, input_element: Any = None) -> None:
                         input_element.enable()
                 except Exception:
                     pass
+            from nicegui_ui.components.model_runtime import sync_model_runtime_ui
+            try:
+                with client:
+                    sync_model_runtime_ui(client)
+            except Exception:
+                sync_model_runtime_ui()
 
     asyncio.create_task(process())

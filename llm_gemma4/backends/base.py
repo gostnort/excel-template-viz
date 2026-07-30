@@ -15,6 +15,16 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class SessionOptions:
+    """Conversation-level settings applied when opening a persistent session."""
+    system_message: str | None = None
+    thinking: bool = False
+    max_tokens: int | None = None
+    temperature: float = 0.0
+
+
+
+@dataclass(frozen=True)
 class JudgmentToolSpec:
     """Backend-agnostic description of the "fake tool" used to force structured
     verdict output (docs/embed_gemma4.md §3.6.1a). Backends without constrained
@@ -73,7 +83,9 @@ class LlmBackend(Protocol):
     decoding; `GenerateResult.tool_call_arguments` is set only if it actually
     landed as a structured tool call (caller must still handle the None case)."""
 
-    def open_session(self, session_id: str) -> LlmSession: ...
+    def open_session(
+        self, session_id: str, *, options: SessionOptions | None = None,
+    ) -> LlmSession: ...
     """Stateful multi-turn: same session_id reuses the same Conversation."""
 
     def generate_vision(
@@ -95,7 +107,5 @@ class LlmBackend(Protocol):
     """Force any lazy construction (e.g. the real Engine) to happen now
     instead of on the first generate()/open_session() call. Backends without
     lazy construction may make this a no-op."""
-
-    def count_tokens(self, text: str) -> int: ...
 
     def health_check(self) -> HealthReport: ...

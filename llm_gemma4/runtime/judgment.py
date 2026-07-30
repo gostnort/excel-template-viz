@@ -5,17 +5,14 @@ callers (e.g. paddle_ocr/runtime/semantic_gate.py) map JudgmentResult to bools.
 
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import dataclass
 from typing import Literal
+
+from llm_gemma4.runtime.json_extract import extract_json_object
 
 
 DEFAULT_AFFIRMATIVE = frozenset({"true", "yes", "是", "有", "problem", "1", "affirmative"})
 DEFAULT_NEGATIVE = frozenset({"false", "no", "否", "无", "ok", "0", "negative"})
-
-_FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
-_BARE_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
 
@@ -54,20 +51,9 @@ class JudgmentResult:
 
 def parse_judgment(text: str, *, verdict_key: str) -> JudgmentDraft:
     """Extract one JSON object from `text`, tolerant of markdown fences / prose."""
-    stripped = text.strip()
-    fenced = _FENCED_JSON_RE.search(stripped)
-    candidate = fenced.group(1) if fenced else None
-    if candidate is None:
-        bare = _BARE_JSON_RE.search(stripped)
-        candidate = bare.group(0) if bare else None
-    if candidate is None:
-        return JudgmentDraft(raw_text=text, payload=None, parse_error="no JSON object found")
-    try:
-        payload = json.loads(candidate)
-    except json.JSONDecodeError as exc:
-        return JudgmentDraft(raw_text=text, payload=None, parse_error=str(exc))
-    if not isinstance(payload, dict):
-        return JudgmentDraft(raw_text=text, payload=None, parse_error="parsed JSON is not an object")
+    payload, err = extract_json_object(text)
+    if err is not None:
+        return JudgmentDraft(raw_text=text, payload=None, parse_error=err)
     if verdict_key not in payload:
         return JudgmentDraft(raw_text=text, payload=payload, parse_error=f"missing key {verdict_key!r}")
     return JudgmentDraft(raw_text=text, payload=payload, parse_error=None)

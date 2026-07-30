@@ -134,38 +134,36 @@ class ForMain:
         return state.cfg is not None
 
     @staticmethod
-    def refresh_session_from_source(session) -> None:
+    def refresh_session_from_source(session, *, notify: bool = True) -> None:
         """轻量级刷新：仅在模板即库模式下重载数据，避免清空独立库未导出的录入"""
         from nicegui import ui
         if session.use_independent_db:
-            ui.notify('独立库模式下刷新：保留当前内存列表', type='info')
+            if notify:
+                ui.notify('独立库模式下刷新：保留当前内存列表', type='info')
             return
-            
         if not session.writer or not session.template_path:
-            ui.notify('当前没有可刷新的模板', type='warning')
+            if notify:
+                ui.notify('当前没有可刷新的模板', type='warning')
             return
-            
         try:
             instances, masks = session.writer.read_instances(
                 session.template_path, limit=session.db_loaded_limit, reverse=True
             )
             session.session_rows = instances
             session.session_masks = masks
-            
             total = session.writer.get_total_instance_count(session.template_path)
             session.total_instance_count = total
             session.current_instance_index = total
             session.loaded_offset_k = max(0, total - session.db_loaded_limit)
-            
             session.draft.clear()
             val, mask = session.writer.read_values(session.template_path, session.current_instance_index)
             session.draft.update(val)
             session.formula_mask = mask
-            
             session.delete_mode = False
             session.selected_instance_k = None
             session.selected_instance_indices.clear()
-            ui.notify('数据已刷新', type='positive')
+            if notify:
+                ui.notify('数据已刷新', type='positive')
         except Exception as e:
             ui.notify(f'刷新失败: {str(e)}', type='negative')
 

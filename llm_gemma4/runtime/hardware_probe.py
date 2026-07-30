@@ -47,6 +47,7 @@ _VERBOSE_ENV = "LLM_GEMMA4_VERBOSE"
 _native_logging_silenced = False
 
 
+
 def _silence_native_logs(lm_module) -> None:
     """Calls litert_lm.set_min_log_severity(ERROR) exactly once per process,
     before the first Backend()/Engine() construction -- silencing has to
@@ -58,6 +59,25 @@ def _silence_native_logs(lm_module) -> None:
     _native_logging_silenced = True
 
 
+
+def _probe_npu_exists() -> bool:
+    """
+    函数名: _probe_npu_exists
+    作用: 最轻量 Intel 加速设备探测（不构造 litert_lm Backend）
+    输入: 无
+    输出:
+        bool: OpenVINO 报告有可用加速设备时为 True
+    """
+    try:
+        import openvino as ov
+        return bool(ov.Core().available_devices())
+    except ImportError:
+        return False
+    except Exception:
+        return False
+
+
+
 def probe_npu_backend() -> "lm.Backend | None":
     """Cheap probe: constructing NPU() itself performs the OpenVINO/device check."""
     import litert_lm as lm
@@ -67,6 +87,7 @@ def probe_npu_backend() -> "lm.Backend | None":
     except Exception as exc:
         _log.info("NPU backend unavailable: %s", exc)
         return None
+
 
 
 def build_engine(
@@ -113,13 +134,17 @@ def build_engine(
     raise RuntimeError(f"All LiteRT-LM backends failed; last error: {last_error}")
 
 
+
 def planned_backend_hint(profile: str) -> str:
     """Non-blocking hint of which backend health_check() expects to use.
 
-    Does not construct an Engine -- that is the only real GPU probe and it is
-    expensive (§ above). Only the NPU probe is cheap enough to run here.
+    Does not construct an Engine or litert_lm Backend.NPU() -- only queries
+    OpenVINO device list via _probe_npu_exists(). Real Backend construction
+    happens once in build_engine() cascade.
     """
     forced = FORCED_BACKEND_BY_PROFILE.get(profile)
     if forced is not None:
         return forced
-    return "npu" if probe_npu_backend() is not None else "gpu (unconfirmed, falls back to cpu)"
+    if _probe_npu_exists():
+        return "npu"
+    return "gpu (unconfirmed, falls back to cpu)"

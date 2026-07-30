@@ -84,6 +84,7 @@ class SessionState:
     field_images: dict[str, dict[str, Any]] = field(default_factory=dict)
     google_connected: bool = False
     google_sheet_rows: list[dict[str, Any]] = field(default_factory=list)
+    last_ghost_paste: str = ""
     # 心跳时间，用于清理无活动的过期会话
     last_accessed: float = field(default_factory=time.time)
 

@@ -61,17 +61,31 @@ html, body {
 }
 .nicegui-content {
   padding: 0;
+  width: 100%;
+  max-width: 100%;
   height: 100dvh;
   height: var(--app-height, 100dvh);
+  /* NiceGUI 默认 flex-start 会让子项按内容缩宽；桌面右栏必须拉满 */
+  align-items: stretch;
 }
 
 .shell {
   display: grid;
-  grid-template-columns: auto 1fr;
+  /* 固定侧栏宽；禁止用 max-content，否则对话长行会撑破左列 */
+  grid-template-columns: var(--sidebar-w, 250px) 1fr;
   grid-template-rows: auto 1fr;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   height: 100dvh;
   height: var(--app-height, 100dvh);
   border: 2px solid #000;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+.shell.is-sidebar-resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 .sidebar-header {
   grid-column: 1;
@@ -79,6 +93,9 @@ html, body {
   display: flex; align-items: center; gap: 8px;
   padding: 0 8px 0 10px;
   min-height: 40px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   font-weight: bold;
   border-right: 1px solid #000;
   border-bottom: 1px solid #000;
@@ -104,15 +121,22 @@ html, body {
 }
 .selected-template-name {
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 .sidebar {
   grid-column: 1;
   grid-row: 2;
   min-height: 0;
+  min-width: 0;
+  max-width: 100%;
   display: flex;
   flex-direction: column;
   overflow: auto;
+  overflow-x: hidden;
   border-right: 1px solid #000;
+  position: relative;
 }
 .shell.is-sidebar-collapsed .sidebar {
   display: none;
@@ -120,9 +144,66 @@ html, body {
 .shell.is-sidebar-collapsed .main {
   grid-column: 1 / -1;
 }
+.sidebar-resize-rail {
+  /* 贴在侧栏内右缘：勿用负 right，会被 overflow-x:hidden 裁掉导致无法拖 */
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 40;
+  touch-action: none;
+  background: transparent;
+  pointer-events: auto;
+}
+.sidebar-resize-rail:hover,
+.shell.is-sidebar-resizing .sidebar-resize-rail {
+  background: rgba(0, 0, 0, 0.12);
+}
 .template-item { padding: 10px 12px; cursor: pointer; }
 .template-item.active { font-weight: bold; background: #e8e8e8; }
 .template-item.muted { color: #555; }
+
+.wizard-sidebar-chat {
+  flex-shrink: 0;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  border-bottom: 1px solid #ccc;
+  padding: 8px 10px;
+  max-height: 40vh;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-sizing: border-box;
+}
+.wizard-sidebar-chat-title {
+  font-size: 12px;
+  font-weight: bold;
+  color: #333;
+}
+.wizard-sidebar-chat-log.q-field {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+.wizard-sidebar-chat-log .q-field__control {
+  min-width: 0;
+  max-width: 100%;
+}
+.wizard-sidebar-chat-log .q-field__native {
+  height: 32vh;
+  max-height: 32vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
 
 /* 右侧主区 */
 .main {
@@ -142,7 +223,36 @@ html, body {
   border-bottom: 2px solid #000;
   background: #fff;
   min-height: 40px;
+  min-width: 0;
+  width: 100%;
   box-sizing: border-box;
+}
+.tabs-primary {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+}
+.tabs-runtime {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 12px;
+  flex-shrink: 0;
+}
+.tabs-runtime .q-toggle,
+.tabs-runtime .app-btn {
+  font-size: 12px;
+}
+.shell nav.tabs .tabs-runtime .app-btn-shutdown.q-btn--outline::before {
+  border: none;
+}
+.shell nav.tabs .tabs-runtime .model-toggle .q-toggle__inner--truthy {
+  color: var(--color-btn-excel-bg);
+}
+.shell nav.tabs .tabs-runtime .model-toggle.q-toggle--truthy .q-toggle__label {
+  color: var(--color-btn-excel-bg);
+  font-weight: bold;
 }
 .tab {
   width: 126px; min-width: 126px; max-width: 126px;
@@ -166,9 +276,35 @@ html, body {
   position: relative;
   z-index: 2;
 }
-.tab-body { flex: 1; overflow: hidden; display: flex; flex-direction: column; padding: 0; }
-.tab-scroll-container { flex: 1; overflow-y: auto; padding: 16px 20px; box-sizing: border-box; height: 100%; }
-.tab-flex-container { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 16px 20px; box-sizing: border-box; height: 100%; }
+.tab-body {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  min-width: 0;
+  width: 100%;
+}
+.tab-scroll-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+  box-sizing: border-box;
+  height: 100%;
+  min-width: 0;
+  width: 100%;
+}
+.tab-flex-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 16px 20px;
+  box-sizing: border-box;
+  height: 100%;
+  min-width: 0;
+  width: 100%;
+}
 
 /* 幽灵输入框：行高随字体，高度由内容与 autogrow 决定（非固定 36px） */
 .ghost-input.q-field {
@@ -210,15 +346,16 @@ html, body {
 .ghost-note { font-size: 11px; color: #888; margin: 0 0 16px 4px; }
 
 /* 标签 + 输入 */
-/* 动态字段：基于 auto-fit 和 minmax(min(100%, 400px), 1fr) 的流式布局 */
+/* 桌面：auto-fill ~400px 单元格拉满 tab-body；与 nicegui_ui_index / plan §3.1 一致 */
 .field-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr));
-  justify-content: start;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr));
   gap: 12px 20px;
   width: 100%;
   max-width: 100%;
+  min-width: 0;
   margin-top: 5px;
+  box-sizing: border-box;
 }
 @media (max-width: 639px) {
   .tabs {
@@ -607,6 +744,26 @@ body .q-dialog__inner > div {
   border-radius: 0;
   border: 2px solid #000;
   box-shadow: none;
+}
+.wizard-fab-anchor {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 2000;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.wizard-step-dialog {
+  min-width: min(720px, 92vw);
+  max-width: 56rem;
+  width: 91.666%;
+  max-height: 85vh;
+  overflow: auto;
+  box-sizing: border-box;
+}
+.wizard-step-dialog .wizard-step-log {
+  min-height: 14rem;
 }
 
 /* 打印预览：仅输出图像区域 */

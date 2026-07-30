@@ -14,6 +14,61 @@ from nicegui_ui.components.ocr_menu import (
 )
 
 
+_ghost_input: ui.textarea | None = None
+_field_inputs: dict[str, Any] = {}
+
+
+
+def read_ghost_sample() -> str:
+    """
+    函数名: read_ghost_sample
+    作用: 读取「输入」页 Ghost 文本框当前值（blur 未触发时的回退）
+    输入: 无
+    输出:
+        str: 去首尾空白后的文本
+    """
+    if _ghost_input is None:
+        return ""
+    return str(_ghost_input.value or "").strip()
+
+
+
+def read_field_drafts(labels: list[str] | None = None) -> dict[str, str]:
+    """
+    函数名: read_field_drafts
+    作用: 合并 session.draft 与字段控件当前值（向导步骤 3 不依赖 on_change/失焦）
+    输入:
+        labels (list[str] | None): 只读这些标签；None 时读全部已登记控件
+    输出:
+        dict[str, str]: Input_label → 文本（含空串）
+    """
+    session = SessionRegistry.for_current()
+    merged: dict[str, str] = {
+        str(k): str(v) if v is not None else ""
+        for k, v in dict(session.draft or {}).items()
+    }
+    wanted = set(labels) if labels is not None else None
+    for label, inp in list(_field_inputs.items()):
+        if wanted is not None and label not in wanted:
+            continue
+        try:
+            val = inp.value
+        except Exception:
+            continue
+        merged[label] = "" if val is None else str(val)
+    if wanted is not None:
+        for label in wanted:
+            merged.setdefault(label, "")
+    return merged
+
+
+
+def _sync_ghost_paste(session, raw: str) -> None:
+    text = str(raw or "").strip()
+    if text:
+        session.last_ghost_paste = text
+
+
 def ensure_exports_dir(template_id: str) -> Path:
     export_dir = Path("exports") / template_id
     export_dir.mkdir(parents=True, exist_ok=True)
@@ -77,6 +132,39 @@ def _reset_draft_after_session_change(session) -> None:
 def _clear_session_row_selection(session) -> None:
     session.selected_instance_k = None
     session.selected_instance_indices.clear()
+
+
+def _resolve_write_instance_k(session) -> int:
+    """
+    函数名: _resolve_write_instance_k
+    作用: 模板即库写回目标 instance_k——有选中行用选中，否则用当前待录入 index
+    输入:
+        session: 当前会话
+    输出:
+        int: 0-based instance_k
+    """
+    sel = getattr(session, "selected_instance_k", None)
+    if sel is not None:
+        return int(sel)
+    return int(session.current_instance_index or 0)
+
+
+def _sync_draft_from_field_inputs(session) -> None:
+    """
+    函数名: _sync_draft_from_field_inputs
+    作用: 保存/添加前把字段控件当前值合并进 session.draft
+    输入:
+        session: 当前会话
+    输出: 无
+    """
+    labels = None
+    if getattr(session, "ui_provider", None) is not None:
+        try:
+            labels = list(session.ui_provider.get_labels())
+        except Exception:
+            labels = None
+    live = read_field_drafts(labels)
+    session.draft.update(live)
 
 
 def _load_session_row_into_draft(session, row_k: int) -> None:
@@ -353,6 +441,11 @@ def render_input_tab():
             raw = event.sender.value or ""
             if not str(raw).strip():
                 return
+            _sync_ghost_paste(session, str(raw))
+            from nicegui_ui.components.wizard_ui import is_wizard_active
+            # 配置向导步骤 2：仅缓存样本，不触发自动拆分填入字段
+            if is_wizard_active():
+                return
             try:
                 incoming = ui_provider.record_from_textbox(str(raw))
                 session.draft.update(incoming)
@@ -371,7 +464,13 @@ def render_input_tab():
             .classes("ghost-input")
             .props('borderless autogrow hide-bottom-space rows="1"')
         )
+        def on_ghost_change(_event) -> None:
+            # OCR 设值或用户输入时同步服务端，不依赖 blur 回传
+            _sync_ghost_paste(session, ghost.value or "")
         ghost.on("blur", on_ghost_blur)
+        ghost.on("update:model-value", on_ghost_change)
+        global _ghost_input
+        _ghost_input = ghost
         with ghost:
             with ui.context_menu():
                 add_image_pick_menu_items(session, GHOST_OCR_LABEL, ghost)
@@ -450,6 +549,9 @@ def render_input_tab():
 
 @ui.refreshable
 def render_dynamic_fields(session, labels: list[str]):
+    global _field_inputs
+    # refresh 会重建控件，先清空登记再按当前标签重绑
+    _field_inputs = {}
     for lbl in labels:
         is_pk = False
         for rule in session.cfg.field_rules:
@@ -523,6 +625,14 @@ def render_dynamic_fields(session, labels: list[str]):
 
             return on_id_blur
 
+        def create_sync_blur(label: str):
+            def on_blur(event) -> None:
+                # 非主键：失焦时把控件值写入 draft（不依赖 on_change 是否已触发）
+                sender_val = getattr(event.sender, "value", None)
+                if sender_val is not None:
+                    session.draft[label] = str(sender_val)
+            return on_blur
+
         def load_and_close(dialog, existing_row) -> None:
             dialog.close()
             session.draft.update(existing_row)
@@ -547,6 +657,10 @@ def render_dynamic_fields(session, labels: list[str]):
                     inp.props("readonly")
                 if is_pk:
                     inp.on("blur", create_on_blur(lbl))
+                else:
+                    inp.on("blur", create_sync_blur(lbl))
+                # 向导步骤 3 可直接读控件当前值
+                _field_inputs[lbl] = inp
                 with inp:
                     with ui.context_menu():
                         add_image_pick_menu_items(session, lbl, inp)
@@ -558,6 +672,7 @@ def render_dynamic_fields(session, labels: list[str]):
 
 def handle_next_row(session):
     use_db = getattr(session, "use_independent_db", True)
+    _sync_draft_from_field_inputs(session)
 
     if use_db and session.current_instance_index >= session.input_capacity:
         ui.notify("容量已满，无法继续添加数据", type="warning")
@@ -615,21 +730,20 @@ def handle_next_row(session):
         if getattr(session, "template_defaults", None):
             session.draft.update(session.template_defaults)
     else:
+        # 模板即库：按选中 instance_k 覆盖，或写入当前待录入 index
         if getattr(session, "field_images", None):
             session.field_images.clear()
-
         row_copy = session.draft.copy()
         row_copy.pop("_index", None)
-        k = session.current_instance_index
+        row_copy.pop("instance_k", None)
+        k = _resolve_write_instance_k(session)
         try:
             session.writer.write_back(
                 session.template_path, session.template_path, row_copy, instance_k=k
             )
             from nicegui_ui.components.for_main import ForMain
-
-            ForMain.load_template(session.template_id, str(session.template_path))
+            ForMain.refresh_session_from_source(session, notify=False)
             from nicegui_ui.pages.tab_db import render_db_tab
-
             render_db_tab.refresh()
         except Exception as e:
             ui.notify(f"写入模板失败: {str(e)}", type="negative")
@@ -640,6 +754,7 @@ def handle_next_row(session):
 
 
 def handle_save_as(session):
+    _sync_draft_from_field_inputs(session)
     if not session.session_rows and not any(
         str(v).strip() for v in session.draft.values() if v is not None
     ):
@@ -648,30 +763,26 @@ def handle_save_as(session):
 
     use_db = getattr(session, "use_independent_db", True)
 
-    rows_to_write = session.session_rows.copy()
+    rows_to_write = [dict(r) for r in session.session_rows]
     for r in rows_to_write:
         r.pop("_index", None)
 
     is_draft_active = any(
         str(v).strip() for v in session.draft.values() if v is not None
     )
-    if is_draft_active and getattr(session, "selected_instance_k", None) is None:
+    if is_draft_active and use_db and getattr(session, "selected_instance_k", None) is None:
         d = session.draft.copy()
         d.pop("_index", None)
-        if not use_db:
-            d["instance_k"] = session.current_instance_index
         rows_to_write.append(d)
-
-    from app.core_store import _read_active_suffix_token
-
-    suffix = _read_active_suffix_token(session.template_id) or "0000"
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{session.template_id}_{suffix}_{ts}.xlsx"
-    export_dir = ensure_exports_dir(session.template_id)
-    out_path = export_dir / filename
 
     try:
         if use_db:
+            from app.core_store import _read_active_suffix_token
+            suffix = _read_active_suffix_token(session.template_id) or "0000"
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{session.template_id}_{suffix}_{ts}.xlsx"
+            export_dir = ensure_exports_dir(session.template_id)
+            out_path = export_dir / filename
             for row in rows_to_write:
                 # We skip persisting to DB here for draft, handle_next_row already does it,
                 # but if draft is active it wasn't persisted yet, let's persist it?
@@ -699,35 +810,32 @@ def handle_save_as(session):
                                     image_id, ocr_text, ocr_status
                                 )
                     session.field_images.clear()
+            session.writer.write_back(
+                session.template_path, out_path, rows_to_write, instance_k=0
+            )
+            session.exported_files.append(out_path)
+            session.last_export_path = out_path
+            ui.notify(f"保存成功: {filename}", type="positive")
         else:
+            # 模板即库：保存 = 按 instance_k 写回模板（选中行覆盖 / 否则当前待录入）
             if getattr(session, "field_images", None):
                 session.field_images.clear()
-            # In template mode, we just write the whole dataset into the export file.
-            # Write back to template first for the draft
-            if (
-                is_draft_active
-                and getattr(session, "selected_instance_k", None) is None
-            ):
-                d = session.draft.copy()
-                d.pop("_index", None)
-                session.writer.write_back(
-                    session.template_path,
-                    session.template_path,
-                    d,
-                    instance_k=session.current_instance_index,
-                )
-                from nicegui_ui.components.for_main import ForMain
-
-                ForMain.load_template(session.template_id, str(session.template_path))
-                # Update rows_to_write from the fresh session_rows
-                rows_to_write = session.session_rows.copy()
-
-        session.writer.write_back(
-            session.template_path, out_path, rows_to_write, instance_k=0
-        )
-        session.exported_files.append(out_path)
-        session.last_export_path = out_path
-        ui.notify(f"保存成功: {filename}", type="positive")
+            if not is_draft_active:
+                ui.notify("没有可写入模板的编辑内容", type="warning")
+                return
+            d = session.draft.copy()
+            d.pop("_index", None)
+            d.pop("instance_k", None)
+            k = _resolve_write_instance_k(session)
+            session.writer.write_back(
+                session.template_path,
+                session.template_path,
+                d,
+                instance_k=k,
+            )
+            from nicegui_ui.components.for_main import ForMain
+            ForMain.refresh_session_from_source(session, notify=False)
+            ui.notify(f"已写入模板第 {k + 1} 行", type="positive")
         render_input_tab.refresh()
         from nicegui_ui.pages.tab_db import render_db_tab
 
