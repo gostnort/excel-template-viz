@@ -269,11 +269,10 @@ Wireframes use **placeholder** labels only (显示名甲、字段A、列1…) �
   * **`write_back`**, template-as-DB direct write, **保存** export, row edit, **删除选中**: always key off **`instance_k`**, not visual row order after sort.
   * `current_instance_index` / `selected_session_index` should resolve through **`instance_k`** (prefer storing `selected_instance_k` in `SessionState` when sort is enabled).
 
-* **Sheet geometry vs UI table** (see [`toml_config_design.md`](../toml_config_design.md), [`excel_transform.md`](../excel_transform.md) §4.6.5):
-  * UI table: **one row = one instance**; **one column = one `Input_label`**.
-  * `move_to` is `down`/`up` → instances stack on sheet **rows** (table rows align with sheet row direction).
-  * `move_to` is `left`/`right` → instances stack on sheet **columns** (each table row is a **column** of values on the sheet; labels stay fixed).
-  * `value_from_label` `left`/`right` is **within** one instance only (label beside value), not the multi-instance direction.
+* **Sheet geometry vs UI table**（见 [`toml_config_design.md`](../toml_config_design.md)、[`excel_transform.md`](../excel_transform.md) §4.6.5）：
+  * UI 表始终：**一行 = 一个 instance**；**一列 = 一个 `Input_label`**。不再根据 `move_to` 自动切换「行号 / 列号」表头，也不再把 `left`/`right` 解释成「表行 = Sheet 列向 instance」。
+  * Sheet 上 instance 的物理展开方向完全由 TOML `input_section.move_to`（单方向或主轴+次轴列表）+ `offset` 决定；UI 只按用户点的方向按钮推进对应轴上的下一格。
+  * `value_from_label` 的 `left`/`right` 仍只描述**单条 instance 内**标签相对值格的方位，与多 instance 展开无关。
 
 * **Column-header sort (view-only) (已实现)**
   * **Supported:** click `Input_label` column headers to sort displayed rows (asc/desc).
@@ -290,30 +289,43 @@ Wireframes use **placeholder** labels only (显示名甲、字段A、列1…) �
 
 * **Toolbar (`.toolbar-row`)** — single row, two `ui.row` groups (`justify-between` via parent flex):
   * **Left group:** `保存` · `刷新数据` · `删除选中`（两步：首次进入 `delete_mode` 并显示表内勾选列；再次为 `确认删除` 或空选取消）
-  * **Right group:** `添加数据`
+  * **Right group:** **按 `move_to` 绘制方向添加按钮**（取代单一「添加数据」文案；见下「方向添加按钮」）
   * Status hints sit **above** the table (`.ghost-note` under session-list title), not in the toolbar row.
-  * **Independent DB:** `当前 {current_instance_index + 1} / 容量 {input_capacity}`.
-  * **Template-as-DB:** `当前将录入至第 {current_instance_index + 1} 行`（无容量分母）.
+  * **Independent DB:** `当前 {current_instance_index + 1} / 容量 {input_capacity}`（容量仍按 `max_instance_count`；与按钮文案无关）。
+  * **Template-as-DB:** `当前将录入至 instance {current_instance_index}`（无容量分母；勿再写死「第 N 行」）。
   * **Below toolbar:** `打印文件` (`ui.select`), `打印区域` (`ui.select`), `打印` — preview dialog + `window.print` / PNG download (`tab_input.py`).
   * After successful **保存** (independent-DB export path), refresh print-file choices and select the new export.
   * **Removed:** `清空` button; `装载文件` flow deferred / not in current toolbar.
 
-* **添加数据**（原「下一行」；英文概念名 Add Data）
-  * Commits the current `draft` at **`current_instance_index` / `instance_k`**. UI table always shows one row per instance; sheet geometry depends on TOML `move_to`:
-    * `down` / `up` → each commit targets a **row-direction** instance (values stack on sheet rows).
-    * `left` / `right` → each commit targets a **column-direction** instance (table row still represents one instance).
-  * **No empty-slot detection:** the input fields already show whatever is at the active `instance_k` (from activation, row click, or prior `read_values`). If that instance already has data, the user sees it and may overwrite by editing and clicking **添加数据** again — the UI does not search for the next blank instance.
+* **方向添加按钮**（原「添加数据」；按 TOML `move_to` 动态绘制）
+  * 按钮文案与方向一一对应（固定，不随「行/列」自动改名）：
+
+    | `move_to` 方向 | 按钮文案 |
+    |----------------|----------|
+    | `right` | `⇨ 右向添加` |
+    | `down` | `⇩ 下方添加` |
+    | `left` | `⇦ 左向添加` |
+    | `up` | `⇧ 上方添加` |
+
+  * **`move_to` 为单个方向字符串**：Right group **只画一个**对应按钮。
+  * **`move_to` 为两项列表**（主轴 + 次轴，如 `["right","down"]`）：Right group **画两个按钮**，顺序与列表一致；例如 Ginger / 场景1 为 `⇨ 右向添加` 与 `⇩ 下方添加`。
+  * 点击某方向按钮：在当前 `draft` / `instance_k` 提交后，沿**该方向**按 `offset` 推进到下一可写槽（二维时只增加该轴步数，另一轴保持）；具体坐标仍由 `core_transform` / `apply_instance_shift` 计算，UI 不自算 Excel 坐标。
+  * **取消**：不再根据 `move_to` 是上下还是左右，去改表头「行号 / 列号」或推断「写入行 vs 写入列」；表头固定为 instance 序号（或省略该列），几何语义只体现在按钮上。
+
+* **添加（方向按钮提交）**（原「下一行」/「添加数据」）
+  * Commits the current `draft` at **`current_instance_index` / `instance_k`**. UI table always shows one row per instance；Sheet 落点由所点按钮的方向 + `offset` 决定，**不是**「单一自动下一行」。
+  * **No empty-slot detection:** the input fields already show whatever is at the active `instance_k` (from activation, row click, or prior `read_values`). If that instance already has data, the user sees it and may overwrite by editing and clicking the same direction button again — the UI does not search for the next blank instance.
   * Always require `verify_report.ok`.
   * **Independent DB (`use_independent_db=true`):**
-    * Require `current_instance_index < input_capacity`; if at capacity: `ui.notify` 「容量已满，无法继续添加数据」, do not clear inputs.
+    * Require `current_instance_index < input_capacity`; if at capacity: `ui.notify` 「容量已满，无法继续添加」, do not clear inputs.
     * `ui.persist_fields(draft)` → SQLite `records` (see §3.4).
     * **Images on commit:** for each `input_label` in `field_images` with pending bytes, call `core_store.save_image(...)`. Clear `field_images` after save.
-    * Append/update `session_rows`; increment `current_instance_index`; clear `draft` from `template_defaults`; refresh fields and table.
+    * Append/update `session_rows`; advance along the **clicked** axis; clear `draft` from `template_defaults`; refresh fields and table.
   * **Template-as-DB (`use_independent_db=false`):**
-    * **No capacity check** — button always enabled when verify ok (no 「已满」 blocking).
+    * **No capacity check** — direction buttons always enabled when verify ok (no 「已满」 blocking).
     * **Skip** `ui.persist_fields` and **skip** `save_image`; discard pending `field_images` on commit.
-    * `write_back` keyed by **`instance_k = current_instance_index`**, not table display order; refresh session table via `read_instances` / `load_template`.
-    * After commit, advance `current_instance_index` (typically `+= 1` or `len(session_rows)` after reload); optional `read_values` for the new index so fields reflect sheet content — user may leave or overwrite.
+    * `write_back` keyed by **`instance_k`**, not table display order; refresh session table via `read_instances` / `load_template`.
+    * After commit, advance along the clicked axis; optional `read_values` for the new index so fields reflect sheet content — user may leave or overwrite.
 
 * **保存**（原「另存为」）
   * **Independent DB:** write timestamped export — path `exports/{template_id}/{template_id}_{db_suffix}_{YYYYMMDD}_{HHMMSS}.xlsx`. Persist current row same as **添加数据** (text + images per rules above) before or as part of export transaction. `ExcelWriter.write_back(template_path, output_path, session_rows, instance_k=0)` (or include current `draft` if `session_rows` empty).
@@ -720,8 +732,8 @@ ui.run(
 4. Desktop field grid: `auto-fill` ~400px cells; textareas autogrow vertically, scroll horizontally when needed.
 5. Template activation always runs `verify_toml`; failure disables 输入 write/export/print.
 6. Input fields from `ui.get_labels()`; primary key blur + dialog flow.
-7. Session table: select, highlight, 删除选中 (two-step mode), 刷新数据; column-header sort **view-only** with stable **`instance_k`**; row click / write-back / delete by **`instance_k`**, not sorted index; optional `#` column; `move_to=left/right` ⇒ table row = sheet **column** instance. **Template-as-DB:** table preloaded from `read_instances`; formula fields readonly.
-8. **添加数据** / **保存** persist text per mode; images only when `use_independent_db` (see `db_store.md`). **Independent DB:** cap at `input_capacity`. **Template-as-DB:** no cap; always **添加数据** when verify ok; `write_back` to template xlsx at `current_instance_index` (no empty-slot scan).
+7. Session table: select, highlight, 删除选中 (two-step mode), 刷新数据; column-header sort **view-only** with stable **`instance_k`**; row click / write-back / delete by **`instance_k`**, not sorted index; optional `#` / instance 序号列（**不再**按 `move_to` 切换「行号/列号」）. **Template-as-DB:** table preloaded from `read_instances`; formula fields readonly.
+8. Toolbar Right group: one or two **方向添加** buttons from `move_to` (`⇨ 右向添加` / `⇩ 下方添加` / `⇦ 左向添加` / `⇧ 上方添加`); commit + persist text per mode; images only when `use_independent_db` (see `db_store.md`). **Independent DB:** cap at `input_capacity`. **Template-as-DB:** no cap; always allow direction add when verify ok; `write_back` to template xlsx at target `instance_k` (no empty-slot scan).
 9. **保存** (independent DB): path under `exports/{template_id}/...`; **保存** (template-as-DB): writes template xlsx in place; **xlsx has no embedded images**.
 10. DB tab: **使用独立数据库** default checked; unchecked → template xlsx read/write, table **数据表已存数据**, no images, no capacity-full on Input tab.
 11. TOML save rebuilds engines and resets/reloads input session per storage mode (§3.3 step 5).

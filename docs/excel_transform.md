@@ -134,24 +134,22 @@ writer 侧按以下最小字段消费：
 - 下一行 / 覆盖保存：`write_back` 时**按 `instance_k` 定位**（见 §4.6.5），不得按 UI 表格显示顺序；写完后在内存 `session_rows` 最顶部插入新数据。
 - **不**调用 `store.insert_or_update`（见 `db_store.md` §2.1）。
 
-#### 4.6.5 稳定 instance 键与表行 ↔ Sheet 几何
+#### 4.6.5 稳定 instance 键与表行
 
 UI 底部表：**一行 = 一条逻辑记录 = 一个 instance `k`**；**一列 = 一个 `Input_label`**。写回、载入 draft、删除、勾选批量操作**必须**使用行上的 **`instance_k`（0-based，与 `read_instances` / `write_back` 一致）**，**禁止**使用排序后的视觉行号或 `tbody` 下标。
 
 | 字段 | 规则 |
 |------|------|
-| `instance_k` | 载入时由 `read_instances` 顺序赋值（第 0 条 → `k=0`，…）；追加新行时分配下一空闲 `k`；**排序、筛选不改变此值** |
+| `instance_k` | 载入时由 `read_instances` 顺序赋值（第 0 条 → `k=0`，…）；追加时分配下一空闲 `k`；**排序、筛选不改变此值** |
 | `session_rows` 内存顺序 | 建议始终保持 `instance_k` 升序；若 UI 做列头排序，仅影响**展示层**（`ui.table` 客户端排序或渲染用排序副本），**不重排**用于 `write_back` 的 canonical 列表 |
 | `write_back` | 第 `i` 条记录写入 instance `record.instance_k`（若 API 仍用 list 下标，则 list 必须按 `instance_k` 排序且与 `k` 一一对应）；**不得**假设「列表第 i 项 = instance i」在用户排序后仍成立 |
 
-**`move_to` 与 Sheet 上 instance 的物理方向**（见 [`toml_config_design.md`](toml_config_design.md) §值格平移）：
+**`move_to` 与 UI（已取消「行/列」自动推断）**：
 
-| `input_section.move_to` | Sheet 上 instance 0,1,2… 沿…扩展 | UI 表行与 Sheet 关系 |
-|-------------------------|----------------------------------|----------------------|
-| `down` / `up` | **行**（纵向叠放） | 表**行** ≈ Sheet **行**方向的各组填写值 |
-| `left` / `right` | **列**（横向叠放） | 表**行** ≈ Sheet **列**方向的各组填写值（标签仍在固定格，仅值格横移） |
-
-`value_from_label` 为 `left` / `right` 只描述**单条 instance 内**标签与值格的左右关系，**不**改变「一表行 = 一 instance」的语义。
+- Sheet 上 instance 的物理展开方向由 `input_section.move_to`（`str` 或至多两项的列表）+ `offset` 决定；见 [`toml_config_design.md`](toml_config_design.md) 与 `apply_instance_shift`。
+- UI **不再**根据 `move_to` 是 `up`/`down` 还是 `left`/`right` 去切换表头「行号 / 列号」，也**不再**把「表行」解释成 Sheet 列向 instance。
+- 多方向时由 NiceGUI 工具栏绘制对应方向按钮（`⇨ 右向添加` / `⇩ 下方添加` / `⇦ 左向添加` / `⇧ 上方添加`）；详见 [`nicegui_ui/nicegui_ui_plan.md`](nicegui_ui/nicegui_ui_plan.md)「方向添加按钮」。
+- `value_from_label` 为 `left` / `right` 只描述**单条 instance 内**标签与值格的方位，**不**影响多 instance 展开或表头文案。
 
 **列头排序（仅视图）**：
 
@@ -190,7 +188,7 @@ UI 底部表：**一行 = 一条逻辑记录 = 一个 instance `k`**；**一列 
 - 多图顺序验证：同锚点多图在多次导出中顺序稳定。
 - 缺图/坏图容错验证：单图失败不阻断整份导出，告警可追踪。
 - **模板即库**：`read_instances` + 公式掩码与 `data_only=True` 显示值一致；公式格 `write_back` 不被覆盖。
-- **instance_k**：排序/筛选后 `write_back`、载入 draft、删除仍按 `instance_k` 写对 instance；`move_to=left/right` 时表行对应 sheet 列向 instance。
+- **instance_k**：排序/筛选后 `write_back`、载入 draft、删除仍按 `instance_k` 写对 instance；方向展开由 `move_to` + UI 方向按钮决定，不按「行/列」自动改表头。
 - **容量**：独立库模式「下一行」在 `input_capacity` 处阻断；模板即库模式无此阻断，仅写回越界时失败。
 - 模板即库闭环：激活加载全表 → 编辑 → `write_back` → 再读一致。
 

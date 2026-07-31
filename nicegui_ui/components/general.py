@@ -60,6 +60,7 @@ class SessionState:
     t2db: Any | None = None
     writer: Any | None = None
     input_capacity: int = 0
+    primary_span: int = 0
     current_instance_index: int = 0
     draft: dict[str, Any] = field(default_factory=dict)
     template_defaults: dict[str, Any] = field(default_factory=dict)

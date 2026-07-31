@@ -9,7 +9,7 @@ import tomlkit
 import tomlkit.exceptions
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter, range_boundaries
-from tomlkit import aot, document, string, table
+from tomlkit import aot, array, document, string, table
 
 from app.core_registry import TEMPLATES_DIR
 
@@ -26,14 +26,18 @@ OPTIONAL_FIELD_KEYS = ("field", "source_file", "source_sheet", "regex")
 VALID_DIRECTIONS = {"up", "down", "left", "right"}
 VERIFY_SCAN_ROWS = 100
 VERIFY_SCAN_COLS = 100
+# 单矩形：(min_row, min_col, max_row, max_col)，均为 1-based
+AreaRect = tuple[int, int, int, int]
 
 
 @dataclass
 class InputSection:
     """One [[input_section]] row."""
 
-    input_area: str
-    move_to: str = DEFAULT_MOVE_TO
+    # 单个区域字符串，或非连续并集列表（如 ["A2","C2:G2","M2"]）
+    input_area: str | list[str]
+    # 单方向字符串，或主轴+次轴列表（如 ["right","down"]）；超过两项只取前两项
+    move_to: str | list[str] = DEFAULT_MOVE_TO
     offset: int = DEFAULT_INPUT_OFFSET
 
 
@@ -47,9 +51,9 @@ class InputSection:
             dict[str, Any] - 含 input_area / move_to / offset 的字典
         """
         return {
-            "input_area": self.input_area,  # instance 0 填写值区域
-            "move_to": self.move_to,        # 第 k≥1 组值格平移方向
-            "offset": self.offset,          # 平移步长
+            "input_area": self.input_area,  # instance 0 填写值区域（字符串或并集列表）
+            "move_to": self.move_to,        # 单轴或主轴+次轴
+            "offset": self.offset,          # 每一轴平移步长
         }
 
 
@@ -309,10 +313,196 @@ def _parse_sources(raw_sources: Any) -> list[dict[str, str | None]]:
     return sources
 
 
+def _input_area_from_raw(raw: Any) -> str | list[str] | None:
+    """
+    函数名: _input_area_from_raw
+    作用: 把 TOML 中的 input_area 规范成非空字符串或非空字符串列表
+    输入:
+        raw (Any) - 单个区域字符串或字符串列表
+    输出:
+        str | list[str] | None - 一项时返回字符串；多项返回列表；无效返回 None
+    """
+    if isinstance(raw, list):
+        parts = [str(x).strip() for x in raw if str(x).strip()]
+        if not parts:
+            return None
+        # 单项列表折叠为字符串，保持与生成器默认写法兼容
+        return parts[0] if len(parts) == 1 else parts
+    text = str(raw or "").strip()
+    return text or None
+
+
+def _move_to_from_raw(raw: Any) -> str | list[str] | None:
+    """
+    函数名: _move_to_from_raw
+    作用: 把 TOML 中的 move_to 规范成合法方向字符串或至多两项的方向列表
+    输入:
+        raw (Any) - 单个方向或方向列表
+    输出:
+        str | list[str] | None - 合法方向；非法或空返回 None
+    """
+    def _one(item: Any) -> str | None:
+        direction = str(item or "").strip().lower()
+        if direction not in VALID_DIRECTIONS:
+            return None
+        return direction
+    # 缺省按设计默认 down
+    if raw is None or raw == "":
+        return DEFAULT_MOVE_TO
+    if isinstance(raw, list):
+        dirs: list[str] = []
+        for item in raw:
+            direction = _one(item)
+            if direction is None:
+                return None
+            dirs.append(direction)
+        if not dirs:
+            return None
+        # 超过两项只取前两项（主轴 + 次轴）
+        if len(dirs) > 2:
+            dirs = dirs[:2]
+        return dirs[0] if len(dirs) == 1 else dirs
+    return _one(raw)
+
+
+def move_to_directions(move_to: str | list[str]) -> list[str]:
+    """
+    函数名: move_to_directions
+    作用: 把 move_to 展开为 1～2 个方向的列表，供填表与容量计算使用
+    输入:
+        move_to (str | list[str]) - 单方向或主轴+次轴
+    输出:
+        list[str] - 归一化后的方向列表（小写）
+    """
+    parsed = _move_to_from_raw(move_to)
+    if parsed is None:
+        return [DEFAULT_MOVE_TO]
+    if isinstance(parsed, list):
+        return list(parsed)
+    return [parsed]
+
+
+def primary_move_to(move_to: str | list[str]) -> str:
+    """
+    函数名: primary_move_to
+    作用: 取 move_to 的主轴方向（列表第一项或单字符串）
+    输入:
+        move_to (str | list[str]) - 单方向或主轴+次轴
+    输出:
+        str - 主轴方向
+    """
+    return move_to_directions(move_to)[0]
+
+
+def apply_instance_shift(
+    row: int,
+    col: int,
+    move_to: str | list[str],
+    offset: int,
+    instance_k: int,
+    *,
+    primary_span: int = 0,
+) -> tuple[int, int]:
+    """
+    函数名: apply_instance_shift
+    作用: 按 move_to/offset 把 instance 0 值格平移到第 k 组；支持单轴与主轴+次轴二维
+    输入:
+        row (int) - instance 0 行（1-based）
+        col (int) - instance 0 列（1-based）
+        move_to (str | list[str]) - 展开方向
+        offset (int) - 每一轴步长（正整数）
+        instance_k (int) - 组序；≤0 时原样返回
+        primary_span (int) - 二维时主轴可铺步数；≤0 时二维退化为只沿主轴平移 k 步
+    输出:
+        tuple[int, int] - 平移后的 (row, col)
+    """
+    if instance_k <= 0:
+        return row, col
+    dirs = move_to_directions(move_to)
+    step = offset if offset >= 1 else DEFAULT_INPUT_OFFSET
+    # 单轴：沿唯一方向平移 k * offset
+    if len(dirs) == 1:
+        return offset_cell(row, col, dirs[0], step * instance_k)
+    # 二维：行优先 k → (i, j)；primary_span 未知时只走主轴
+    if primary_span <= 0:
+        return offset_cell(row, col, dirs[0], step * instance_k)
+    i = instance_k % primary_span
+    j = instance_k // primary_span
+    if i:
+        row, col = offset_cell(row, col, dirs[0], step * i)
+    if j:
+        row, col = offset_cell(row, col, dirs[1], step * j)
+    return row, col
+
+
+# NiceGUI 方向添加按钮文案（与 nicegui_ui_plan 一致）
+ADD_BUTTON_LABELS: dict[str, str] = {
+    "right": "⇨ 右向添加",
+    "down": "⇩ 下方添加",
+    "left": "⇦ 左向添加",
+    "up": "⇧ 上方添加",
+}
+
+
+def add_button_label(direction: str) -> str:
+    """
+    函数名: add_button_label
+    作用: 返回某展开方向对应的工具栏按钮文案
+    输入:
+        direction (str) - up/down/left/right
+    输出:
+        str - 如「⇨ 右向添加」；未知方向时回退为「添加」
+    """
+    key = str(direction or "").strip().lower()
+    return ADD_BUTTON_LABELS.get(key, "添加")
+
+
+def next_instance_k_along(
+    current_k: int,
+    direction: str,
+    move_to: str | list[str],
+    primary_span: int = 0,
+) -> int | None:
+    """
+    函数名: next_instance_k_along
+    作用: 从当前 instance_k 沿指定方向走一步，得到下一组序号；主轴已满时返回 None
+    输入:
+        current_k (int) - 当前 0-based instance 序号
+        direction (str) - 用户点击的方向（须为 move_to 中的一项）
+        move_to (str | list[str]) - TOML 展开方向
+        primary_span (int) - 二维主轴可铺步数；单轴可传 0
+    输出:
+        int | None - 下一 instance_k；该方向无法再进一步时为 None
+    """
+    k = max(0, int(current_k))
+    dirs = move_to_directions(move_to)
+    wanted = str(direction or "").strip().lower()
+    # 单轴：线性 +1
+    if len(dirs) == 1:
+        return k + 1
+    # 二维但未知主轴跨度：无法正确分轴，退化为线性 +1
+    if primary_span <= 0:
+        return k + 1
+    i = k % primary_span
+    j = k // primary_span
+    if wanted == dirs[0]:
+        if i + 1 >= primary_span:
+            return None
+        i += 1
+    elif wanted == dirs[1]:
+        j += 1
+    else:
+        # 不在配置方向内：沿主轴尝试
+        if i + 1 >= primary_span:
+            return None
+        i += 1
+    return j * primary_span + i
+
+
 def _input_section_from_dict(raw: Any) -> InputSection | None:
     """
     函数名: _input_section_from_dict
-    作用: 解析有且仅有一条的 [[input_section]]；缺 input_area 视为无效
+    作用: 解析有且仅有一条的 [[input_section]]；缺 input_area 或非法 move_to 视为无效
     输入:
         raw (Any) - input_section 原始数据（dict 或仅含一项的 list）
     输出:
@@ -325,11 +515,15 @@ def _input_section_from_dict(raw: Any) -> InputSection | None:
         raw = raw[0]
     if not isinstance(raw, dict):
         return None
-    input_area = str(raw.get("input_area", "")).strip()
-    if not input_area:
+    input_area = _input_area_from_raw(raw.get("input_area"))
+    if input_area is None:
         return None
-    move_to = str(raw.get("move_to", DEFAULT_MOVE_TO)).strip().lower()  # 方向归一化
+    move_to = _move_to_from_raw(raw.get("move_to", DEFAULT_MOVE_TO))
+    if move_to is None:
+        return None
     offset = _parse_int(raw.get("offset", DEFAULT_INPUT_OFFSET), DEFAULT_INPUT_OFFSET)
+    if offset < 1:
+        offset = DEFAULT_INPUT_OFFSET
     return InputSection(input_area=input_area, move_to=move_to, offset=offset)
 
 
@@ -419,9 +613,9 @@ def _dict_to_toml(config: dict[str, Any]) -> str:
     doc = document()
     determiner_raw = config.get("determiner", DEFAULT_DETERMINER)
     if isinstance(determiner_raw, list):
-        from tomlkit import array
         arr = array()
-        for x in determiner_raw: arr.append(str(x))
+        for x in determiner_raw:
+            arr.append(str(x))
         doc["determiner"] = arr
     else:
         doc["determiner"] = str(determiner_raw)
@@ -449,8 +643,8 @@ def _dict_to_toml(config: dict[str, Any]) -> str:
     input_sections = aot()
     if section:
         section_row = table()
-        section_row["input_area"] = section.input_area
-        section_row["move_to"] = section.move_to
+        section_row["input_area"] = _toml_str_or_str_list(section.input_area)
+        section_row["move_to"] = _toml_str_or_str_list(section.move_to)
         section_row["offset"] = section.offset
         input_sections.append(section_row)
     doc["input_section"] = input_sections
@@ -477,17 +671,70 @@ def _dict_to_toml(config: dict[str, Any]) -> str:
     return dumped
 
 
-def _parse_area(area: str) -> tuple[int, int, int, int]:
+def _toml_str_or_str_list(value: str | list[str]) -> Any:
+    """
+    函数名: _toml_str_or_str_list
+    作用: 序列化 input_area / move_to：字符串原样，列表写成 TOML array
+    输入:
+        value (str | list[str]) - 单个值或列表
+    输出:
+        Any - str 或 tomlkit array
+    """
+    if isinstance(value, list):
+        arr = array()
+        for item in value:
+            arr.append(str(item))
+        return arr
+    return str(value)
+
+
+def _parse_area(area: str) -> AreaRect:
     """
     函数名: _parse_area
     作用: 把 Excel 区域字符串解析为 (min_row, min_col, max_row, max_col)
     输入:
-        area (str) - 形如 "A2:G2" 的区域
+        area (str) - 形如 "A2:G2" 或单格 "A2" 的区域
     输出:
-        tuple[int, int, int, int] - 1-based 行列边界
+        AreaRect - 1-based 行列边界
     """
     # range_boundaries 返回 (min_col, min_row, max_col, max_row)，此处换序为行列
     min_col, min_row, max_col, max_row = range_boundaries(area)
+    return min_row, min_col, max_row, max_col
+
+
+def _parse_input_areas(area: str | list[str]) -> list[AreaRect]:
+    """
+    函数名: _parse_input_areas
+    作用: 把 input_area（字符串或列表）解析为矩形并集；任一项非法则抛错
+    输入:
+        area (str | list[str]) - 单个区域或非连续区域列表
+    输出:
+        list[AreaRect] - 至少一个矩形
+    """
+    if isinstance(area, list):
+        parts = [str(x).strip() for x in area if str(x).strip()]
+    else:
+        parts = [str(area).strip()] if str(area).strip() else []
+    if not parts:
+        raise ValueError("input_area is empty")
+    return [_parse_area(part) for part in parts]
+
+
+def _bounding_box(areas: list[AreaRect]) -> AreaRect:
+    """
+    函数名: _bounding_box
+    作用: 求多个矩形并集的外接矩形（用于容量估算等粗略几何）
+    输入:
+        areas (list[AreaRect]) - 非空矩形列表
+    输出:
+        AreaRect - 外接矩形
+    """
+    if not areas:
+        raise ValueError("areas is empty")
+    min_row = min(a[0] for a in areas)
+    min_col = min(a[1] for a in areas)
+    max_row = max(a[2] for a in areas)
+    max_col = max(a[3] for a in areas)
     return min_row, min_col, max_row, max_col
 
 
@@ -535,27 +782,24 @@ def offset_cell(row: int, col: int, direction: str, offset: int) -> tuple[int, i
     return row, col
 
 
-def _scan_worksheet_labels_diagonal(
-    ws: Any,
-) -> tuple[dict[str, tuple[int, int]], set[str]]:
+def _scan_worksheet_labels_diagonal(ws: Any) -> dict[str, list[tuple[int, int]]]:
     """
     函数名: _scan_worksheet_labels_diagonal
-    作用: 按左上→右下斜向波面顺序扫描 100×100，建立标签文本到首见坐标的映射，并记录重复文本
+    作用: 按左上→右下斜向波面扫描 100×100，建立标签文本→全部出现坐标列表（保留重复）
     输入:
         ws (Any) - openpyxl 工作表对象
     输出:
-        tuple[dict[str, tuple[int, int]], set[str]] - (标签→(row,col), 重复出现的标签文本集合)
+        dict[str, list[tuple[int, int]]] - 标签文本 → [(row, col), ...]（斜向先后顺序）
     """
     # 流式拉取 100×100 快照，避免逐格随机读
     grid: list[list[Any]] = []
     for row in ws.iter_rows(max_row=VERIFY_SCAN_ROWS, max_col=VERIFY_SCAN_COLS):
         grid.append([cell.value for cell in row])
-    label_to_coord: dict[str, tuple[int, int]] = {}
-    duplicate_labels: set[str] = set()
+    label_to_coords: dict[str, list[tuple[int, int]]] = {}
     max_r = len(grid)
     max_c = len(grid[0]) if max_r > 0 else 0
     if max_r == 0 or max_c == 0:
-        return label_to_coord, duplicate_labels
+        return label_to_coords
     # s = r_idx + c_idx；同一条斜线上 r_idx 小者优先（更靠上）
     for s in range(max_r + max_c - 1):
         for r_idx in range(max_r):
@@ -567,24 +811,27 @@ def _scan_worksheet_labels_diagonal(
                 continue
             excel_row = r_idx + 1  # 转回 Excel 1-based 坐标
             excel_col = c_idx + 1
-            if text in label_to_coord:
-                duplicate_labels.add(text)  # 后续斜向位置再次出现
-            else:
-                label_to_coord[text] = (excel_row, excel_col)  # 首见即最靠近左上角
-    return label_to_coord, duplicate_labels
+            label_to_coords.setdefault(text, []).append((excel_row, excel_col))
+    return label_to_coords
 
 
-def _cell_in_area(row: int, col: int, area: tuple[int, int, int, int]) -> bool:
+def _cell_in_area(
+    row: int,
+    col: int,
+    area: AreaRect | list[AreaRect],
+) -> bool:
     """
     函数名: _cell_in_area
-    作用: 判断坐标是否落在区域矩形内
+    作用: 判断坐标是否落在单个矩形或矩形并集内
     输入:
         row (int) - 行（1-based）
         col (int) - 列（1-based）
-        area (tuple[int, int, int, int]) - (min_row, min_col, max_row, max_col)
+        area (AreaRect | list[AreaRect]) - 单矩形或并集
     输出:
-        bool - 在区域内返回 True
+        bool - 在任一矩形内返回 True
     """
+    if isinstance(area, list):
+        return any(_cell_in_area(row, col, rect) for rect in area)
     min_row, min_col, max_row, max_col = area
     return min_row <= row <= max_row and min_col <= col <= max_col
 
@@ -791,12 +1038,12 @@ def load_toml(template_id: str) -> GetTomlValues | None:
 def verify_toml(template_path: Path, cfg: GetTomlValues) -> dict[str, Any]:
     """
     函数名: verify_toml
-    作用: UI 唯一校验入口；模板坐标印证 + TOML 层 id/db_id 规则校验
+    作用: UI 唯一校验入口；模板坐标印证 + TOML 层 id/db_id/regex 规则校验
     输入:
         template_path (Path) - 当前模板 xlsx 路径
         cfg (GetTomlValues) - 已加载的 TOML 配置
     输出:
-        dict[str, Any] - 完整报告（坐标、duplicate_id_sheets、db_id 等）
+        dict[str, Any] - 完整报告（坐标、duplicate_id_sheets、db_id、regex errors 等）
     """
     missing_labels: list[str] = []
     duplicate_labels: list[str] = []
@@ -816,35 +1063,42 @@ def verify_toml(template_path: Path, cfg: GetTomlValues) -> dict[str, Any]:
             return _make_report(False, [], [], [], {}, errors, id_info)
         ws = wb[cfg.work_sheet]
         try:
-            input_area = _parse_area(cfg.input_section.input_area)
+            # input_area 解析为矩形并集（字符串或列表均可）
+            input_areas = _parse_input_areas(cfg.input_section.input_area)
         except ValueError as exc:
             errors.append(f"invalid input_area: {exc}")
             return _make_report(False, [], [], [], {}, errors, id_info)
-        label_map, duplicate_texts = _scan_worksheet_labels_diagonal(ws)
+        label_occurrences = _scan_worksheet_labels_diagonal(ws)
         for rule in cfg.field_rules:
-            if rule.Input_label not in label_map:
+            occurrences = label_occurrences.get(rule.Input_label) or []
+            if not occurrences:
                 missing_labels.append(rule.Input_label)
                 continue
-            if rule.Input_label in duplicate_texts:
+            # 仅统计值格落入并集的标签格为候选；并集外同文视为其它槽位表头
+            candidates: list[tuple[int, int, int, int]] = []
+            for label_row, label_col in occurrences:
+                try:
+                    value_row, value_col = offset_cell(
+                        label_row, label_col, rule.value_from_label, rule.value_offset
+                    )
+                except ValueError:
+                    continue
+                if _cell_in_area(value_row, value_col, input_areas):
+                    candidates.append((label_row, label_col, value_row, value_col))
+            if len(candidates) >= 2:
                 duplicate_labels.append(rule.Input_label)
                 continue
-            label_row, label_col = label_map[rule.Input_label]
-            try:
-                value_row, value_col = offset_cell(
-                    label_row, label_col, rule.value_from_label, rule.value_offset
-                )
-            except ValueError as exc:
-                errors.append(f"{rule.Input_label}: {exc}")
+            if len(candidates) == 1:
+                label_row, label_col, value_row, value_col = candidates[0]
+                located[rule.Input_label] = {
+                    "label_row": label_row,
+                    "label_col": label_col,
+                    "value_row": value_row,
+                    "value_col": value_col,
+                }
                 continue
-            if not _cell_in_area(value_row, value_col, input_area):
-                out_of_area_labels.append(rule.Input_label)
-                continue
-            located[rule.Input_label] = {
-                "label_row": label_row,
-                "label_col": label_col,
-                "value_row": value_row,
-                "value_col": value_col,
-            }
+            # 表上有同文标签，但全部值格在并集外
+            out_of_area_labels.append(rule.Input_label)
     finally:
         wb.close()
     layout_ok = not missing_labels and not duplicate_labels and not out_of_area_labels and not errors

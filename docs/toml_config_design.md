@@ -19,23 +19,28 @@ ID|Report_date|issues
 ---
 
 Input_sheet*:
-ID#|Name|Recent Issue|Report Date|Discipline|Effective_Date|Sign
-:----|:-----------|:--------------------------------|:-----|:-------------------------:|:---------|:-----
-8129|Clark Kent|recreate himself without changing his dob on reco|1978/02/29|10 Years of Community Service|2026-01-31|One
-250|狗蛋|it must eat shit. Put here as a prediction|2026/01/31|Brush teeth daily|2026-01-31|One
+ID#|ID#|Name|Recent Issue|Report Date|Discipline|Effective_Date|Name|Recent Issue|Report Date|Discipline|Effective_Date|Sign
+:----|:----|:-----------|:--------------------------------|:-----|:-------------------------:|:---------|:-----------|:--------------------------------|:-----|:-------------------------:|:---------|:-----
+8129|666|Clark Kent|recreate himself without changing his dob on reco|1978/02/29|10 Years of Community Service|2026-01-31|Lucifer|Smash my face|unknown|Smash by itself twice|forever|One
+250||狗蛋|it must eat shit. Put here as a prediction|2026/01/31|Brush teeth daily|2026-01-31||||||One
 * Input_sheet和Print_sheet放在template文件夹内。
+* 本表示意：A/C–G/M 为 instance 0；B 与 H–L 为同行右侧下一组；第 3 行为向下下一组。对应下方 `input_area` 并集与 `move_to = ["right","down"]`。
 
 Print_sheet*: 
 Name|Clark Kent
 :------|:--------------
-Report Date||1978-03-01
+Report Date|1978-03-01
 Discipline|10 Years of Community Service
 Effective Date|2026-01-01
+Name|Lucifer
+Report Date|unknown
+Discipline|Smash by itself twice
+Effective Date|forever
 Name|狗蛋
 Report Date|2030-01-01
 Discipline|Brush teeth daily
 Effective Date|2026-01-31
-* 4 lines are a print area
+* 每 4 行为一个 print area；本例 3 人 → 3 个打印区（Clark Kent / Lucifer / 狗蛋），与 Input_sheet 上「同行右侧一组 + 下一行一组」的二维展开对应。
 
 ## toml设定
 
@@ -67,8 +72,9 @@ Effective Date|2026-01-31
 
 - **必有键**：`input_area`、`move_to`、`offset`
 - **语义**：
-  - `input_area`：**第一组 instance 0 填写值**所在区域的登记（**不包含标签格**）；与标签如何被找到**无关联**
-  - `move_to` / `offset`：第 2、3… 组填写值相对 instance 0 的整体平移；**不**平移标签格
+  - `input_area`：**第一组 instance 0 填写值**所在区域的登记（**不包含标签格**）；与标签如何被找到**无关联**。类型为**单个区域字符串**或**字符串列表**（多个区域取**并集**，可非连续，如 `["A2","C2:G2","M2"]`）
+  - `move_to`：第 2、3… 组填写值相对 instance 0 的展开方向。类型为**单个方向字符串**或**方向字符串列表**（如 `["right","down"]` 表示二维展开：第一项为主轴，第二项为次轴）；合法值仍为 `up` / `down` / `left` / `right`
+  - `offset`：每一轴上的平移步长（单元格数，正整数）；**不**平移标签格
 
 `[[sources]]`：路径尚未配置时使用空字符串 `""` 填充；有路径后用 `tomlkit.string(..., literal=True)` 写单引号字面量。
 
@@ -104,15 +110,15 @@ Effective Date|2026-01-31
 
 每次 **UI 加载 template 并激活校验** 时，须对当前 xlsx + 当前 TOML **重新扫描、重新印证**（防止 template 被改过）。`core_toml` **提供函数供 UI 调用**，不在模块内部写死「只校验一次」。
 
-**标签与 `input_area` 无关联**：`Input_label` 靠全表扫描定位；`input_area` 只约束**找到标签之后**推算出的 instance 0 **填写值格**必须落在该区域内。
+**标签与 `input_area` 无关联**：`Input_label` 靠全表扫描定位；`input_area` 只约束**找到标签之后**推算出的 instance 0 **填写值格**必须落在该区域**并集**内。
 
 #### 两层职责
 
 | 层级 | 键 | 作用对象 | 是否随第 k 组录入而变 |
 |------|-----|----------|----------------------|
 | 字段级 | `Input_label`、`value_from_label`、`value_offset` | 在 `work_sheet` 上扫描得**标签格** → 推算 instance 0 **值格** | 否（单次校验内坐标固定） |
-| `[[input_section]]` | `input_area` | 第一组 instance 0 **填写值**区域（校验值格是否落入） | 否 |
-| `[[input_section]]` | `move_to`、`offset` | 第 k≥1 组**填写值**相对 instance 0 的整体平移 | 是（仅值格） |
+| `[[input_section]]` | `input_area` | 第一组 instance 0 **填写值**区域并集（校验值格是否落入任一子区域） | 否 |
+| `[[input_section]]` | `move_to`、`offset` | 第 k≥1 组**填写值**相对 instance 0 的平移（单方向或主轴+次轴二维） | 是（仅值格） |
 
 #### 标准数据库范式（默认唯一自动处理布局）
 
@@ -129,7 +135,7 @@ Effective Date|2026-01-31
 
 | 条件 | 行为 |
 |------|------|
-| template 已选，**TOML 不存在** | `TomlGenerator` 生成**默认 TOML**（不逐格扫描）；按标准范式：第 1 行写出 `[[fields]].Input_label` 骨架，`input_area` 登记第 2 行填写值区域 |
+| template 已选，**TOML 不存在** | `TomlGenerator` 生成**默认 TOML**（不逐格扫描）；按标准范式：第 1 行写出 `[[fields]].Input_label` 骨架，`input_area` 登记第 2 行**连续**填写值区域字符串，`move_to = "down"` |
 | template 已选，**TOML 已存在**，UI **激活校验** | 对 `work_sheet` **逐字段**全表扫描各 `Input_label`，确定标签格与 instance 0 值格，并做相互印证 |
 
 #### 标签格如何确定（斜向波面扫描）
@@ -142,12 +148,17 @@ Effective Date|2026-01-31
 
 1. 用 `iter_rows` 一次性读取 100×100 区域到内存快照（避免逐格随机读）。
 2. 在快照上按上述斜向顺序遍历；非空单元格文本（trim 后）作为候选标签。
-3. 某文本**首次**出现的位置记为该标签的**标签格**；若后续斜向位置再次出现相同文本，记为**重复标签**。
+3. 建立「标签文本 → 出现坐标列表」（保留全部出现，不只首见）；是否构成 `duplicate_labels` 留到与 `input_area` 并集交叉后再判定。
 
 对每一个 `[[fields]]` 的 `Input_label`（在校验阶段查索引，不再逐字段重扫）：
 
-1. 在索引中查 `Input_label`：0 个 → `missing_labels`；≥2 个（重复）→ `duplicate_labels`；1 个 → 记为 `(label_row, label_col)`。
-2. **标签格是否在 `input_area` 内不作要求**；`input_area` 不参与找标签。
+1. 在索引中查 `Input_label` 的全部出现位置。0 个 → `missing_labels`。
+2. 对每一处标签格推算值格；**值格落入 `input_area` 并集**的记为候选：
+   - 候选 ≥2 → `duplicate_labels`
+   - 候选 =1 → 记为 `(label_row, label_col)` 与对应值格
+   - 候选 =0（表上有同文标签，但全部值格在并集外）→ `out_of_area_labels`
+3. 值格落在并集外的同文标签视为**其它 instance 槽位的表头装饰**（如场景1 中 B 列第二个 `ID#`、H 列起第二组 `Name`…），只要并集内仍恰有一个候选，**不**报 `duplicate_labels`。
+4. **标签格是否在 `input_area` 内不作要求**；`input_area` 不参与找标签。
 
 #### 值格如何确定与 `input_area` 约束
 
@@ -169,70 +180,88 @@ Effective Date|2026-01-31
 得到 **instance 0** 的填写值格后，**必须**满足：
 
 ```
-(value_row, value_col) 落在 [[input_section]].input_area 所围矩形内
+(value_row, value_col) 落在 [[input_section]].input_area 并集内的任一子矩形中
 ```
 
-否则校验失败。即：**先找标签，再按 offset 找值；值必须在 `input_area` 内**。
+否则校验失败。即：**先找标签，再按 offset 找值；值必须在 `input_area` 并集内**。
 
 #### `input_section` 只移动填写值、不移动标签
 
-同一页有多份证书/多条录入时，`[[input_section]]` 只描述**填写值区域**的重复平移；**标签格坐标始终不变**。
+同一页有多份证书/多条录入时，`[[input_section]]` 只描述**填写值区域**的重复平移；**标签格坐标始终不变**（含其它槽位上重复画出的表头文字，亦不随 k 移动）。
 
 设 instance 序号为 `k`（`k = 0` 为第一次填写）。在已记住的 instance 0 值格 `(v_row, v_col)` 上：
 
 ```
 k = 0  →  使用记住的 instance 0 值格坐标
-k ≥ 1  →  在 instance 0 值格上，应用 k 次 move_to/offset 平移：
-           (v_row, v_col) = offset_cell(v_row, v_col, move_to, offset)  # 重复 k 次
+k ≥ 1  →  按 move_to / offset 相对 instance 0 平移（见下）
 ```
+
+**`move_to` 为单个方向字符串**时：
+
+```
+(v_row, v_col) = offset_cell(v_row0, v_col0, move_to, offset * k)
+```
+
+**`move_to` 为方向列表**时（本例 `["right","down"]`）：
+
+- 一项：与单字符串相同。
+- 两项：视为**二维网格**——列表第一项为**主轴**（同带上的相邻组），第二项为**次轴**（换带/换行）。`k` → `(主轴步数 i, 次轴步数 j)` 由容量与填表实现约定（建议行优先：先沿主轴铺满再沿次轴）。每一步仍用同一 `offset`（单元格数）：
+  ```
+  (v_row, v_col) = offset_cell(v_row0, v_col0, move_to[0], offset * i)
+  (v_row, v_col) = offset_cell(v_row,  v_col,  move_to[1], offset * j)
+  ```
+- 超过两项：本设计不要求；实现可拒绝或只取前两项。
 
 **标签格**对任意 `k` 均为记住的 `(label_row, label_col)`，不参与 `move_to` / `offset`。
 
+二维版式下，各字段块的列距必须与统一的 `offset` **相容**（每个值格经同一套 `(i,j)` 步长后落到目标槽）。若列距不一致（例如 ID 列距 1、Name 块列距 5），属非标准版式，须改表或改 `offset`/区域划分，不能指望引擎为每块使用不同步长。
+
 #### 演算示例
 
-标准范式：`input_area = "A3:G3"`（第一组**填写值**行）；标签在上一行。
+对照场景1：`input_area` 只登记 instance 0 的填写值并集（故意不含 B2、H2:L2——那些是主轴 `right` 下一组占用的格）；标签在第 1 行。
 
 ```toml
 [[input_section]]
-input_area = "A3:B3"
-move_to = "right"
-offset = 2
+input_area = ["A2", "C2:G2", "M2"]
+move_to = ["right", "down"]
+offset = 1
 
 [[fields]]
-Input_label = "Label1"
+Input_label = "ID#"
 value_from_label = "down"
 value_offset = 1
 
 [[fields]]
-Input_label = "Label2"
+Input_label = "Name"
+value_from_label = "down"
+value_offset = 1
+
+[[fields]]
+Input_label = "Sign"
 value_from_label = "down"
 value_offset = 1
 ```
 
-全表扫描后记住（1-based）：
+全表扫描后记住（1-based；重复表头若值格在并集外则忽略）：
 
 | 对象 | 绝对坐标 | 说明 |
 |------|----------|------|
-| label1 | A2 | 扫描得 Label1 |
-| label2 | B2 | 从头扫描得 Label2 |
-| value1（k=0） | A3 | A2 向下 1 格 |
-| value2（k=0） | B3 | B2 向下 1 格 |
+| label ID# | A1 | 首见；B1 同文但值格 B2 ∉ 并集 → 不报重复 |
+| label Name | C1 | 首见；H1 同文但值格 H2 ∉ 并集 → 不报重复 |
+| label Sign | M1 | 唯一 |
+| value ID#（k=0） | A2 | A1 向下 1 格 ∈ 并集 |
+| value Name（k=0） | C2 | C1 向下 1 格 ∈ 并集 |
+| value Sign（k=0） | M2 | M1 向下 1 格 ∈ 并集 |
 
-`input_area = A3:B3` 与 instance 0 值格粗略一致。
+`input_area` 并集与 instance 0 值格粗略一致。
 
-**k = 1**（`move_to = "right"`, `offset = 2`）：
+**单方向对照**：若 `move_to = "down"`、`offset = 1`，则 k=1 时各值格行号 +1、列号不变（A3 / C3 / M3，对应狗蛋所在行）。
 
-| 对象 | 绝对坐标 | 说明 |
-|------|----------|------|
-| label1、label2 | **仍为** A2、B2 | 标签不动 |
-| value1 | C3 | instance 0 的 A3 向右 +2 列 |
-| value2 | D3 | instance 0 的 B3 向右 +2 列 |
-
-若 `move_to = "down"`、`offset = 1`，则 k=1 时值格行号 +1、列号不变。
+**二维对照**（`move_to = ["right","down"]`，假设主轴方向列距恰为 `offset`）：k 对应网格 `(i,j)` 时，先右移 `offset*i` 再下移 `offset*j`。场景1 示意三人时，Print_sheet 三个 print area 分别对应 (0,0) Clark Kent、(主轴下一步) Lucifer、(次轴下一步) 狗蛋；若实际 Name 块列距 ≠ `offset`，须先改版式再依赖自动平移。
 
 #### 校验入口：`verify_toml()`
 
-UI **只**调用一个函数 `verify_toml()`，由 `core_toml` 完成「打开 xlsx → 搜每个 `Input_label` → 算 instance 0 值格 → 判断是否在 `input_area` 内」，并把**有问题的标签**回报给 UI。UI 不关心扫描细节。
+UI **只**调用一个函数 `verify_toml()`，由 `core_toml` 完成「打开 xlsx → 搜每个 `Input_label` → 算 instance 0 值格 → 判断是否在 `input_area` 并集内」，并把**有问题的标签**回报给 UI。UI 不关心扫描细节。
 
 **入参（概念）**
 
@@ -247,8 +276,8 @@ UI **只**调用一个函数 `verify_toml()`，由 `core_toml` 完成「打开 x
 
 - 整体是否通过（无任何问题即通过）。
 - **哪些 `Input_label` 在 `work_sheet` 上找不到**（label 不存在）。
-- **哪些 `Input_label` 在工作表上出现多处**（duplicate_labels）。
-- **哪些 `Input_label` 的 instance 0 值格不在 `input_area` 内**（input 越界）。
+- **哪些 `Input_label` 在并集内对应多个标签格**（duplicate_labels；并集外的同文表头不计）。
+- **哪些 `Input_label` 的 instance 0 值格不在 `input_area` 并集内**（input 越界）。
 
 建议形如：
 
@@ -271,23 +300,22 @@ UI **只**调用一个函数 `verify_toml()`，由 `core_toml` 完成「打开 x
 
 `ok` 为真当且仅当：坐标三项列表与 `errors` 均为空，且 `duplicate_id_sheets` 为空、`db_id_required` 为假、`invalid_db_id` 为 `null`。
 
-`located` 仅内存返回，供 UI 初始化输入框与后续填表使用；**不写回 TOML**。k≥1 的值格由填表逻辑在 instance 0 坐标上再应用 `move_to`/`offset`，不在本次校验逐 instance 扫描。
+`located` 仅内存返回，供 UI 初始化输入框与后续填表使用；**不写回 TOML**。k≥1 的值格由填表逻辑在 instance 0 坐标上再应用 `move_to`/`offset`（含二维列表），不在本次校验逐 instance 扫描。
 
-**执行步骤（仅 `work_sheet` 指定表 + TOML 层 id 规则）**
+**执行步骤（仅 `work_sheet` 指定表 + TOML 层 id / regex 规则）**
 
-1. **TOML 层**（不打开 xlsx）：统计各 `(source_file, source_sheet)` 的 `id=true` 数量；汇总 `id_labels`、`id_lookup_keys`；解析或校验 `db_id`。
+1. **TOML 层**（不打开 xlsx）：统计各 `(source_file, source_sheet)` 的 `id=true` 数量；汇总 `id_labels`、`id_lookup_keys`；解析或校验 `db_id`；对每条非空 `[[fields]].regex` 做 `re.compile`（失败 → `errors`，形如 `{Input_label}: 正则表达式无效 (...)`）。
 2. 打开 `work_sheet` 指定的工作表；不存在 → 整体失败。
-3. 把 `[[input_section]].input_area` 解析为矩形 `(min_row, min_col, max_row, max_col)`。
-4. 对 100×100 区域做**一次**斜向波面扫描，建立标签文本 → 首见坐标索引，并收集重复文本。
+3. 把 `[[input_section]].input_area` 解析为**一个或多个**矩形，组成并集（单项字符串或字符串列表均可）；无法解析 → `errors`。
+4. 对 100×100 区域做**一次**斜向波面扫描，建立标签文本 → 出现坐标列表（含重复）。
 5. 对每一条 `[[fields]]` 查索引：
-   - 找不到 `Input_label` → 计入 `missing_labels`。
-   - `Input_label` 在表中出现多处 → 计入 `duplicate_labels`。
-   - 找到唯一标签格后，`offset_cell(...)` 得 instance 0 值格；若不在 `input_area` 矩形内 → 计入 `out_of_area_labels`。
-6. 坐标与 id 规则均通过 → `ok = True`。
+   - 表上 0 处 `Input_label` → `missing_labels`。
+   - 对每处出现推算值格，筛「值格 ∈ 并集」的候选：候选 ≥2 → `duplicate_labels`；候选 =1 → 写入 `located`；候选 =0（仅有并集外同文）→ `out_of_area_labels`。
+6. 坐标与 id / regex 规则均通过 → `ok = True`。
 
-**不检查**：标签格是否在 `input_area` 内；`field` / `source_*` / `regex` 是否已映射；`print_sheet` 是否存在或其 `print_area`。`verify_toml()` **只报告**问题，**不**静默改 TOML、不改 xlsx、不自动修正坐标。
+**不检查**：标签格是否在 `input_area` 内；`field` / `source_*` / `regex` **是否已映射**（空串仍合法）；`print_sheet` 是否存在或其 `print_area`。**会检查**：非空 `regex` 是否能被 Python `re` 编译。`verify_toml()` **只报告**问题，**不**静默改 TOML、不改 xlsx、不自动修正坐标。
 
-> 文本层面的 TOML 语法/字段骨架解析由 Load 解析阶段负责（不打开 xlsx）；`verify_toml()` 专注 xlsx 坐标印证与 **id/db_id 规则**。
+> 文本层面的 TOML **语法**解析由 Load 阶段负责（不打开 xlsx）。若 `regex` 误用双引号写出 `\d` 等非法转义，**整文件解析失败**，`load_toml` 返回 `None`，校验入口根本拿不到配置——这不是 `re.compile` 报错，而是 TOML 层拒收（见下方「正则表达式写法」）。`verify_toml()` 在配置已成功加载后，再做坐标印证、**id/db_id** 与 **regex 可编译性**。
 
 ### 配置示例
 
@@ -306,20 +334,20 @@ source2 = ""
 
 # input_section：仅登记第一组填写值区域及后续组的平移；不包含标签。
 [[input_section]]
-input_area = "A2:G2"        # 第一组填写值所在行（粗略登记，不含标签）
-move_to = "down"              # 第 2、3… 组填写值平移方向：up / down / left / right
-offset = 1                    # 平移步长。本例 k=1 时填写值行由第 2 行移至第 3 行；标签行不动
+input_area = ["A2","C2:G2","M2"]        # instance 0 填写值并集（可非连续；本例不含 B2、H2:L2）
+move_to = ["right","down"]              # 单字符串或列表；列表两项 = 主轴 + 次轴（up/down/left/right）
+offset = 1                    # 每一轴上的平移步长（单元格数）；标签行不动
 
 # 字段映射：每个输入项一个 [[fields]] 表项
 [[fields]]
-Input_label = "ID#"         # 全表从头扫描，首个完全匹配格为标签格（记住坐标）
+Input_label = "ID#"         # 扫描全部同文；值格落入 input_area 并集的那一处为标签格（本例 A1，非 B1）
 value_from_label = "down"   # 支持up/down/left/right。这里的down表示标签在上，数值在“下边”
 value_offset = 1            # 说明找到标签之后，往下“1”格就是填写内容的地方。
 field = "ID"                # 数据源的所在列
 source_file = "source1"     # 数据源的引用
 source_sheet = "sheet1"     # 打开数据源之后，寻找指定的这个表格
 index = 0                   # 作为纯文本粘贴被分隔符拆分后的索引值；index base 0
-regex = ""                  # 获得该项目后，获取数据的正则表达式。一般用于截取某一段内容。
+regex = ""                  # 无截取时写空串；有 \d 等反斜杠时必须用单引号字面量，见「格式说明」§正则
 id = true                   # 如果为真，这个内容将从数据源（符合数据库范式）所属的数据，也同时是本地数据的索引id。
 
 
@@ -353,7 +381,7 @@ field = "issues"
 source_file = "source2"
 source_sheet = "sheet2"
 index = 2
-regex = '\d+/\d+/\d+'
+regex = '\d+/\d+/\d+'       # 正确：单引号字面量；勿写成 regex = "\d+/\d+/\d+"（TOML 双引号解析失败）
 id = false
 
 [[fields]]
@@ -394,12 +422,23 @@ id = false
 
 1. **字段名含空格或 `#`**：列名放在 `[[fields]].Input_label`。
 2. **Windows 路径**：单引号字面量，反斜杠原样保留，例如 `'c:\temp\cache\执法堂业绩.xlsx'`。
-3. **正则表达式**：含反斜杠时用字面量，例如 `'\d+/\d+/\d+'`。
+3. **正则表达式（`[[fields]].regex`）——易踩坑**：
+   - **语义**：Python `re` 模式；应用层用 `re.search`；有捕获组时取 `group(1)`（见 `core_connect._apply_regex`）。空串 `""` = 未映射，不做截取。
+   - **落盘必须用 TOML 单引号字面量**（`literal=True`），让 `\d` `\w` `\s` `\b` `\(` 等**原样**进入内存。正确示例：
+     - `regex = '\d+/\d+/\d+'`
+     - `regex = '(\d+)/'`
+     - `regex = '\d+/(\d+)'`
+   - **禁止**对含反斜杠的模式使用双引号基本字符串。TOML 1.0 基本字符串只认有限转义（`\\` `\"` `\n` `\t` `\uXXXX` 等），**不认** `\d` `\w` `\s`。因此：
+     - `regex = "\d+"` → **整份 TOML 解析失败**（`InvalidCharInStringError`），不是「正则不合法」。
+     - `regex = "\\d+"` → 能解析，内存得到 `\d+`（正确但易手滑少写一层 `\`）。
+   - **模式本身含单引号 `'`** 时无法用字面量：改用双引号，并把每个反斜杠写成 `\\`，例如内存模式 `don't\d+` → `regex = "don't\\d+"`。引擎序列化（`_toml_string`）对 `regex` 默认写字面量；仅当值含 `'` 时退回双引号并正确转义。
+   - **校验**：`verify_toml` 对非空 `regex` 调用 `re.compile`；编译失败写入报告 `errors`（带 `Input_label`）。解析阶段失败则根本进不了 `verify_toml`。
 4. **已映射但无 regex**：写入空字符串 `regex = ""`。
-5. **默认配置**：包含 `determiner`、`work_sheet`（若有）、`print_sheet`（可选）、`use_independent_db`（默认 `true`）、`[[input_section]]`（**一条**）、`[[sources]]` 与 `[[fields]]` 骨架；可选字符串键以 `""` 占位。
+5. **默认配置**：包含 `determiner`、`work_sheet`（若有）、`print_sheet`（可选）、`use_independent_db`（默认 `true`）、`[[input_section]]`（**一条**）、`[[sources]]` 与 `[[fields]]` 骨架；可选字符串键以 `""` 占位。生成器默认仍写**单个**连续 `input_area` 字符串与**单个** `move_to` 方向；列表形式由用户手工（或向导）填写非连续/二维版式时使用。
 6. **`index`**：纯文本粘贴时按 `determiner` 拆分后的列索引（base 0）；与 Excel 列号、与 `input_section` 平移无关。
-7. **`input_area`**：只框 instance 0 **填写值**；**不**用于找标签。找标签后推算出的值格**必须**落在此区域内。
-8. **标签与 `input_area`**：二者独立——扫描只认 `Input_label`；`input_area` 只校验值格是否入框。
+7. **`input_area`**：只框 instance 0 **填写值**（字符串或字符串列表并集）；**不**用于找标签。找标签后推算出的值格**必须**落在此并集内。
+8. **标签与 `input_area`**：二者独立——扫描认 `Input_label`；重复同文标签仅当其值格落入并集时参与 `duplicate_labels` 判定；`input_area` 只校验 instance 0 值格是否入框。
+9. **`move_to`**：字符串 = 单轴；长度为 2 的列表 = 主轴+次轴二维展开；与 `offset` 共同决定 k≥1 值格坐标。
 
 ### 实现依赖
 
@@ -415,18 +454,20 @@ tomlkit>=0.13
 
 | 职责 | 模块 | 说明 |
 |------|------|------|
-| 生成默认 TOML | `TomlGenerator` | TOML 不存在时；标准范式；**不**做全表扫描 |
-| 读写 TOML 文本 | `GetTomlValues` | Load / Save / ToDict（含 `db_id`、`use_independent_db`） |
-| **激活校验**（UI 调用） | `verify_toml()` | UI 只调这一个；斜向扫描 work_sheet，报告找不到 / 重复 / 值格越界的 `Input_label`，以及 `duplicate_id_sheets` / `db_id` 相关项 |
+| 生成默认 TOML | `TomlGenerator` | TOML 不存在时；标准范式；**不**做全表扫描；默认单个连续 `input_area` + 单个 `move_to` |
+| 读写 TOML 文本 | `GetTomlValues` | Load / Save / ToDict（含 `db_id`、`use_independent_db`；`input_area`/`move_to` 可为字符串或列表） |
+| **激活校验**（UI 调用） | `verify_toml()` | UI 只调这一个；斜向扫描 work_sheet，报告找不到 / 并集内重复 / 值格越界的 `Input_label`，以及 `duplicate_id_sheets` / `db_id` / **非空 regex 的 `re.compile` 失败** |
 | 解析本地主键 | `resolve_db_id()` | 由已加载配置推断生效的 `db_id`（`Input_label`）；无 id 字段时返回 `None` |
-| 坐标解析 | `offset_cell`、`_scan_worksheet_labels_diagonal` 等 | 校验与填表共用；扫描上限 **100×100** |
+| 坐标解析 | `offset_cell`、`_scan_worksheet_labels_diagonal` 等 | 校验与填表共用；扫描上限 **100×100**；`input_area` 按并集判定 |
+| regex 落盘 | `_toml_string` / `_needs_literal_string` | `regex` 默认单引号字面量；值含 `'` 时改双引号并转义反斜杠 |
 
 **不在 `core_toml` 内写死**「仅首次 Load 校验」；是否校验、何时校验由 **UI 在加载 template 时决定**。
 
 ### 职责划分
 
-- **生成器（`TomlGenerator`）**：TOML 不存在时，按标准范式生成骨架（第 1 行 → `[[fields]].Input_label`，`input_area` → 第 2 行值区）；默认 `value_from_label = "down"`、`value_offset = 1`；**不**扫描全表。
-- **持久化层（`GetTomlValues`）**：Load / Save / ToDict（含可选 `db_id`、`use_independent_db`）；**`verify_toml()`**——回报坐标问题与 id 规则（`duplicate_id_sheets`、`db_id_required`、`invalid_db_id`、`db_id`、`id_lookup_keys`）。
-- **定位**：仅在 `work_sheet` 上斜向波面扫描标签；值格由 offset 推算且**必须**在 `input_area` 内；`move_to`/`offset` 处理 k≥1 值格平移。
-- **打印**：`print_sheet` 由 `ExcelWriter.get_print_areas()` 与 UI 打印行使用；不参与 `verify_toml` 坐标印证。
+- **生成器（`TomlGenerator`）**：TOML 不存在时，按标准范式生成骨架（第 1 行 → `[[fields]].Input_label`，`input_area` → 第 2 行连续值区字符串）；默认 `value_from_label = "down"`、`value_offset = 1`、`move_to = "down"`；**不**扫描全表；非连续/二维列表由后续手工或向导写入。
+- **持久化层（`GetTomlValues`）**：Load / Save / ToDict（含可选 `db_id`、`use_independent_db`）；**`verify_toml()`**——回报坐标问题、id 规则与非空 `regex` 的 `re.compile` 结果。
+- **定位**：仅在 `work_sheet` 上斜向波面扫描标签；值格由 offset 推算且**必须**在 `input_area` 并集内；同文重复标签仅统计值格入并集者；`move_to`/`offset` 处理 k≥1 值格平移（单轴或主轴+次轴）。
+- **regex 写法**：含 `\d` 等反斜杠时磁盘上用单引号字面量；双引号 `"\d"` 会导致整文件 TOML 解析失败（见格式说明 §3）。
+- **打印**：`print_sheet` 由 `ExcelWriter.get_print_areas()` 与 UI 打印行使用；不参与 `verify_toml` 坐标印证。场景1 约定每 4 行为一个 print area。
 - **数据源路径**：由专用 UI 写入，不由生成器提供。

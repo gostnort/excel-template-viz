@@ -10,7 +10,15 @@ from typing import Any
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter, range_boundaries
 from PIL import Image, ImageDraw, ImageFont
-from .core_toml import GetTomlValues, TomlDefault, _validate_id_rules, offset_cell
+from .core_toml import (
+    GetTomlValues,
+    TomlDefault,
+    _parse_input_areas,
+    _validate_id_rules,
+    apply_instance_shift,
+    move_to_directions,
+    primary_move_to,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -292,6 +300,8 @@ class ExcelWriter:
         self.cfg = cfg
         # located: {Input_label: {label_row,label_col,value_row,value_col}}，来自 core_toml.verify_toml
         self.located = dict(located) if located else {}
+        # 二维 move_to 时主轴可铺步数；由 max_instance_count 写入，单轴为 0
+        self.primary_span: int = 0
 
 
     def _worksheet_name(self, workbook_path: Path) -> str:
@@ -323,8 +333,15 @@ class ExcelWriter:
         if instance_k <= 0:
             return value_row, value_col
         section = self.cfg.input_section
-        # 同方向平移 offset*k；offset_cell 与 core_toml 共用语义
-        return offset_cell(value_row, value_col, section.move_to, section.offset * instance_k)
+        # 单轴或二维（使用已测得的 primary_span）
+        return apply_instance_shift(
+            value_row,
+            value_col,
+            section.move_to,
+            section.offset,
+            instance_k,
+            primary_span=self.primary_span,
+        )
 
 
     def _read_instance(self, ws_data: Any, ws_form: Any | None, instance_k: int) -> tuple[dict[str, Any], dict[str, bool]]:
@@ -407,7 +424,8 @@ class ExcelWriter:
             max_r = ws_data.max_row
             max_c = ws_data.max_column
             offset_val = self.cfg.input_section.offset or 1
-            if self.cfg.input_section.move_to in ["down", "up"]:
+            # 主轴为上下时按行估算上界，否则按列
+            if primary_move_to(self.cfg.input_section.move_to) in ("down", "up"):
                 high = max_r // offset_val + 2
             else:
                 high = max_c // offset_val + 2
@@ -482,49 +500,68 @@ class ExcelWriter:
     def max_instance_count(self, excel_path: Path) -> int:
         """
         函数名: max_instance_count
-        作用: 以 input_area 为第一块，按 move_to/offset 平移，统计与第一块 cell.value 完全一致的最大块数（含 instance 0）
+        作用: 以 input_area 并集为第一块，按 move_to/offset 平移，统计与第一块 cell.value 完全一致的最大块数（含 instance 0）
         输入:
             excel_path (Path) - 模板 xlsx
         输出:
             int - 允许的最大 instance 数（含 instance 0），上界 16384
         """
-        from openpyxl.utils import range_boundaries  # 仅此方法用到，局部导入避免改动顶层 import
         BOUND = 16384  # 行列统一边界
         section = self.cfg.input_section
-        min_col, min_row, max_col, max_row = range_boundaries(section.input_area)
+        areas = _parse_input_areas(section.input_area)
+        # 收集并集内全部绝对格（公式格不参与比较）
         sheet_name = self._worksheet_name(excel_path)
-        # data_only=False 让公式格呈现 "=..." 文本，便于排除
         wb = load_workbook(excel_path, data_only=False)
         try:
             ws = wb[sheet_name]
-            # 读第一块各相对坐标的值；"=" 开头的公式格不参与比较
-            base: dict[tuple[int, int], Any] = {}
-            for r in range(min_row, max_row + 1):
-                for c in range(min_col, max_col + 1):
-                    value = ws.cell(row=r, column=c).value
-                    if isinstance(value, str) and value.startswith("="):
-                        continue
-                    base[(r - min_row, c - min_col)] = value
-            count = 1  # instance 0 自身计入
-            for k in range(1, BOUND):
-                shift = section.offset * k
-                try:
-                    # 整块四角同向平移；越过第 1 行/列时 offset_cell 抛错
-                    k_min_row, k_min_col = offset_cell(min_row, min_col, section.move_to, shift)
-                    k_max_row, k_max_col = offset_cell(max_row, max_col, section.move_to, shift)
-                except ValueError:
-                    break
-                if k_max_row > BOUND or k_max_col > BOUND:
-                    break  # 越过 16384 边界
-                matched = True
-                for rel, base_value in base.items():
-                    cell_value = ws.cell(row=k_min_row + rel[0], column=k_min_col + rel[1]).value
-                    if cell_value != base_value:
-                        matched = False
+            base_cells: list[tuple[int, int, Any]] = []
+            for min_row, min_col, max_row, max_col in areas:
+                for r in range(min_row, max_row + 1):
+                    for c in range(min_col, max_col + 1):
+                        value = ws.cell(row=r, column=c).value
+                        if isinstance(value, str) and value.startswith("="):
+                            continue
+                        base_cells.append((r, c, value))
+            if not base_cells:
+                self.primary_span = 0
+                return 1
+            dirs = move_to_directions(section.move_to)
+            step = section.offset if section.offset >= 1 else 1
+            def _block_matches(k: int, primary_span: int) -> bool:
+                for r0, c0, base_value in base_cells:
+                    try:
+                        rk, ck = apply_instance_shift(
+                            r0, c0, section.move_to, step, k, primary_span=primary_span
+                        )
+                    except ValueError:
+                        return False
+                    if rk > BOUND or ck > BOUND:
+                        return False
+                    if ws.cell(row=rk, column=ck).value != base_value:
+                        return False
+                return True
+            # 单轴：k=1,2,… 直到不匹配
+            if len(dirs) == 1:
+                count = 1
+                for k in range(1, BOUND):
+                    if not _block_matches(k, 0):
                         break
-                if not matched:
-                    break  # 与第一块不一致，到此为止
+                    count += 1
+                self.primary_span = 0
+                return count
+            # 二维：先量主轴可铺步数，再按行优先网格计总容量
+            primary_span = 1
+            for k in range(1, BOUND):
+                # 临时只沿主轴：primary_span=0 时 apply 退化为只走主轴
+                if not _block_matches(k, 0):
+                    break
+                primary_span = k + 1
+            count = 1
+            for k in range(1, BOUND):
+                if not _block_matches(k, primary_span):
+                    break
                 count += 1
+            self.primary_span = primary_span
             return count
         finally:
             wb.close()

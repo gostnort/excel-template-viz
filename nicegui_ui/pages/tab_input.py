@@ -12,6 +12,11 @@ from nicegui_ui.components.ocr_menu import (
     GHOST_OCR_LABEL,
     add_image_pick_menu_items,
 )
+from app.core_toml import (
+    add_button_label,
+    move_to_directions,
+    next_instance_k_along,
+)
 
 
 _ghost_input: ui.textarea | None = None
@@ -218,13 +223,7 @@ def render_session_table(session, labels: list[str]) -> None:
                             ui.label("")
                     if not session.use_independent_db:
                         with ui.element("th"):
-                            move_dir = getattr(
-                                session.cfg.input_section, "move_to", "down"
-                            )
-                            header_lbl = (
-                                "列号" if move_dir in ["left", "right"] else "行号"
-                            )
-                            ui.label(header_lbl)
+                            ui.label("#")
                     for lbl in labels:
                         with (
                             ui.element("th")
@@ -500,7 +499,7 @@ def render_input_tab():
                 )
                 ui.label(f"模板已存数据 {lbl_hint}").classes("title shrink-0")
                 ui.label(
-                    f"当前将录入至第 {session.current_instance_index + 1} 行"
+                    f"当前将录入至 instance {session.current_instance_index}"
                 ).classes("ghost-note shrink-0")
             render_session_table(session, labels)
         ui.element("hr").classes("sep shrink-0")
@@ -533,10 +532,21 @@ def render_input_tab():
                         on_click=lambda: handle_delete_checked_session_rows(session),
                     )
             with ui.row().classes("gap-2 items-center"):
-                if validation_ok:
-                    AppBtn("添加数据", variant="db", on_click=lambda: handle_next_row(session))
-                else:
-                    AppBtn("添加数据", variant="db", disabled=True)
+                # 按 move_to 绘制一或两个方向添加按钮
+                move_to = "down"
+                if session.cfg is not None and getattr(session.cfg, "input_section", None):
+                    move_to = session.cfg.input_section.move_to
+                directions = move_to_directions(move_to)
+                for direction in directions:
+                    label = add_button_label(direction)
+                    if validation_ok:
+                        AppBtn(
+                            label,
+                            variant="db",
+                            on_click=lambda _e=None, d=direction: handle_next_row(session, d),
+                        )
+                    else:
+                        AppBtn(label, variant="db", disabled=True)
 
         ui.element("div").classes("w-full shrink-0").style(
             "height:1px; background:#000; margin: 10px 0;"
@@ -670,17 +680,31 @@ def render_dynamic_fields(session, labels: list[str]):
                         add_image_pick_menu_items(session, lbl, inp)
 
 
-def handle_next_row(session):
+def handle_next_row(session, direction: str = "down"):
+    """
+    函数名: handle_next_row
+    作用: 提交当前 draft，并沿指定 move_to 方向推进到下一 instance
+    输入:
+        session: 当前会话
+        direction (str): 用户点击的方向（up/down/left/right）
+    输出: 无
+    """
     use_db = getattr(session, "use_independent_db", True)
     _sync_draft_from_field_inputs(session)
-
-    if use_db and session.current_instance_index >= session.input_capacity:
-        ui.notify("容量已满，无法继续添加数据", type="warning")
+    move_to = "down"
+    if session.cfg is not None and getattr(session.cfg, "input_section", None):
+        move_to = session.cfg.input_section.move_to
+    primary_span = int(getattr(session, "primary_span", 0) or 0)
+    write_k = _resolve_write_instance_k(session)
+    next_k = next_instance_k_along(write_k, direction, move_to, primary_span)
+    if use_db and write_k >= session.input_capacity:
+        ui.notify("容量已满，无法继续添加", type="warning")
         return
-
+    if next_k is None:
+        ui.notify("该方向已无空位，请改用另一方向或检查版式", type="warning")
+        return
     if use_db:
         record_id = session.ui_provider.persist_fields(session.draft)
-
         if getattr(session, "field_images", None):
             for label, img_data in list(session.field_images.items()):
                 res = session.db.save_image(
@@ -700,10 +724,9 @@ def handle_next_row(session):
                             image_id=image_id, ocr_text=ocr_text, ocr_status=ocr_status
                         )
                 del session.field_images[label]
-
         row_copy = session.draft.copy()
         row_copy.pop("_index", None)
-
+        row_copy["instance_k"] = write_k
         if getattr(session, "selected_instance_k", None) is not None:
             idx = next(
                 (
@@ -716,39 +739,40 @@ def handle_next_row(session):
             if idx is not None:
                 session.session_rows[idx] = row_copy
             session.selected_instance_k = None
-            session.current_instance_index = len(session.session_rows)
         else:
-            if session.current_instance_index < len(session.session_rows):
-                # When reading bottom-up, session_rows[0] is the newest.
-                # However, for independent DB, session_rows are just "what we entered this session"
-                session.session_rows.insert(0, row_copy)
-            else:
-                session.session_rows.insert(0, row_copy)
-            session.current_instance_index += 1
-
+            session.session_rows.insert(0, row_copy)
+        session.current_instance_index = next_k
         session.draft.clear()
         if getattr(session, "template_defaults", None):
             session.draft.update(session.template_defaults)
     else:
-        # 模板即库：按选中 instance_k 覆盖，或写入当前待录入 index
+        # 模板即库：写入当前 write_k，再沿点击方向推进
         if getattr(session, "field_images", None):
             session.field_images.clear()
         row_copy = session.draft.copy()
         row_copy.pop("_index", None)
         row_copy.pop("instance_k", None)
-        k = _resolve_write_instance_k(session)
         try:
             session.writer.write_back(
-                session.template_path, session.template_path, row_copy, instance_k=k
+                session.template_path, session.template_path, row_copy, instance_k=write_k
             )
             from nicegui_ui.components.for_main import ForMain
             ForMain.refresh_session_from_source(session, notify=False)
             from nicegui_ui.pages.tab_db import render_db_tab
             render_db_tab.refresh()
+            session.current_instance_index = next_k
+            session.selected_instance_k = None
+            # 载入推进后的格内容（可能为空）供继续编辑
+            if session.writer and session.template_path:
+                val, mask = session.writer.read_values(
+                    session.template_path, session.current_instance_index
+                )
+                session.draft.clear()
+                session.draft.update(val)
+                session.formula_mask = mask
         except Exception as e:
             ui.notify(f"写入模板失败: {str(e)}", type="negative")
             return
-
     render_input_tab.refresh()
     ui.notify("已记录", type="positive")
 

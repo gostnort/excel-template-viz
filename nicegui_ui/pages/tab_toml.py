@@ -128,6 +128,7 @@ def trigger_toml_save(session):
             session.input_capacity = session.writer.max_instance_count(
                 session.template_path
             )
+            session.primary_span = int(getattr(session.writer, "primary_span", 0) or 0)
             if session.use_independent_db:
                 session.session_rows.clear()
                 session.current_instance_index = 0

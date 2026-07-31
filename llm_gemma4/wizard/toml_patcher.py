@@ -12,6 +12,7 @@ from app.core_toml import (
     _cell_in_area,
     _core_toml_path,
     _parse_area,
+    _parse_input_areas,
     _scan_worksheet_labels_diagonal,
     load_toml,
     offset_cell,
@@ -163,15 +164,15 @@ def _overlay_wizard_fields(
 def _rebuild_fields_for_input_area(
     base: dict[str, Any],
     state: WizardState,
-    area: str,
+    area: str | list[str],
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """
     函数名: _rebuild_fields_for_input_area
-    作用: 按用户确认的 input_area 重建 [[fields]]，只保留值格落在区域内的标签（与 verify_toml 自洽）
+    作用: 按用户确认的 input_area 重建 [[fields]]，只保留值格落在并集内的标签（与 verify_toml 自洽）
     输入:
         base (dict): 当前配置底稿
         state (WizardState): 含 template_path
-        area (str): 用户输入的 input_area
+        area (str | list[str]): 用户输入的 input_area（字符串或并集列表）
     输出:
         tuple[list[dict], list[str]]: (保留的 fields, 因越界丢弃的 Input_label)
     """
@@ -179,9 +180,12 @@ def _rebuild_fields_for_input_area(
     if tpath is None or not Path(tpath).is_file():
         return list(base.get("fields") or []), []
     try:
-        area_rect = _parse_area(area)
+        area_rects = _parse_input_areas(area)
     except ValueError:
-        return list(base.get("fields") or []), []
+        try:
+            area_rects = [_parse_area(area)]
+        except ValueError:
+            return list(base.get("fields") or []), []
     work_name = str(base.get("work_sheet") or "").strip() or None
     derived = TomlGenerator().CreateDefaultFromTemplate(Path(tpath), worksheet_name=work_name)
     # 候选来自本模板 xlsx 表头推导；旧 sidecar 仅用于保留仍在区域内字段的已有属性
@@ -216,14 +220,15 @@ def _rebuild_fields_for_input_area(
         if not resolved_sheet or resolved_sheet not in wb.sheetnames:
             return list(base.get("fields") or []), []
         ws = wb[resolved_sheet]
-        label_map, duplicate_texts = _scan_worksheet_labels_diagonal(ws)
+        label_occurrences = _scan_worksheet_labels_diagonal(ws)
         kept: list[dict[str, Any]] = []
         dropped: list[str] = []
         for item in candidates:
             label = str(item.get("Input_label") or "").strip()
             if not label:
                 continue
-            if label not in label_map or label in duplicate_texts:
+            occurrences = label_occurrences.get(label) or []
+            if not occurrences:
                 dropped.append(label)
                 continue
             direction = str(item.get("value_from_label") or "down").strip().lower() or "down"
@@ -233,13 +238,17 @@ def _rebuild_fields_for_input_area(
                 voff = 1
             if voff < 1:
                 voff = 1
-            label_row, label_col = label_map[label]
-            try:
-                value_row, value_col = offset_cell(label_row, label_col, direction, voff)
-            except ValueError:
-                dropped.append(label)
-                continue
-            if not _cell_in_area(value_row, value_col, area_rect):
+            # 与 verify_toml 一致：只认值格落入 input_area 并集的候选
+            in_area = False
+            for label_row, label_col in occurrences:
+                try:
+                    value_row, value_col = offset_cell(label_row, label_col, direction, voff)
+                except ValueError:
+                    continue
+                if _cell_in_area(value_row, value_col, area_rects):
+                    in_area = True
+                    break
+            if not in_area:
                 dropped.append(label)
                 continue
             row = dict(item)

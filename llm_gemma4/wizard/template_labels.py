@@ -25,7 +25,7 @@ def list_template_labels(template_path: Path, *, work_sheet: str | None = None) 
             ws = wb[work_sheet]
         else:
             ws = wb.active
-        label_map, _dupes = _scan_worksheet_labels_diagonal(ws)
-        return list(label_map.keys())
+        label_occurrences = _scan_worksheet_labels_diagonal(ws)
+        return list(label_occurrences.keys())
     finally:
         wb.close()

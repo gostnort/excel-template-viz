@@ -91,6 +91,7 @@ class ForMain:
             state.t2db = Template2DB(cfg)
             state.writer = ExcelWriter(cfg, state.located)
             state.input_capacity = state.writer.max_instance_count(xlsx_path)
+            state.primary_span = int(getattr(state.writer, "primary_span", 0) or 0)
             # 初始化 Session 状态
             if state.use_independent_db:
                 state.session_rows.clear()

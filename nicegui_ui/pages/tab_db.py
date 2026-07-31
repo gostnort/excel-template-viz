@@ -174,17 +174,7 @@ def render_db_tab():
                                 with ui.element("tr"):
                                     if not session.use_independent_db:
                                         with ui.element("th"):
-                                            move_dir = getattr(
-                                                session.cfg.input_section,
-                                                "move_to",
-                                                "down",
-                                            )
-                                            header_lbl = (
-                                                "列号"
-                                                if move_dir in ["left", "right"]
-                                                else "行号"
-                                            )
-                                            ui.label(header_lbl)
+                                            ui.label("#")
                                     for lbl in labels:
                                         with ui.element("th"):
                                             ui.label(lbl)
