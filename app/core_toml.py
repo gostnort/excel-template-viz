@@ -51,7 +51,6 @@ class InputSection:
     # 场景1：正整数标量；场景2：与 input_area 同形的矩阵
     offset: OffsetValue = DEFAULT_INPUT_OFFSET
 
-
     def to_dict(self) -> dict[str, Any]:
         """
         函数名: InputSection.to_dict
@@ -63,10 +62,9 @@ class InputSection:
         """
         return {
             "input_area": self.input_area,  # 扁平或场景2 嵌套
-            "move_to": self.move_to,        # 单轴或主轴+次轴
-            "offset": self.offset,          # 标量或同形矩阵
+            "move_to": self.move_to,  # 单轴或主轴+次轴
+            "offset": self.offset,  # 标量或同形矩阵
         }
-
 
 
 @dataclass
@@ -88,7 +86,6 @@ class TomlDefault:
     options: list[str] | None = None
     depends_on: list[str] | None = None
 
-
     def to_dict(self) -> dict[str, Any]:
         """
         函数名: TomlDefault.to_dict
@@ -101,20 +98,25 @@ class TomlDefault:
         return {
             FIELD_LABEL_KEY: self.Input_label,
             "value_from_label": self.value_from_label,  # 标签到值格的方向
-            "value_offset": self.value_offset,          # 标签到值格的步长
+            "value_offset": self.value_offset,  # 标签到值格的步长
             "field": self.field if not _is_unmapped(self.field) else None,
-            "source_file": self.source_file if not _is_unmapped(self.source_file) else None,
-            "source_sheet": self.source_sheet if not _is_unmapped(self.source_sheet) else None,
+            "source_file": self.source_file
+            if not _is_unmapped(self.source_file)
+            else None,
+            "source_sheet": self.source_sheet
+            if not _is_unmapped(self.source_sheet)
+            else None,
             "index": self.index,
             "regex": self.regex if not _is_unmapped(self.regex) else None,
             "id": self.id,
             "cell_role": self.cell_role or DEFAULT_CELL_ROLE,
             "ui_widget": self.ui_widget or DEFAULT_UI_WIDGET,
-            "list_range": self.list_range if not _is_unmapped(self.list_range) else None,
+            "list_range": self.list_range
+            if not _is_unmapped(self.list_range)
+            else None,
             "options": list(self.options) if self.options else None,
             "depends_on": list(self.depends_on) if self.depends_on else None,
         }
-
 
 
 @dataclass
@@ -136,7 +138,7 @@ class VerifyTomlReport:
     select_options: dict[str, list[str]]
     formula_cells: dict[str, dict[str, Any]]
     invalid_list_range: list[str]
-
+    offset_shape_error: list[str]
 
     def to_dict(self) -> dict[str, Any]:
         """
@@ -160,9 +162,14 @@ class VerifyTomlReport:
             "db_id": self.db_id,
             "id_labels": list(self.id_labels),
             "id_lookup_keys": list(self.id_lookup_keys),
-            "select_options": {k: list(v) for k, v in self.select_options.items()},
-            "formula_cells": {k: dict(v) for k, v in self.formula_cells.items()},
+            "select_options": {
+                label: list(opts) for label, opts in self.select_options.items()
+            },
+            "formula_cells": {
+                label: dict(info) for label, info in self.formula_cells.items()
+            },
             "invalid_list_range": list(self.invalid_list_range),
+            "offset_shape_error": list(self.offset_shape_error),
         }
 
 
@@ -363,7 +370,9 @@ def _input_area_from_raw(raw: Any) -> InputAreaValue | None:
                 sections.append(parts)
             return sections
         # 扁平：字符串元素列表
-        parts = [str(x).strip() for x in raw if not isinstance(x, list) and str(x).strip()]
+        parts = [
+            str(x).strip() for x in raw if not isinstance(x, list) and str(x).strip()
+        ]
         if not parts or any(isinstance(x, list) for x in raw):
             return None
         return parts[0] if len(parts) == 1 else parts
@@ -448,11 +457,13 @@ def _move_to_from_raw(raw: Any) -> str | list[str] | None:
     输出:
         str | list[str] | None - 合法方向；非法或空返回 None
     """
+
     def _one(item: Any) -> str | None:
         direction = str(item or "").strip().lower()
         if direction not in VALID_DIRECTIONS:
             return None
         return direction
+
     # 缺省按设计默认 down
     if raw is None or raw == "":
         return DEFAULT_MOVE_TO
@@ -506,78 +517,84 @@ def apply_instance_shift(
     col: int,
     move_to: str | list[str],
     offset: int,
-    instance_k: int,
+    instance_idx: int,
     *,
     primary_span: int = 0,
 ) -> tuple[int, int]:
     """
     函数名: apply_instance_shift
-    作用: 按 move_to/offset 把 instance 0 值格平移到第 k 组；支持单轴与主轴+次轴二维（场景1）
+    作用: 按 move_to/offset 把 instance 0 值格平移到第 instance_idx 组；支持单轴与主轴+次轴二维（场景1）
     输入:
         row (int) - instance 0 行（1-based）
         col (int) - instance 0 列（1-based）
         move_to (str | list[str]) - 展开方向
         offset (int) - 每一轴步长（正整数标量）
-        instance_k (int) - 组序；≤0 时原样返回
-        primary_span (int) - 二维时主轴可铺步数；≤0 时二维退化为只沿主轴平移 k 步
+        instance_idx (int) - 组序；≤0 时原样返回
+        primary_span (int) - 二维时主轴可铺步数；≤0 时二维退化为只沿主轴平移 instance_idx 步
     输出:
         tuple[int, int] - 平移后的 (row, col)
     """
-    if instance_k <= 0:
+    if instance_idx <= 0:
         return row, col
     dirs = move_to_directions(move_to)
     step = offset if offset >= 1 else DEFAULT_INPUT_OFFSET
-    # 单轴：沿唯一方向平移 k * offset
+    # 单轴：沿唯一方向平移 instance_idx * offset
     if len(dirs) == 1:
-        return offset_cell(row, col, dirs[0], step * instance_k)
-    # 二维：行优先 k → (i, j)；primary_span 未知时只走主轴
+        return offset_cell(row, col, dirs[0], step * instance_idx)
+    # 二维：行优先 instance_idx → (row_idx, secondary_slot)；primary_span 未知时只走主轴
     if primary_span <= 0:
-        return offset_cell(row, col, dirs[0], step * instance_k)
-    i = instance_k % primary_span
-    j = instance_k // primary_span
-    if i:
-        row, col = offset_cell(row, col, dirs[0], step * i)
-    if j:
-        row, col = offset_cell(row, col, dirs[1], step * j)
+        return offset_cell(row, col, dirs[0], step * instance_idx)
+    row_idx = instance_idx % primary_span
+    secondary_slot = instance_idx // primary_span
+    if row_idx:
+        row, col = offset_cell(row, col, dirs[0], step * row_idx)
+    if secondary_slot:
+        row, col = offset_cell(row, col, dirs[1], step * secondary_slot)
     return row, col
 
 
-def ij_from_k(instance_k: int, span: int, *, scene2: bool) -> tuple[int, int]:
+def split_instance_idx(
+    instance_idx: int, span: int, *, scene2: bool
+) -> tuple[int, int]:
     """
-    函数名: ij_from_k
-    作用: 线性 instance_k 解码为 (i, j)；场景1 先主轴，场景2 次轴优先
+    函数名: split_instance_idx
+    作用: 线性 instance_idx 解码为 (row_idx, secondary_slot)；场景1 先主轴，场景2 次轴优先
     输入:
-        instance_k (int) - 0-based 组序
+        instance_idx (int) - 0-based 组序
         span (int) - 场景1=主轴跨度，场景2=次轴槽数；≤0 时当作 1
         scene2 (bool) - 是否场景2 编码
     输出:
-        tuple[int, int] - (i, j)
+        tuple[int, int] - (row_idx, secondary_slot)
     """
-    k = max(0, int(instance_k))
+    linear_k = max(0, int(instance_idx))
     s = span if span >= 1 else 1
     if scene2:
-        return k // s, k % s  # i, j 次轴优先
-    return k % s, k // s
+        # 次轴优先：row_idx 是商，secondary_slot 是余
+        return linear_k // s, linear_k % s
+    # 主轴优先：row_idx 是余，secondary_slot 是商
+    return linear_k % s, linear_k // s
 
 
-def k_from_ij(i: int, j: int, span: int, *, scene2: bool) -> int:
+def combine_instance_blocks(
+    row_idx: int, secondary_slot: int, span: int, *, scene2: bool
+) -> int:
     """
-    函数名: k_from_ij
-    作用: (i, j) 编码为线性 instance_k
+    函数名: combine_instance_blocks
+    作用: (row_idx, secondary_slot) 编码为线性 instance_idx
     输入:
-        i (int) - 主轴步数
-        j (int) - 次轴步数
+        row_idx (int) - 主轴步数
+        secondary_slot (int) - 次轴步数
         span (int) - 跨度（≥1）
         scene2 (bool) - 是否场景2 编码
     输出:
-        int - instance_k
+        int - instance_idx
     """
     s = span if span >= 1 else 1
-    ii = max(0, int(i))
-    jj = max(0, int(j))
+    pb = max(0, int(row_idx))
+    ss = max(0, int(secondary_slot))
     if scene2:
-        return ii * s + jj
-    return jj * s + ii
+        return pb * s + ss
+    return ss * s + pb
 
 
 def locate_cell_section(
@@ -614,29 +631,31 @@ def shift_value_cell(
     row: int,
     col: int,
     section: InputSection,
-    instance_k: int,
+    instance_idx: int,
     *,
     primary_span: int = 0,
 ) -> tuple[int, int]:
     """
     函数名: shift_value_cell
-    作用: 按场景1/场景2 规则把 instance 0 值格平移到第 k 组
+    作用: 按场景1/场景2 规则把 instance 0 值格平移到第 instance_idx 组
     输入:
         row (int) - instance 0 行
         col (int) - instance 0 列
         section (InputSection) - 含 move_to/offset/input_area
-        instance_k (int) - 组序
+        instance_idx (int) - 组序
         primary_span (int) - 场景1=主轴跨度；场景2=次轴槽数
     输出:
         tuple[int, int] - 平移后 (row, col)
     """
-    if instance_k <= 0:
+    if instance_idx <= 0:
         return row, col
     if not is_scene2_section(section):
         # 场景1：offset 必须是标量
-        off = section.offset if isinstance(section.offset, int) else DEFAULT_INPUT_OFFSET
+        off = (
+            section.offset if isinstance(section.offset, int) else DEFAULT_INPUT_OFFSET
+        )
         return apply_instance_shift(
-            row, col, section.move_to, off, instance_k, primary_span=primary_span
+            row, col, section.move_to, off, instance_idx, primary_span=primary_span
         )
     # 场景2：查段/块
     loc = locate_cell_section(row, col, section)
@@ -647,20 +666,22 @@ def shift_value_cell(
     dirs = move_to_directions(section.move_to)
     if len(dirs) < 2:
         raise ValueError("scene2 requires move_to with two directions")
-    i, j = ij_from_k(instance_k, primary_span, scene2=True)
+    row_idx, secondary_slot = split_instance_idx(
+        instance_idx, primary_span, scene2=True
+    )
     major_step = offset_matrix[0][0]  # type: ignore[index]
     if s_idx == 0:
         # major：只沿主轴
         step = offset_matrix[0][b_idx]  # type: ignore[index]
-        if i:
-            row, col = offset_cell(row, col, dirs[0], step * i)
+        if row_idx:
+            row, col = offset_cell(row, col, dirs[0], step * row_idx)
         return row, col
     # minor：先主轴（继承 major 步长）再次轴
-    if i:
-        row, col = offset_cell(row, col, dirs[0], major_step * i)
-    if j:
+    if row_idx:
+        row, col = offset_cell(row, col, dirs[0], major_step * row_idx)
+    if secondary_slot:
         step = offset_matrix[1][b_idx]  # type: ignore[index]
-        row, col = offset_cell(row, col, dirs[1], step * j)
+        row, col = offset_cell(row, col, dirs[1], step * secondary_slot)
     return row, col
 
 
@@ -686,7 +707,7 @@ def add_button_label(direction: str) -> str:
     return ADD_BUTTON_LABELS.get(key, "添加")
 
 
-def next_instance_k_along(
+def next_instance_idx_along(
     current_k: int,
     direction: str,
     move_to: str | list[str],
@@ -695,8 +716,8 @@ def next_instance_k_along(
     scene2: bool = False,
 ) -> int | None:
     """
-    函数名: next_instance_k_along
-    作用: 从当前 instance_k 沿指定方向走一步；场景2 使用次轴优先编码
+    函数名: next_instance_idx_along
+    作用: 从当前 instance_idx 沿指定方向走一步；场景2 使用次轴优先编码
     输入:
         current_k (int) - 当前 0-based instance 序号
         direction (str) - 用户点击的方向（须为 move_to 中的一项）
@@ -704,43 +725,47 @@ def next_instance_k_along(
         primary_span (int) - 场景1=主轴跨度；场景2=次轴槽数；单轴可传 0
         scene2 (bool) - 是否场景2 编码
     输出:
-        int | None - 下一 instance_k；该方向无法再进一步时为 None
+        int | None - 下一 instance_idx；该方向无法再进一步时为 None
     """
-    k = max(0, int(current_k))
+    instance_idx = max(0, int(current_k))
     dirs = move_to_directions(move_to)
     wanted = str(direction or "").strip().lower()
     # 单轴：线性 +1
     if len(dirs) == 1:
-        return k + 1
+        return instance_idx + 1
     # 二维但未知跨度：无法正确分轴，退化为线性 +1
     if primary_span <= 0:
-        return k + 1
-    i, j = ij_from_k(k, primary_span, scene2=scene2)
+        return instance_idx + 1
+    row_idx, secondary_slot = split_instance_idx(
+        instance_idx, primary_span, scene2=scene2
+    )
     if scene2:
-        # 次轴优先：dirs[0]=主轴(i)，dirs[1]=次轴(j)
+        # 次轴优先：dirs[0]=主轴(row_idx)，dirs[1]=次轴(secondary_slot)
         if wanted == dirs[1]:
-            if j + 1 >= primary_span:
+            if secondary_slot + 1 >= primary_span:
                 return None
-            j += 1
+            secondary_slot += 1
         elif wanted == dirs[0]:
-            i += 1
+            row_idx += 1
         else:
-            if j + 1 >= primary_span:
+            if secondary_slot + 1 >= primary_span:
                 return None
-            j += 1
-        return k_from_ij(i, j, primary_span, scene2=True)
-    # 场景1：i 沿主轴，j 沿次轴
+            secondary_slot += 1
+        return combine_instance_blocks(
+            row_idx, secondary_slot, primary_span, scene2=True
+        )
+    # 场景1：row_idx 沿主轴，secondary_slot 沿次轴
     if wanted == dirs[0]:
-        if i + 1 >= primary_span:
+        if row_idx + 1 >= primary_span:
             return None
-        i += 1
+        row_idx += 1
     elif wanted == dirs[1]:
-        j += 1
+        secondary_slot += 1
     else:
-        if i + 1 >= primary_span:
+        if row_idx + 1 >= primary_span:
             return None
-        i += 1
-    return k_from_ij(i, j, primary_span, scene2=False)
+        row_idx += 1
+    return combine_instance_blocks(row_idx, secondary_slot, primary_span, scene2=False)
 
 
 def _input_section_from_dict(raw: Any) -> InputSection | None:
@@ -790,15 +815,25 @@ def _field_from_dict(raw: Any) -> TomlDefault | None:
     input_label = str(raw.get(FIELD_LABEL_KEY, "")).strip()
     if not input_label:
         return None
-    value_from_label = str(
-        raw.get("value_from_label", DEFAULT_VALUE_FROM_LABEL)
-    ).strip().lower()  # 方向归一化为小写
-    value_offset = _parse_int(raw.get("value_offset", DEFAULT_VALUE_OFFSET), DEFAULT_VALUE_OFFSET)
+    value_from_label = (
+        str(raw.get("value_from_label", DEFAULT_VALUE_FROM_LABEL)).strip().lower()
+    )  # 方向归一化为小写
+    value_offset = _parse_int(
+        raw.get("value_offset", DEFAULT_VALUE_OFFSET), DEFAULT_VALUE_OFFSET
+    )
     index_val = _parse_int(raw.get("index", -1), -1)  # -1 表示不参与文本拆分
-    cell_role = str(raw.get("cell_role", DEFAULT_CELL_ROLE) or DEFAULT_CELL_ROLE).strip().lower()
+    cell_role = (
+        str(raw.get("cell_role", DEFAULT_CELL_ROLE) or DEFAULT_CELL_ROLE)
+        .strip()
+        .lower()
+    )
     if cell_role not in VALID_CELL_ROLES:
         cell_role = DEFAULT_CELL_ROLE
-    ui_widget = str(raw.get("ui_widget", DEFAULT_UI_WIDGET) or DEFAULT_UI_WIDGET).strip().lower()
+    ui_widget = (
+        str(raw.get("ui_widget", DEFAULT_UI_WIDGET) or DEFAULT_UI_WIDGET)
+        .strip()
+        .lower()
+    )
     if ui_widget not in VALID_UI_WIDGETS:
         ui_widget = DEFAULT_UI_WIDGET
     # options：字符串列表；depends_on：Input_label 列表
@@ -926,7 +961,9 @@ def _dict_to_toml(config: dict[str, Any]) -> str:
     # ---- [[fields]]：逐条写必有键与可选键 ----
     fields_aot = aot()
     for item in config.get("fields", []):
-        rule = _field_from_dict(item) if isinstance(item, dict) else item  # 兼容 dict 与 TomlDefault
+        rule = (
+            _field_from_dict(item) if isinstance(item, dict) else item
+        )  # 兼容 dict 与 TomlDefault
         if not isinstance(rule, TomlDefault):
             continue
         row = table()
@@ -1058,7 +1095,9 @@ def _parse_input_areas(area: InputAreaValue) -> list[AreaRect]:
     return [_parse_area(part) for part in parts]
 
 
-def _parse_section_areas(section: InputSection) -> tuple[list[AreaRect], list[AreaRect]]:
+def _parse_section_areas(
+    section: InputSection,
+) -> tuple[list[AreaRect], list[AreaRect]]:
     """
     函数名: _parse_section_areas
     作用: 拆出 major/minor 矩形列表；扁平时 major=并集、minor=[]
@@ -1072,24 +1111,6 @@ def _parse_section_areas(section: InputSection) -> tuple[list[AreaRect], list[Ar
         minor = [_parse_area(str(p)) for p in section.input_area[1]]  # type: ignore[index]
         return major, minor
     return _parse_input_areas(section.input_area), []
-
-
-def _bounding_box(areas: list[AreaRect]) -> AreaRect:
-    """
-    函数名: _bounding_box
-    作用: 求多个矩形并集的外接矩形（用于容量估算等粗略几何）
-    输入:
-        areas (list[AreaRect]) - 非空矩形列表
-    输出:
-        AreaRect - 外接矩形
-    """
-    if not areas:
-        raise ValueError("areas is empty")
-    min_row = min(a[0] for a in areas)
-    min_col = min(a[1] for a in areas)
-    max_row = max(a[2] for a in areas)
-    max_col = max(a[3] for a in areas)
-    return min_row, min_col, max_row, max_col
 
 
 def _cell_text(value: Any) -> str:
@@ -1249,7 +1270,7 @@ def _validate_id_rules(cfg: GetTomlValues) -> dict[str, Any]:
     id_labels: list[str] = []
     id_lookup_keys: list[str] = []
     seen_lookup: set[str] = set()
-    for rule in (cfg.field_rules or []):
+    for rule in cfg.field_rules or []:
         if not rule.id:
             continue
         id_labels.append(rule.Input_label)
@@ -1323,6 +1344,7 @@ def _make_report(
     select_options: dict[str, list[str]] | None = None,
     formula_cells: dict[str, dict[str, Any]] | None = None,
     invalid_list_range: list[str] | None = None,
+    offset_shape_error: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     函数名: _make_report
@@ -1331,11 +1353,16 @@ def _make_report(
         ok (bool) - 模板坐标部分是否通过
         missing_labels / duplicate_labels / out_of_area_labels / located / errors - 坐标校验
         id_info (dict) - _validate_id_rules 返回值
-        select_options / formula_cells / invalid_list_range - 下拉与公式扩展
+        select_options / formula_cells / invalid_list_range / offset_shape_error - 下拉、公式与形状扩展
     输出:
         dict[str, Any] - verify_toml 完整报告
     """
-    full_ok = ok and _id_ok(id_info) and not (invalid_list_range or [])
+    full_ok = (
+        ok
+        and _id_ok(id_info)
+        and not (invalid_list_range or [])
+        and not (offset_shape_error or [])
+    )
     return VerifyTomlReport(
         full_ok,
         missing_labels,
@@ -1352,6 +1379,7 @@ def _make_report(
         select_options or {},
         formula_cells or {},
         invalid_list_range or [],
+        offset_shape_error or [],
     ).to_dict()
 
 
@@ -1445,6 +1473,7 @@ def verify_toml(template_path: Path, cfg: GetTomlValues) -> dict[str, Any]:
     select_options: dict[str, list[str]] = {}
     formula_cells: dict[str, dict[str, Any]] = {}
     invalid_list_range: list[str] = []
+    offset_shape_error: list[str] = []
     id_info = _validate_id_rules(cfg)  # TOML 层 id 规则，不依赖 xlsx
     regex_errors = _validate_field_regexes(cfg)
     errors.extend(regex_errors)
@@ -1452,14 +1481,23 @@ def verify_toml(template_path: Path, cfg: GetTomlValues) -> dict[str, Any]:
     if is_scene2_input_area(cfg.input_section.input_area) and not isinstance(
         cfg.input_section.offset, list
     ):
-        errors.append("offset_shape_error: scene2 input_area requires matrix offset")
+        msg = "offset_shape_error: scene2 input_area requires matrix offset"
+        offset_shape_error.append(msg)
+        errors.append(msg)
     if not cfg.work_sheet:
         errors.append("work_sheet is required")
         return _make_report(
-            False, [], [], [], {}, errors, id_info,
+            False,
+            [],
+            [],
+            [],
+            {},
+            errors,
+            id_info,
             select_options=select_options,
             formula_cells=formula_cells,
             invalid_list_range=invalid_list_range,
+            offset_shape_error=offset_shape_error,
         )
     # data_only=False：读公式文本；下拉源为字面量
     wb = load_workbook(template_path, read_only=True, data_only=False)
@@ -1467,10 +1505,17 @@ def verify_toml(template_path: Path, cfg: GetTomlValues) -> dict[str, Any]:
         if cfg.work_sheet not in wb.sheetnames:
             errors.append(f"work_sheet not found: {cfg.work_sheet}")
             return _make_report(
-                False, [], [], [], {}, errors, id_info,
+                False,
+                [],
+                [],
+                [],
+                {},
+                errors,
+                id_info,
                 select_options=select_options,
                 formula_cells=formula_cells,
                 invalid_list_range=invalid_list_range,
+                offset_shape_error=offset_shape_error,
             )
         ws = wb[cfg.work_sheet]
         try:
@@ -1478,10 +1523,17 @@ def verify_toml(template_path: Path, cfg: GetTomlValues) -> dict[str, Any]:
         except ValueError as exc:
             errors.append(f"invalid input_area: {exc}")
             return _make_report(
-                False, [], [], [], {}, errors, id_info,
+                False,
+                [],
+                [],
+                [],
+                {},
+                errors,
+                id_info,
                 select_options=select_options,
                 formula_cells=formula_cells,
                 invalid_list_range=invalid_list_range,
+                offset_shape_error=offset_shape_error,
             )
         label_occurrences = _scan_worksheet_labels_diagonal(ws)
         for rule in cfg.field_rules:
@@ -1527,7 +1579,9 @@ def verify_toml(template_path: Path, cfg: GetTomlValues) -> dict[str, Any]:
                 "formula": str(form_val) if isinstance(form_val, str) else "",
             }
             if not (isinstance(form_val, str) and form_val.startswith("=")):
-                errors.append(f"{rule.Input_label}: cell_role=formula but cell is not a formula")
+                errors.append(
+                    f"{rule.Input_label}: cell_role=formula but cell is not a formula"
+                )
         # 下拉选项（激活时必须读出）
         for rule in cfg.field_rules:
             if rule.ui_widget != "select":
@@ -1537,12 +1591,16 @@ def verify_toml(template_path: Path, cfg: GetTomlValues) -> dict[str, Any]:
                 continue
             if _is_unmapped(rule.list_range):
                 invalid_list_range.append(rule.Input_label)
-                errors.append(f"{rule.Input_label}: select widget missing list_range/options")
+                errors.append(
+                    f"{rule.Input_label}: select widget missing list_range/options"
+                )
                 continue
             opts = _read_list_range_options(ws, str(rule.list_range))
             if opts is None:
                 invalid_list_range.append(rule.Input_label)
-                errors.append(f"{rule.Input_label}: invalid list_range {rule.list_range!r}")
+                errors.append(
+                    f"{rule.Input_label}: invalid list_range {rule.list_range!r}"
+                )
                 continue
             select_options[rule.Input_label] = opts
     finally:
@@ -1553,6 +1611,7 @@ def verify_toml(template_path: Path, cfg: GetTomlValues) -> dict[str, Any]:
         and not out_of_area_labels
         and not errors
         and not invalid_list_range
+        and not offset_shape_error
     )
     return _make_report(
         layout_ok,
@@ -1565,6 +1624,7 @@ def verify_toml(template_path: Path, cfg: GetTomlValues) -> dict[str, Any]:
         select_options=select_options,
         formula_cells=formula_cells,
         invalid_list_range=invalid_list_range,
+        offset_shape_error=offset_shape_error,
     )
 
 
@@ -1591,11 +1651,12 @@ def ensure_exists(
     return load_toml(template_id) is not None
 
 
-
 class TomlGenerator:
     """First-time creation of default TOML config and serialization."""
 
-    def _worksheet(self, template_path: Path, worksheet_name: str | None) -> tuple[str, Any, Any]:
+    def _worksheet(
+        self, template_path: Path, worksheet_name: str | None
+    ) -> tuple[str, Any, Any]:
         """
         函数名: TomlGenerator._worksheet
         作用: 打开工作簿并定位目标工作表；未指定名时取 active sheet
@@ -1614,7 +1675,6 @@ class TomlGenerator:
             return worksheet_name, wb[worksheet_name], wb
         ws = wb.active
         return ws.title, ws, wb
-
 
     def CreateDefaultFromTemplate(
         self,
@@ -1646,7 +1706,9 @@ class TomlGenerator:
                         headers = alt_headers
                         break
             fields = [
-                TomlDefault(Input_label=label, index=-1).to_dict()  # 默认不参与文本拆分，见 toml_config_design
+                TomlDefault(
+                    Input_label=label, index=-1
+                ).to_dict()  # 默认不参与文本拆分，见 toml_config_design
                 for _idx, (_col, label) in enumerate(headers)
             ]
             # input_area 取标签覆盖的列范围、固定第 2 行
@@ -1656,7 +1718,9 @@ class TomlGenerator:
             else:
                 start_col = 1
                 end_col = 1
-            input_area = f"{get_column_letter(start_col)}2:{get_column_letter(end_col)}2"
+            input_area = (
+                f"{get_column_letter(start_col)}2:{get_column_letter(end_col)}2"
+            )
             return {
                 "determiner": DEFAULT_DETERMINER,
                 "work_sheet": resolved_name,
@@ -1669,7 +1733,6 @@ class TomlGenerator:
         finally:
             wb.close()
 
-
     def ConfigToToml(self, config: dict[str, Any]) -> str:
         """
         函数名: TomlGenerator.ConfigToToml
@@ -1680,7 +1743,6 @@ class TomlGenerator:
             str - TOML 文本
         """
         return _dict_to_toml(config)
-
 
     def Reset(
         self,
@@ -1706,7 +1768,6 @@ class TomlGenerator:
             return True
         except Exception:
             return False
-
 
 
 class GetTomlValues:
@@ -1739,14 +1800,17 @@ class GetTomlValues:
             无
         """
         self.determiner = determiner
-        self.sources = sources if sources is not None else [dict(item) for item in DEFAULT_SOURCES]
+        self.sources = (
+            sources if sources is not None else [dict(item) for item in DEFAULT_SOURCES]
+        )
         self.field_rules = field_rules if field_rules is not None else []
         self.work_sheet = work_sheet
         self.print_sheet = print_sheet
-        self.input_section = input_section if input_section is not None else InputSection("A2:A2")
+        self.input_section = (
+            input_section if input_section is not None else InputSection("A2:A2")
+        )
         self.db_id = db_id
         self.use_independent_db = use_independent_db
-
 
     def Load(self, template_id: str) -> GetTomlValues | None:
         """
@@ -1758,7 +1822,6 @@ class GetTomlValues:
             GetTomlValues | None - 解析成功的配置，或 None
         """
         return load_toml(template_id)
-
 
     def Save(self, template_id: str, toml_text: str | None = None) -> None:
         """
@@ -1786,7 +1849,6 @@ class GetTomlValues:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(cleaned, encoding="utf-8")
 
-
     def VerifyToml(self, template_path: Path) -> dict[str, Any]:
         """
         函数名: GetTomlValues.VerifyToml
@@ -1797,7 +1859,6 @@ class GetTomlValues:
             dict[str, Any] - 校验报告
         """
         return verify_toml(template_path, self)
-
 
     def ToDict(self) -> dict[str, Any]:
         """
@@ -1820,7 +1881,6 @@ class GetTomlValues:
         }
 
 
-
 def main() -> None:
     """
     函数名: main
@@ -1836,10 +1896,21 @@ def main() -> None:
         work_sheet="Input_sheet",
         print_sheet="Print_sheet",
         field_rules=[
-            TomlDefault(Input_label="ID#", index=0, field="ID", source_file="source1",
-                        source_sheet="sheet1", id=True),
-            TomlDefault(Input_label="Name", index=1, field="name", source_file="source1",
-                        source_sheet="sheet1"),
+            TomlDefault(
+                Input_label="ID#",
+                index=0,
+                field="ID",
+                source_file="source1",
+                source_sheet="sheet1",
+                id=True,
+            ),
+            TomlDefault(
+                Input_label="Name",
+                index=1,
+                field="name",
+                source_file="source1",
+                source_sheet="sheet1",
+            ),
         ],
         input_section=InputSection(input_area="A2:B2", move_to="down", offset=1),
     )
@@ -1851,7 +1922,9 @@ def main() -> None:
         print(f"[skip] 样例模板不存在: {sample_xlsx}")
         return
     print("=== 2. generate default config from sample template ===")
-    default_cfg = TomlGenerator().CreateDefaultFromTemplate(sample_xlsx)  # 取 active sheet
+    default_cfg = TomlGenerator().CreateDefaultFromTemplate(
+        sample_xlsx
+    )  # 取 active sheet
     default_toml = TomlGenerator().ConfigToToml(default_cfg)
     print(default_toml)
     # 回环：序列化文本应能被重新解析为合法配置
@@ -1881,11 +1954,18 @@ def main() -> None:
     print("=== 5. id rules: single id ===")
     base_rules = [
         TomlDefault(
-            Input_label="ID#", index=0, field="ID", source_file="source1",
-            source_sheet="sheet1", id=True,
+            Input_label="ID#",
+            index=0,
+            field="ID",
+            source_file="source1",
+            source_sheet="sheet1",
+            id=True,
         ),
         TomlDefault(
-            Input_label="Name", index=1, field="name", source_file="source1",
+            Input_label="Name",
+            index=1,
+            field="name",
+            source_file="source1",
             source_sheet="sheet1",
         ),
     ]
@@ -1904,8 +1984,12 @@ def main() -> None:
     print("=== 6. id rules: multi id without db_id ===")
     multi_rules = list(base_rules) + [
         TomlDefault(
-            Input_label="AltID", index=-1, field="ID", source_file="source1",
-            source_sheet="sheet2", id=True,
+            Input_label="AltID",
+            index=-1,
+            field="ID",
+            source_file="source1",
+            source_sheet="sheet2",
+            id=True,
         ),
     ]
     multi_cfg = GetTomlValues(
@@ -1922,8 +2006,12 @@ def main() -> None:
     print("=== 7. id rules: duplicate id on same sheet ===")
     dup_rules = list(base_rules) + [
         TomlDefault(
-            Input_label="DupID", index=-1, field="Report_date", source_file="source1",
-            source_sheet="sheet1", id=True,
+            Input_label="DupID",
+            index=-1,
+            field="Report_date",
+            source_file="source1",
+            source_sheet="sheet1",
+            id=True,
         ),
     ]
     dup_cfg = GetTomlValues(

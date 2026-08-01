@@ -97,9 +97,9 @@ def render_toml_tab():
                     except Exception as e:
                         ui.notify(f"保存文件失败: {str(e)}", type="negative")
 
-                with ui.element('div').classes('form-row').style('margin-top:8px'):
-                    AppBtn('保存', on_click=save_raw_toml)
-                    AppBtn('重置', on_click=render_toml_tab.refresh)
+                with ui.element("div").classes("form-row").style("margin-top:8px"):
+                    AppBtn("保存", on_click=save_raw_toml)
+                    AppBtn("重置", on_click=render_toml_tab.refresh)
 
 
 def trigger_toml_save(session):
@@ -164,7 +164,7 @@ def trigger_toml_save(session):
                 )
                 session.draft.update(val)
                 session.formula_mask = mask
-            session.selected_instance_k = None
+            session.selected_instance_idx = None
             session.selected_instance_indices.clear()
 
             ui.notify("配置保存并加载成功", type="positive")

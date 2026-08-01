@@ -563,7 +563,7 @@ offset = [[1, 1], [1, 7]]
 4. **instance 坐标**记为 `(i, j)`：
    - `i` = 主轴步数（行 instance）
    - `j` = 次轴步数（槽；本表有效 `j ∈ {0,1,2}`）
-5. **线性 `instance_k`（次轴优先，与场景1 扁平二维分叉）**：
+5. **线性 `instance_idx`（次轴优先，与场景1 扁平二维分叉）**：
    - `secondary_span` = 次轴槽数（本表 3；由 excel 层几何测定，见 [`excel_transform.md`](excel_transform.md) §4.2.3）
    - `j = k % secondary_span`，`i = k // secondary_span`（即 `k = i * secondary_span + j`）
    - 例：`0→(0,0) 1→(0,1) 2→(0,2) 3→(1,0)`。读写、空槽、major 仅 `j==0` 写回等细则见 excel_transform §4.2.2–4.2.5，**勿**套用场景1 的 `i=k%span` 编码。

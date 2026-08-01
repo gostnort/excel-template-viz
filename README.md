@@ -10,7 +10,7 @@
 
 ## 安装
 
-依赖由 **uv** 管理（[`pyproject.toml`](pyproject.toml) + [`uv.lock`](uv.lock)）。详见 [`docs/install_uv_docker.md`](docs/install_uv_docker.md)。
+依赖真相源：根目录 [`pyproject.toml`](pyproject.toml) + [`uv.lock`](uv.lock)。已删除旧版 `requirements.txt`；勿再用 `pip -r` 安装，也勿同时安装 `ocr` 与 `ocr-gpu`。
 
 ### 环境要求
 
@@ -26,19 +26,32 @@
 install.bat
 ```
 
-脚本调用 [`scripts/bootstrap_install.py`](scripts/bootstrap_install.py)：
+等价于 `python scripts/bootstrap_install.py`，流程：
 
-1. 确认已安装 uv；`uv venv` 创建**唯一** `.venv`
-2. 探测 NVIDIA，交互确认 GPU 或 CPU（可用 `--gpu` / `--cpu`）
-3. 写入本地 `.install_profile`；`uv sync --extra llm`，按需互斥加 `--extra ocr` 或 `ocr-gpu`
-4. 默认跑 OCR 门禁（`paddle_ocr/main.py`，日志 `temp/install_paddle_ocr.log`）
-5. 创建 `temp/`、`exports/`、`models/gemma4`
+1. `uv venv` → 单一项目 `.venv`
+2. 探测 NVIDIA（`nvidia-smi`）并确认 **GPU / CPU**
+3. 写入本地 `.install_profile`（已 gitignore）
+4. `uv sync --extra llm`；若启用 OCR 则互斥再加 `--extra ocr` 或 `--extra ocr-gpu`
+5. OCR 时调用 `paddle_ocr/scripts/install_backend.py`（GPU 预热 VL / CPU prune）并跑门禁
 
-```bat
-install.bat --skip-ocr
-install.bat --gpu
-install.bat --cpu --force-profile
+常用参数：
+
+| 参数 | 含义 |
+|------|------|
+| `--skip-ocr` | 只装 core + llm |
+| `--gpu` / `--cpu` | 强制 OCR 栈，不交互 |
+| `--force-profile` | 忽略已有 `.install_profile`，重新确认 |
+| `--python 3.10` | 指定 uv venv 解释器 |
+| `--frozen` | `uv sync --frozen`（按 lock 复现） |
+
+`.install_profile` 示例：
+
 ```
+accelerator=gpu
+ocr=true
+```
+
+`ocr` 与 `ocr-gpu` **不可同装**。改档位：带 `--force-profile` 重跑安装，或删掉 `.install_profile` 后重装。
 
 ### 手动安装（uv）
 
@@ -46,10 +59,8 @@ install.bat --cpu --force-profile
 uv sync --extra llm
 uv sync --extra llm --extra ocr
 uv sync --extra llm --extra ocr-gpu
-uv run python paddle_ocr/main.py
+uv run python -m nicegui_ui.app
 ```
-
-勿同时安装 `ocr` 与 `ocr-gpu`。
 
 ### 启动
 
@@ -69,12 +80,25 @@ uv run python -m nicegui_ui.app
 
 ### 容器（CPU / GPU）
 
+模型与业务数据**不进镜像**，用卷挂载。
+
+| Profile | 镜像 | 依赖 extra | 宿主机 |
+|---------|------|------------|--------|
+| `cpu` | `excel-template-viz:cpu` | `llm` + `ocr` | 无特殊要求 |
+| `gpu` | `excel-template-viz:gpu` | `llm` + `ocr-gpu` | NVIDIA 驱动 + Container Toolkit；`--gpus all` |
+
 ```bat
 docker compose --profile cpu up --build
 docker compose --profile gpu up --build
 ```
 
-模型与 `templates/` / `exports/` 走卷挂载，不进镜像。见 [`docs/install_uv_docker.md`](docs/install_uv_docker.md)。
+默认挂载：
+
+- `./models` → Gemma
+- `./paddle_ocr/models` → Paddle / VL
+- `./templates`、`./exports`、`./temp`、`./certs`
+
+入口脚本在缺权重时打印下载提示；首次仍可在容器内执行 HF / `paddle_ocr/main.py` 拉取。本机 `.install_profile` 的 `accelerator=cpu|gpu` 与 compose profile **语义对齐**，便于对照文档与排障。
 
 ### 可选：Gemma 4 本地推理（`llm_gemma4/`）
 
@@ -153,6 +177,5 @@ TOML 配置向导（应用层编排）规格见 `docs/gemma4_e4b_workflow.md`；
 - `docs/nicegui_ui/nicegui_ui_plan.md` — NiceGUI 迁移与交互规格
 - `docs/embed_gemma4.md` — Gemma 4 LiteRT 运行时
 - `docs/embed_paddle_ocr.md` — PaddleOCR 平台与内存分级精修
-- `docs/install_uv_docker.md` — uv 单环境安装与 CPU/GPU 容器
 - `docs/gemma4_e4b_workflow.md` — TOML 智能向导 7 步工作流与全局悬浮窗规格
 - `docs/db_store.md` — 附图落库与 `input_label` 关联

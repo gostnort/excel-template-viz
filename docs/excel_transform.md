@@ -69,7 +69,7 @@
 
 #### 4.2.2 `k ↔ (i,j)` 编码分叉
 
-逻辑记录：**1 条 session 行 / 1 个 `instance_k` = 1 个槽 `(i,j)`**（不是一整物理行）。major 字段在各槽记录中冗余出现（读时复制）。
+逻辑记录：**1 条 session 行 / 1 个 `instance_idx` = 1 个槽 `(i,j)`**（不是一整物理行）。major 字段在各槽记录中冗余出现（读时复制）。
 
 | 模式 | `ExcelWriter.primary_span` 语义 | `k → (i,j)` |
 |------|--------------------------------|-------------|
@@ -80,7 +80,7 @@ Frozen lot 例（`secondary_span=3`）：`k: 0→(0,0) 1→(0,1) 2→(0,2) 3→(
 
 实现必须 `if scene2: ... else: ...`，不得假装与场景1 `apply_instance_shift`「已对齐」。
 
-`next_instance_k_along`（场景2）：
+`next_instance_idx_along`（场景2）：
 
 - 沿 `move_to[1]`（右）：`j+1`；`j+1 >= span` → `None`
 - 沿 `move_to[0]`（下）：`i+1`，**保持当前 j**；`k = i * span + j`
@@ -195,7 +195,7 @@ writer 侧按以下最小字段消费：
 
 - 模板中已是公式（`=` 开头）的格：**永不覆盖**，即使 `record[Input_label]` 非空。
 - `cell_role="formula"`：**永不覆盖**（即使单元格暂时不是公式文本）。
-- 场景2：**major 段字段仅当该 `instance_k` 的 `j==0` 时写入**；`j>0` 跳过 major（§4.2.4）。
+- 场景2：**major 段字段仅当该 `instance_idx` 的 `j==0` 时写入**；`j>0` 跳过 major（§4.2.4）。
 - 非公式、非跳过的格：沿用现有语义（空值不覆盖模板既有内容；非空写入）。
 
 独立数据库模式下的「另存为」导出仍走 `write_back` 到 `exports/`，同样遵守上述规则。
@@ -212,36 +212,36 @@ writer 侧按以下最小字段消费：
 #### 4.6.4 流程编排（模板即库）
 
 - **O(log N) 快速定位与懒加载**：对于万行级超大文件，系统不会直接扫描所有行，而是利用二分查找快速计算 `total_instance_count`。数据装载时，默认只读取最后（最底部）的 50 条记录。
-- **UI 倒序排列与插入**：为了确保“最新数据在最上面”，读取出来的最新数据会直接展现在表格顶部。每次新增“下一行”，新记录会被写回 Excel 的最新 `instance_k`，并在 UI 表格的 **第 0 行（最上方）** 插入，且不改变物理文件内的顺序。
-- 激活 / 切换为模板即库：`get_total_instance_count()` → 计算总量；`read_instances(..., limit=50, reverse=True)` → UI `session_rows`（**每条附带 `instance_k`**）；`current_instance_index = total_count`；`draft` ← 下一 instance 的 `read_values`。
-- 下一行 / 覆盖保存：`write_back` 时**按 `instance_k` 定位**（见 §4.6.5），不得按 UI 表格显示顺序；写完后在内存 `session_rows` 最顶部插入新数据。
+- **UI 倒序排列与插入**：为了确保“最新数据在最上面”，读取出来的最新数据会直接展现在表格顶部。每次新增“下一行”，新记录会被写回 Excel 的最新 `instance_idx`，并在 UI 表格的 **第 0 行（最上方）** 插入，且不改变物理文件内的顺序。
+- 激活 / 切换为模板即库：`get_total_instance_count()` → 计算总量；`read_instances(..., limit=50, reverse=True)` → UI `session_rows`（**每条附带 `instance_idx`**）；`current_instance_index = total_count`；`draft` ← 下一 instance 的 `read_values`。
+- 下一行 / 覆盖保存：`write_back` 时**按 `instance_idx` 定位**（见 §4.6.5），不得按 UI 表格显示顺序；写完后在内存 `session_rows` 最顶部插入新数据。
 - **不**调用 `store.insert_or_update`（见 `db_store.md` §2.1）。
 
 #### 4.6.5 稳定 instance 键与表行
 
-UI 底部表：**一行 = 一条逻辑记录 = 一个 instance `k`**；**一列 = 一个 `Input_label`**。写回、载入 draft、删除、勾选批量操作**必须**使用行上的 **`instance_k`（0-based，与 `read_instances` / `write_back` 一致）**，**禁止**使用排序后的视觉行号或 `tbody` 下标。
+UI 底部表：**一行 = 一条逻辑记录 = 一个 instance `k`**；**一列 = 一个 `Input_label`**。写回、载入 draft、删除、勾选批量操作**必须**使用行上的 **`instance_idx`（0-based，与 `read_instances` / `write_back` 一致）**，**禁止**使用排序后的视觉行号或 `tbody` 下标。
 
 | 字段 | 规则 |
 |------|------|
-| `instance_k` | 载入时由 `read_instances` 顺序赋值（第 0 条 → `k=0`，…）；追加时分配下一空闲 `k`；**排序、筛选不改变此值** |
-| `session_rows` 内存顺序 | 建议始终保持 `instance_k` 升序；若 UI 做列头排序，仅影响**展示层**（`ui.table` 客户端排序或渲染用排序副本），**不重排**用于 `write_back` 的 canonical 列表 |
-| `write_back` | 第 `i` 条记录写入 instance `record.instance_k`（若 API 仍用 list 下标，则 list 必须按 `instance_k` 排序且与 `k` 一一对应）；**不得**假设「列表第 i 项 = instance i」在用户排序后仍成立 |
+| `instance_idx` | 载入时由 `read_instances` 顺序赋值（第 0 条 → `k=0`，…）；追加时分配下一空闲 `k`；**排序、筛选不改变此值** |
+| `session_rows` 内存顺序 | 建议始终保持 `instance_idx` 升序；若 UI 做列头排序，仅影响**展示层**（`ui.table` 客户端排序或渲染用排序副本），**不重排**用于 `write_back` 的 canonical 列表 |
+| `write_back` | 第 `i` 条记录写入 instance `record.instance_idx`（若 API 仍用 list 下标，则 list 必须按 `instance_idx` 排序且与 `k` 一一对应）；**不得**假设「列表第 i 项 = instance i」在用户排序后仍成立 |
 
 **`move_to` 与 UI（已取消「行/列」自动推断）**：
 
 - Sheet 上 instance 的物理展开由 `input_section.move_to` + `offset` 决定；场景1 / 场景2 的 `k↔(i,j)` 见 §4.2.2；坐标 API 见 `apply_instance_shift` / `shift_value_cell` 与 [`toml_config_design.md`](toml_config_design.md)。
 - UI **不再**根据 `move_to` 是 `up`/`down` 还是 `left`/`right` 去切换表头「行号 / 列号」。
-- 多方向时由 NiceGUI 工具栏绘制对应方向按钮；`next_instance_k_along` 在场景2 下按次轴优先编码步进（§4.2.2）。
+- 多方向时由 NiceGUI 工具栏绘制对应方向按钮；`next_instance_idx_along` 在场景2 下按次轴优先编码步进（§4.2.2）。
 - `session.primary_span`：场景1 = 沿主轴可铺步数；场景2 = 次轴槽数（与 `ExcelWriter.primary_span` 同义）。
 - `value_from_label` 为 `left` / `right` 只描述**单条 instance 内**标签与值格的方位，**不**影响多 instance 展开。
 
 **列头排序（仅视图）**：
 
-- 可对 `Input_label` 列排序以便浏览；排序**不改变** `(instance_k, Input_label) → 值格坐标` 的映射。
-- 勾选列、`instance_k` 列（若展示）不可排序。
-- 行点击载入 `draft`、删除选中、`write_back`、模板即库覆盖保存：用行的 **`instance_k`** 解析数据，不用当前可见行序号。
+- 可对 `Input_label` 列排序以便浏览；排序**不改变** `(instance_idx, Input_label) → 值格坐标` 的映射。
+- 勾选列、`instance_idx` 列（若展示）不可排序。
+- 行点击载入 `draft`、删除选中、`write_back`、模板即库覆盖保存：用行的 **`instance_idx`** 解析数据，不用当前可见行序号。
 
-**独立数据库模式**：`session_rows` 在 **另存为** / 导出写回时同样按 `instance_k`（或追加时分配的序号）映射到 instance 0…n；列头排序后也不得用视觉行号写 Excel。
+**独立数据库模式**：`session_rows` 在 **另存为** / 导出写回时同样按 `instance_idx`（或追加时分配的序号）映射到 instance 0…n；列头排序后也不得用视觉行号写 Excel。
 
 ### 4.3 流程编排位置
 - `core_transform` 提供转换原子能力，不做全局编排。
@@ -272,7 +272,7 @@ UI 底部表：**一行 = 一条逻辑记录 = 一个 instance `k`**；**一列 
 - 多图顺序验证：同锚点多图在多次导出中顺序稳定。
 - 缺图/坏图容错验证：单图失败不阻断整份导出，告警可追踪。
 - **模板即库**：`read_instances` + 公式掩码与 `data_only=True` 显示值一致；公式格 / `cell_role=formula` 的 `write_back` 不被覆盖。
-- **instance_k**：排序/筛选后 `write_back`、载入 draft、删除仍按 `instance_k` 写对 instance；方向展开由 `move_to` + UI 方向按钮决定。
+- **instance_idx**：排序/筛选后 `write_back`、载入 draft、删除仍按 `instance_idx` 写对 instance；方向展开由 `move_to` + UI 方向按钮决定。
 - **场景2**：`(0,0)/(0,1)/(0,2)/(1,0)` 坐标正确；几何测 `secondary_span=3`（不依赖 Jose）；`j>0` 不写坏 major；不毁 K/R/Y/AF 公式；select 写入 L 等字符串；空槽只看 minor 可写格。
 - **容量**：独立库模式「下一行」在 `input_capacity` 处阻断；模板即库模式无此阻断，仅写回越界时失败。
 - 模板即库闭环：激活加载 → 编辑 → `write_back` → 再读一致。

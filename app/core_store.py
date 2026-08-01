@@ -262,12 +262,17 @@ def _json_safe_value(value: Any) -> Any:
     return value
 
 
-def _row_from_db(row_id: int, data_text: str) -> dict[str, Any]:
-    """SQLite 行 → 对外 dict：顶层 id + data 内各 Input_label。"""
+def _row_from_db(
+    row_id: int, data_text: str, instance_idx: int | None = None
+) -> dict[str, Any]:
+    """SQLite 行 → 对外 dict：顶层 id + instance_idx + data 内各 Input_label。"""
     parsed = json.loads(data_text)
     if not isinstance(parsed, dict):
         parsed = {}
-    return {"id": row_id, **parsed}
+    row: dict[str, Any] = {"id": row_id, **parsed}
+    # instance_idx 用于 Excel 回填定位；缺省 0 保持旧行为兼容
+    row["instance_idx"] = instance_idx if instance_idx is not None else 0
+    return row
 
 
 def _reject_forbidden_db_suffix(db_path: Path) -> None:
@@ -308,7 +313,7 @@ class SecureSQLite:
     def ensure_table(self) -> None:
         """
         函数名: ensure_table
-        作用: 创建 records(id, data) 表与 record_images 表（若不存在）
+        作用: 创建 records(id, data, instance_idx) 表与 record_images 表（若不存在）
         输入: 无
         输出: 无
         """
@@ -317,10 +322,22 @@ class SecureSQLite:
             """
             CREATE TABLE IF NOT EXISTS records (
                 id INTEGER PRIMARY KEY,
-                data TEXT NOT NULL
+                data TEXT NOT NULL,
+                instance_idx INTEGER
             )
             """
         )
+        # 旧库迁移：添加 instance_idx 列，并为已有记录按 id 顺序分配 0,1,2...
+        cur.execute("PRAGMA table_info(records)")
+        columns = {row[1] for row in cur.fetchall()}
+        if "instance_idx" not in columns:
+            cur.execute("ALTER TABLE records ADD COLUMN instance_idx INTEGER")
+            cur.execute("SELECT id FROM records ORDER BY id")
+            for idx, (rid,) in enumerate(cur.fetchall()):
+                cur.execute(
+                    "UPDATE records SET instance_idx=? WHERE id=?",
+                    (idx, rid),
+                )
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS record_images (
@@ -356,16 +373,24 @@ class SecureSQLite:
             """
         )
         # 增加查询索引
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_record_images_history ON record_images(template_id, record_id, input_label, created_at DESC)")
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_record_images_history ON record_images(template_id, record_id, input_label, created_at DESC)"
+        )
         self.conn.commit()
 
-    def insert_or_update(self, incoming: dict[str, Any], cfg: GetTomlValues) -> int:
+    def insert_or_update(
+        self,
+        incoming: dict[str, Any],
+        cfg: GetTomlValues,
+        instance_idx: int | None = None,
+    ) -> int:
         """
         函数名: insert_or_update
-        作用: 以 TOML 骨架覆盖 data JSON；不读、不合并旧 data
+        作用: 以 TOML 骨架覆盖 data JSON；不读、不合并旧 data；同时记录该条对应的 Excel instance_idx
         输入:
             incoming (dict[str, Any]) - 本次登记值（可缺键）
             cfg (GetTomlValues) - 当前 TOML 列定义
+            instance_idx (int | None) - 该记录回填 Excel 时对应的目标 instance_idx
         输出:
             int - 写入后的 records.id
         """
@@ -373,8 +398,8 @@ class SecureSQLite:
         payload = _build_payload_from_toml(cfg, incoming)
         cur = self.conn.cursor()
         cur.execute(
-            "INSERT OR REPLACE INTO records (id, data) VALUES (?, ?)",
-            (rid, json.dumps(payload, ensure_ascii=False)),
+            "INSERT OR REPLACE INTO records (id, data, instance_idx) VALUES (?, ?, ?)",
+            (rid, json.dumps(payload, ensure_ascii=False), instance_idx),
         )
         self.conn.commit()
         return rid
@@ -382,18 +407,21 @@ class SecureSQLite:
     def query_by_id(self, rid: int) -> dict[str, Any] | None:
         """
         函数名: query_by_id
-        作用: 按主键读取一条记录（顶层 id + data 内 Input_label）
+        作用: 按主键读取一条记录（顶层 id + instance_idx + data 内 Input_label）
         输入:
             rid (int) - 记录主键
         输出:
             dict[str, Any] | None - 当前落库记录或 None
         """
         cur = self.conn.cursor()
-        cur.execute("SELECT id, data FROM records WHERE id=?", (_normalize_id(rid),))
+        cur.execute(
+            "SELECT id, data, instance_idx FROM records WHERE id=?",
+            (_normalize_id(rid),),
+        )
         row = cur.fetchone()
         if not row:
             return None
-        return _row_from_db(row[0], row[1])
+        return _row_from_db(row[0], row[1], row[2])
 
     def query_all(self) -> list[dict[str, Any]]:
         """
@@ -401,11 +429,33 @@ class SecureSQLite:
         作用: 读取全部记录，供 UiProvider.get_data 使用
         输入: 无
         输出:
-            list[dict[str, Any]] - 每行含 id 与各 Input_label
+            list[dict[str, Any]] - 每行含 id、instance_idx 与各 Input_label
         """
         cur = self.conn.cursor()
-        cur.execute("SELECT id, data FROM records ORDER BY id")
-        return [_row_from_db(row_id, data_text) for row_id, data_text in cur.fetchall()]
+        cur.execute("SELECT id, data, instance_idx FROM records ORDER BY id")
+        return [
+            _row_from_db(row_id, data_text, ik)
+            for row_id, data_text, ik in cur.fetchall()
+        ]
+
+    def delete_record(self, rid: int) -> bool:
+        """
+        函数名: delete_record
+        作用: 按主键删除 records 行及其关联图片元数据
+        输入:
+            rid (int) - 记录主键
+        输出:
+            bool - 是否删除成功
+        """
+        cur = self.conn.cursor()
+        try:
+            cur.execute("DELETE FROM record_images WHERE record_id=?", (rid,))
+            cur.execute("DELETE FROM records WHERE id=?", (rid,))
+            self.conn.commit()
+            return cur.rowcount > 0
+        except Exception:
+            self.conn.rollback()
+            return False
 
     def save_image(
         self,
@@ -415,7 +465,7 @@ class SecureSQLite:
         input_label: str,
         image_bytes: bytes,
         mime: str,
-        crop_box: tuple[int, int, int, int] | None = None
+        crop_box: tuple[int, int, int, int] | None = None,
     ) -> dict[str, Any]:
         """
         函数名: save_image
@@ -444,31 +494,31 @@ class SecureSQLite:
             width, height = img.size
         except Exception:
             return {"ok": False, "message": "无法识别图片格式，请重新拍照。"}
-        
+
         file_size = len(image_bytes)
         content_hash = hashlib.sha256(image_bytes).hexdigest()
-        
+
         # 构造存储路径 templates/{template_id}/images/{record_id}/{uuid}.{ext}
         ext = mime.split("/")[-1] if "/" in mime else "jpg"
         if ext == "jpeg":
             ext = "jpg"
         unique_name = f"{uuid.uuid4().hex}.{ext}"
         rel_path = f"images/{record_id}/{unique_name}"
-        
+
         # 物理路径
         template_dir = _template_dir(template_id)
         abs_path = template_dir / rel_path
         abs_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # 保存文件
         try:
             abs_path.write_bytes(image_bytes)
         except Exception:
             return {"ok": False, "message": "存储不可用，图片未能保存。"}
-            
+
         crop_box_str = json.dumps(list(crop_box)) if crop_box else None
         created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        
+
         cur = self.conn.cursor()
         try:
             cur.execute(
@@ -479,13 +529,27 @@ class SecureSQLite:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    template_id, record_id, input_label, rel_path, mime,
-                    width, height, file_size, content_hash, crop_box_str, created_at
-                )
+                    template_id,
+                    record_id,
+                    input_label,
+                    rel_path,
+                    mime,
+                    width,
+                    height,
+                    file_size,
+                    content_hash,
+                    crop_box_str,
+                    created_at,
+                ),
             )
             self.conn.commit()
             image_id = cur.lastrowid
-            return {"ok": True, "message": "图片已保存。", "image_id": image_id, "image_path": rel_path}
+            return {
+                "ok": True,
+                "message": "图片已保存。",
+                "image_id": image_id,
+                "image_path": rel_path,
+            }
         except Exception:
             self.conn.rollback()
             try:
@@ -494,7 +558,9 @@ class SecureSQLite:
                 pass
             return {"ok": False, "message": "图片保存失败，请稍后重试。"}
 
-    def get_latest_image(self, template_id: str, record_id: int, input_label: str) -> dict[str, Any] | None:
+    def get_latest_image(
+        self, template_id: str, record_id: int, input_label: str
+    ) -> dict[str, Any] | None:
         """
         函数名: get_latest_image
         作用: 查询指定维度下未删除的最新一张图片记录
@@ -513,7 +579,7 @@ class SecureSQLite:
             WHERE template_id=? AND record_id=? AND input_label=? AND is_deleted=0
             ORDER BY created_at DESC LIMIT 1
             """,
-            (template_id, record_id, input_label)
+            (template_id, record_id, input_label),
         )
         row = cur.fetchone()
         if not row:
@@ -526,10 +592,12 @@ class SecureSQLite:
             "height": row[4],
             "ocr_text": row[5],
             "ocr_status": row[6],
-            "crop_box": json.loads(row[7]) if row[7] else None
+            "crop_box": json.loads(row[7]) if row[7] else None,
         }
 
-    def list_images_by_label(self, template_id: str, record_id: int, input_label: str) -> list[dict[str, Any]]:
+    def list_images_by_label(
+        self, template_id: str, record_id: int, input_label: str
+    ) -> list[dict[str, Any]]:
         """
         函数名: list_images_by_label
         作用: 查询指定字段标签下的所有图片历史（按时间倒序）
@@ -548,13 +616,18 @@ class SecureSQLite:
             WHERE template_id=? AND record_id=? AND input_label=? AND is_deleted=0
             ORDER BY created_at DESC
             """,
-            (template_id, record_id, input_label)
+            (template_id, record_id, input_label),
         )
         return [
             {
-                "image_id": r[0], "image_path": r[1], "mime": r[2], 
-                "width": r[3], "height": r[4], "ocr_text": r[5], 
-                "ocr_status": r[6], "created_at": r[7]
+                "image_id": r[0],
+                "image_path": r[1],
+                "mime": r[2],
+                "width": r[3],
+                "height": r[4],
+                "ocr_text": r[5],
+                "ocr_status": r[6],
+                "created_at": r[7],
             }
             for r in cur.fetchall()
         ]
@@ -566,7 +639,7 @@ class SecureSQLite:
         ocr_engine: str | None = None,
         ocr_version: str | None = None,
         ocr_status: str | None = None,
-        crop_box: tuple[int, int, int, int] | None = None
+        crop_box: tuple[int, int, int, int] | None = None,
     ) -> dict[str, Any]:
         """
         函数名: update_image_ocr
@@ -582,10 +655,13 @@ class SecureSQLite:
             dict: {ok: bool, message: str}
         """
         cur = self.conn.cursor()
-        cur.execute("SELECT image_id FROM record_images WHERE image_id=? AND is_deleted=0", (image_id,))
+        cur.execute(
+            "SELECT image_id FROM record_images WHERE image_id=? AND is_deleted=0",
+            (image_id,),
+        )
         if not cur.fetchone():
             return {"ok": False, "message": "未找到对应图片，无法保存识别结果。"}
-            
+
         updated_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
         updates = []
         params = []
@@ -604,18 +680,18 @@ class SecureSQLite:
         if crop_box is not None:
             updates.append("crop_box=?")
             params.append(json.dumps(list(crop_box)))
-            
+
         if not updates:
             return {"ok": True, "message": "无更新内容。"}
-            
+
         updates.append("updated_at=?")
         params.append(updated_at)
         params.append(image_id)
-        
+
         try:
             cur.execute(
                 f"UPDATE record_images SET {', '.join(updates)} WHERE image_id=?",
-                tuple(params)
+                tuple(params),
             )
             self.conn.commit()
             return {"ok": True, "message": "识别结果已保存。"}
@@ -632,73 +708,85 @@ class SecureSQLite:
         """
         self.conn.close()
 
+
 def _ocr_json_to_flat_kv(data: dict) -> dict[str, str]:
     """从 PaddleOcr result dict 提取扁平 key->value（string* + table cells 交替对）"""
     flat = {}
     # 1. table1..N
-    for k in sorted(data.keys()):
-        if k.startswith("table") and isinstance(data[k], list):
-            for row in data[k]:
+    for key in sorted(data.keys()):
+        if key.startswith("table") and isinstance(data[key], list):
+            for row in data[key]:
                 if isinstance(row, dict) and "cells" in row:
                     cells = row["cells"]
                     if not isinstance(cells, list):
                         continue
-                    for i in range(0, len(cells) - 1, 2):
-                        key = str(cells[i]).strip()
-                        val = str(cells[i+1]).strip()
-                        if key:
-                            flat[key] = val
+                    for idx in range(0, len(cells) - 1, 2):
+                        cell_key = str(cells[idx]).strip()
+                        cell_val = str(cells[idx + 1]).strip()
+                        if cell_key:
+                            flat[cell_key] = cell_val
 
     # 2. string1..N (会覆盖同名的 table 提取结果，优先级由字典遍历顺序决定，这里 string1..N 提取的是单行键值)
     pattern = re.compile(r"^([^：:]+)[：:](.*)$")
-    for k in sorted(data.keys()):
-        if k.startswith("string") and isinstance(data[k], str):
-            line = data[k].strip()
+    for key in sorted(data.keys()):
+        if key.startswith("string") and isinstance(data[key], str):
+            line = data[key].strip()
             match = pattern.fullmatch(line)
             if match:
-                key = match.group(1).strip()
-                val = match.group(2).strip()
-                if key:
-                    flat[key] = val
+                cell_key = match.group(1).strip()
+                cell_val = match.group(2).strip()
+                if cell_key:
+                    flat[cell_key] = cell_val
 
     return flat
+
 
 def _map_flat_kv_to_fields(flat: dict[str, str], field_rules: list) -> dict[str, Any]:
     """Input_label 精确匹配 -> 规范化 -> 唯一模糊匹配；值经 _apply_regex"""
     fields = {}
-    
-    def normalize_key(k: str) -> str:
-        return k.replace(" ", "").replace("　", "")
-        
+
+    def normalize_key(raw_key: str) -> str:
+        return raw_key.replace(" ", "").replace("　", "")
+
     for rule in field_rules:
         target_label = rule.Input_label
         norm_target = normalize_key(target_label)
-        
+
         # 1. 精确匹配
         if target_label in flat:
-            fields[target_label] = _apply_regex(flat[target_label], getattr(rule, "regex", ""))
+            fields[target_label] = _apply_regex(
+                flat[target_label], getattr(rule, "regex", "")
+            )
             continue
-            
+
         # 2. 规范化精确匹配
         matched = False
-        for k, v in flat.items():
-            if normalize_key(k) == norm_target:
-                fields[target_label] = _apply_regex(v, getattr(rule, "regex", ""))
+        for key, value in flat.items():
+            if normalize_key(key) == norm_target:
+                fields[target_label] = _apply_regex(value, getattr(rule, "regex", ""))
                 matched = True
                 break
         if matched:
             continue
-            
+
         # 3. 模糊匹配（仅当唯一命中）
         candidates = []
-        for k, v in flat.items():
-            norm_k = normalize_key(k)
-            if target_label in k or k in target_label or norm_target in norm_k or norm_k in norm_target:
-                candidates.append(v)
+        for key, value in flat.items():
+            norm_key = normalize_key(key)
+            if (
+                target_label in key
+                or key in target_label
+                or norm_target in norm_key
+                or norm_key in norm_target
+            ):
+                candidates.append(value)
         if len(candidates) == 1:
-            fields[target_label] = _apply_regex(candidates[0], getattr(rule, "regex", ""))
+            fields[target_label] = _apply_regex(
+                candidates[0], getattr(rule, "regex", "")
+            )
 
     return fields
+
 
 class UiProvider:
     """Gradio labels + data；数据一律来自 SecureSQLite。"""
@@ -735,16 +823,30 @@ class UiProvider:
         """
         return self.db.query_all()
 
-    def persist_fields(self, incoming: dict[str, Any]) -> int:
+    def persist_fields(
+        self, incoming: dict[str, Any], instance_idx: int | None = None
+    ) -> int:
         """
         函数名: persist_fields
-        作用: incoming 按 TOML 骨架覆盖写入 DB
+        作用: incoming 按 TOML 骨架覆盖写入 DB，并记录目标 instance_idx
         输入:
             incoming (dict[str, Any]) - 本次登记值（可缺键）
+            instance_idx (int | None) - 该记录回填 Excel 时对应的目标 instance_idx
         输出:
             int - records.id
         """
-        return self.db.insert_or_update(incoming, self.cfg)
+        return self.db.insert_or_update(incoming, self.cfg, instance_idx=instance_idx)
+
+    def delete_record(self, rid: int) -> bool:
+        """
+        函数名: delete_record
+        作用: 按 records.id 删除记录
+        输入:
+            rid (int) - 记录主键
+        输出:
+            bool - 是否删除成功
+        """
+        return self.db.delete_record(rid)
 
     def split_by_determiner(self, raw: str) -> list[str]:
         """
@@ -756,7 +858,6 @@ class UiProvider:
             list[str] - 拆分后的段列表
         """
         return split_by_determiner(raw, self.cfg.determiner)
-
 
     def record_from_textbox(self, raw: str) -> dict[str, Any]:
         """
@@ -783,7 +884,7 @@ class UiProvider:
                 pass
         if is_brace_json(raw):
             indexed = json_to_indexed_dict(raw)
-            parts = [indexed[i] for i in sorted(indexed.keys())]
+            parts = [indexed[idx] for idx in sorted(indexed.keys())]
         else:
             parts = self.split_by_determiner(raw)
         fields: dict[str, Any] = {}

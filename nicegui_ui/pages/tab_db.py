@@ -5,11 +5,11 @@ from app.core_store import list_db_paths, allocate_next_db_path
 
 
 def _select_db_row(session, row_id, is_independent: bool) -> None:
-    """Remember selected DB row primary key or instance_k for overwrite."""
+    """Remember selected DB row primary key or instance_idx for overwrite."""
     if is_independent:
         session.selected_db_row_index = row_id
     else:
-        session.selected_instance_k = row_id
+        session.selected_instance_idx = row_id
 
 
 @ui.refreshable
@@ -63,6 +63,7 @@ def render_db_tab():
                         .classes("dropdown narrow")
                         .props("dense borderless hide-bottom-space")
                     )
+
                     def on_switch():
                         if not session.use_independent_db:
                             return
@@ -71,13 +72,14 @@ def render_db_tab():
                             return
                         from pathlib import Path
                         from app.core_store import SecureSQLite, UiProvider
+
                         session.db.close()
                         session.db_path = Path(new_path_str)
                         session.db = SecureSQLite(session.db_path)
                         session.ui_provider = UiProvider(session.cfg, session.db)
                         session.draft.clear()
                         session.session_rows.clear()
-                        session.selected_instance_k = None
+                        session.selected_instance_idx = None
                         session.selected_instance_indices.clear()
                         session.sort_column = None
                         session.sort_descending = False
@@ -86,11 +88,16 @@ def render_db_tab():
                         ui.notify("已切换数据库", type="positive")
                         render_db_tab.refresh()
                         from nicegui_ui.pages.tab_input import render_input_tab
+
                         render_input_tab.refresh()
-                    switch_lbl = AppBtn("切换", variant="db", disabled=True, on_click=on_switch)
+
+                    switch_lbl = AppBtn(
+                        "切换", variant="db", disabled=True, on_click=on_switch
+                    )
                     if not session.use_independent_db:
                         db_select.props("disable")
                         switch_lbl.disable()
+
                     def on_db_select_change() -> None:
                         if (
                             db_select.value != current_db_str
@@ -116,7 +123,7 @@ def render_db_tab():
 
                             session.draft.clear()
                             session.session_rows.clear()
-                            session.selected_instance_k = None
+                            session.selected_instance_idx = None
                             session.selected_instance_indices.clear()
                             session.sort_column = None
                             session.sort_descending = False
@@ -191,7 +198,7 @@ def render_db_tab():
                                         row.get(pk_label) if pk_label else row.get("id")
                                     )
                                 else:
-                                    row_id = row.get("instance_k")
+                                    row_id = row.get("instance_idx")
                                 with (
                                     ui.element("tr")
                                     .classes("cursor-pointer")
@@ -275,7 +282,7 @@ def render_db_tab():
                             ui.notify("请先从上面表格选中要覆盖的行", type="warning")
                             return
                     else:
-                        if session.selected_instance_k is None:
+                        if session.selected_instance_idx is None:
                             ui.notify("请先从上面表格选中要覆盖的行", type="warning")
                             return
 
@@ -295,7 +302,7 @@ def render_db_tab():
                                 session.template_path,
                                 session.template_path,
                                 merged,
-                                session.selected_instance_k,
+                                session.selected_instance_idx,
                             )
                             from nicegui_ui.components.for_main import ForMain
 

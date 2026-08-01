@@ -655,7 +655,7 @@ indexed = parts_to_indexed_dict(split_by_determiner(raw_sample, determiners))
 | Full `ContextStore` layers | **Deprecated**; use `wizard/context.py` |
 | `BrowserSession` | **Deprecated** |
 | Platform `ActionParser` | **Deprecated**; use `parse_field_json.py` |
-| Input「保存」/「添加数据」text persist | [`db_store.md`](db_store.md) §2.1 — independent DB → SQLite; `use_independent_db=false` → `write_back` template by `instance_k` |
+| Input「保存」/「添加数据」text persist | [`db_store.md`](db_store.md) §2.1 — independent DB → SQLite; `use_independent_db=false` → `write_back` template by `instance_idx` |
 | Live draft for Step 3 | `tab_input.read_field_drafts` |
 
 ---
@@ -716,6 +716,6 @@ indexed = parts_to_indexed_dict(split_by_determiner(raw_sample, determiners))
 - [`embed_gemma4.md`](embed_gemma4.md) — LiteRT runtime  
 - [`toml_config_design.md`](toml_config_design.md) — TOML field semantics (incl. `use_independent_db`)  
 - [`db_store.md`](db_store.md) §2.1 — runtime Input「保存」/「添加数据」when template-as-DB vs independent DB  
-- [`excel_transform.md`](excel_transform.md) §4.6 — template-as-DB `write_back` / `instance_k`  
+- [`excel_transform.md`](excel_transform.md) §4.6 — template-as-DB `write_back` / `instance_idx`  
 - [`connect_google.md`](connect_google.md) — Google Sheet OAuth  
 - [`app/core_split.py`](../app/core_split.py) — shared tokenization / determiner split  

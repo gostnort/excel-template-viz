@@ -35,28 +35,47 @@
 
 | 能力 | 独立数据库（默认） | 模板即库 |
 |------|-------------------|----------|
-| 文本持久化 | `insert_or_update` → 后缀 SQLite | `ExcelWriter.write_back` → **模板 xlsx 原地**（`templates/{id}/{id}.xlsx` 的 `work_sheet`；见 [`excel_transform.md`](excel_transform.md) §4.6） |
+| 文本持久化 | `insert_or_update(instance_idx=...)` → 后缀 SQLite | `ExcelWriter.write_back` → **模板 xlsx 原地**（`templates/{id}/{id}.xlsx` 的 `work_sheet`；见 [`excel_transform.md`](excel_transform.md) §4.6） |
 | 图片 | `save_image` / `get_latest_image` 等 | **不调用**；提交时丢弃 pending `field_images` |
 | 输入页容量满 | `input_capacity` 达上限时禁用「添加数据」 | **不适用**——无「容量已满」；录入行数由 xlsx instance 自然增长 |
-| 写回定位键 | `records.id`（SQLite） | **`instance_k`**（immutable；列头排序后仍用 k 写回，见 [`excel_transform.md`](excel_transform.md) §4.6.5） |
-| DB 页「全部数据」 | `ui_provider.get_data()` | `read_instances(template_path)` |
+| 写回定位键 | `records.id`（SQLite）+ `records.instance_idx`（Excel 槽位） | **`instance_idx`**（immutable；列头排序后仍用 instance_idx 写回，见 [`excel_transform.md`](excel_transform.md) §4.6.5） |
+| DB 页「全部数据」 | `ui_provider.get_data()`（含 `instance_idx`） | `read_instances(template_path)` |
+| 激活时加载 | 从 DB 读出全部记录，按 `instance_idx` 回填 `session_rows` | 从模板 xlsx `read_instances` |
+| 删除 | 同时删除 `records` + `record_images` | 仅从内存 `session_rows` 移除（模板即库不删 xlsx 历史） |
+
+#### 输入页「保存」/「添加数据」（独立数据库 · UI 契约）
+
+实现位置：`nicegui_ui/pages/tab_input.py`（`handle_save_as` / `handle_next_row`）。
+
+| 按钮 | 语义 | 写回目标 `instance_idx` | 成功后 |
+|------|------|----------------------|--------|
+| **保存** | 提交当前 draft 到 DB，并导出全部会话行到 `exports/` | 有 `selected_instance_idx` → 该行；否则 → `current_instance_index` | `persist_fields(draft, instance_idx=write_k)` → `_commit_draft_to_session_rows(..., record_id=...)` → `write_back(template→exports, session_rows)` |
+| **添加数据 / 方向按钮** | 提交当前 draft 到 DB，推进到下一 `instance_idx` | 同上 | 同上 + `current_instance_index = next_k` |
+
+**必守规则：**
+
+1. 每次 `persist_fields` 必须传入当前 `write_k` 作为 `instance_idx`，使 DB 记录与 Excel 槽位一一对应。
+2. 新建记录时把 `persist_fields` 返回的 `records.id` 写入 `session_rows` 行，保证删除能同步删 DB。
+3. 覆盖已有行时保留原 `records.id`，仅更新 `data` 与 `instance_idx`。
+4. 删除勾选的 `session_rows` 行时，独立库模式下必须调用 `db.delete_record(rid)`，避免重载后死灰复燃。
+5. 激活模板时从 DB 加载全部记录到 `session_rows`，按 `instance_idx` 降序展示；`current_instance_index` 初始化为 `max(instance_idx) + 1`（受 `input_capacity` 限制）。
 
 #### 输入页「保存」/「添加数据」（模板即库 · UI 契约）
 
 实现位置：`nicegui_ui/pages/tab_input.py`（`handle_save_as` / `handle_next_row`）。**不**调用本模块的 `insert_or_update` / `save_image`。
 
-| 按钮 | 语义 | 写回目标 `instance_k` | 成功后 |
+| 按钮 | 语义 | 写回目标 `instance_idx` | 成功后 |
 |------|------|----------------------|--------|
-| **保存** | **提交当前编辑到模板**（不是「另存导出」主路径） | 有 `selected_instance_k` → 该行；否则 → `current_instance_index`（下一待录入） | `write_back(template→template, draft, instance_k=k)` → `ForMain.refresh_session_from_source` 重载表；提示「已写入模板第 N 行」 |
-| **添加数据** | 同样按 `instance_k` 写回模板 | 同上（选中行覆盖；未选中则写当前待录入 index） | 同上轻量刷新；提示「已记录」 |
+| **保存** | **提交当前编辑到模板**（不是「另存导出」主路径） | 有 `selected_instance_idx` → 该行；否则 → `current_instance_index`（下一待录入） | `write_back(template→template, draft, instance_idx=write_k)` → `ForMain.refresh_session_from_source` 重载表；提示「已写入模板第 N 行」 |
+| **添加数据** | 同样按 `instance_idx` 写回模板 | 同上（选中行覆盖；未选中则写当前待录入 index） | 同上轻量刷新；提示「已记录」 |
 
 **必守规则：**
 
-1. 点表行载入草稿会设置 `selected_instance_k`。此后「保存」/「添加数据」**必须**写回该 `instance_k`，禁止因「已选中」而跳过 `write_back`，也禁止误写到末尾空行（`current_instance_index`）。
+1. 点表行载入草稿会设置 `selected_instance_idx`。此后「保存」/「添加数据」**必须**写回该 `instance_idx`，禁止因「已选中」而跳过 `write_back`，也禁止误写到末尾空行（`current_instance_index`）。
 2. 提交前用 `read_field_drafts` 把字段控件当前值合并进 `session.draft`（与向导 Step 3 同源 helper）。
-3. 写回 dict 时去掉 `instance_k` / `_index` 元键，由 API 参数 `instance_k=k` 定位值格（`write_back` 若见记录内 `instance_k` 也会优先用它——勿混入错误 k）。
+3. 写回 dict 时去掉 `instance_idx` / `_index` 元键，由 API 参数 `instance_idx=write_k` 定位值格（`write_back` 若见记录内 `instance_idx` 也会优先用它——勿混入错误 instance_idx）。
 4. 独立库模式下「保存」仍为导出 `exports/{template_id}/{template_id}_{suffix}_{YYYYMMDD}_{HHMMSS}.xlsx`；**模板即库不得把「保存成功: 导出文件名」当成唯一成功信号而跳过模板写回**。
-5. DB 页「覆盖保存」：选中行 + 粘贴 → `write_back` 同一 `selected_instance_k`（仍不经本模块）。
+5. DB 页「覆盖保存」：选中行 + 粘贴 → `write_back` 同一 `selected_instance_idx`（仍不经本模块）。
 
 本文件 §4–§9 的 SQLite / `record_images` 契约仅在 **独立数据库** 模式下生效。模板即库的其余 UI 行为见 [`nicegui_ui/nicegui_ui_plan.md`](nicegui_ui/nicegui_ui_plan.md) §3.1、§3.4。
 
@@ -83,7 +102,8 @@
 1. 基于 TOML 收集全部 `Input_label` 作为 JSON 键集合。
 2. `incoming` 命中键写值，缺失键统一补空值。
 3. `resolve_db_id(cfg)` 决定 `records.id` 来源（业务 id 或自动 id）。
-4. UPSERT 到 `records`，`data` 全量覆盖，禁止 merge 旧 JSON。
+4. 调用方传入 `instance_idx`，与 `records.id` 一起持久化，用于后续准确回填 Excel。
+5. UPSERT 到 `records`，`data` 全量覆盖，`instance_idx` 同步更新，禁止 merge 旧 JSON。
 
 ### 4.2 图片保存（新增语义）
 1. 接收图片输入（bytes/路径）并完成基础校验（非空、mime 可识别）。
@@ -97,7 +117,19 @@
 - “最近一张”由 `created_at`（或自增 `image_id`）定义。
 - `template_id` 作为隔离维度，避免同名 `input_label` 跨模板污染。
 
-## 5) 数据模型建议（图片）
+## 5) 数据模型建议
+
+### 5.0 `records` 表（文本记录）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | INTEGER PRIMARY KEY | 记录主键；可由业务 ID（`db_id` 对应 `Input_label`）或 UUID 生成。 |
+| `data` | TEXT NOT NULL | JSON 字符串，键为当前 TOML 全部 `Input_label`，缺失键填空串。 |
+| `instance_idx` | INTEGER | 该记录回填 Excel 时对应的目标 instance 槽位（0-based）。 |
+
+**迁移说明**：旧库无 `instance_idx` 列时，`ensure_table` 自动 `ALTER TABLE ADD COLUMN`，并按 `id` 升序为已有记录分配 `0,1,2...`。
+
+### 5.1 `record_images` 表（图片）
 
 推荐新增 `record_images`（或 `images`）表，字段建议如下：
 
@@ -233,6 +265,24 @@
 - 未显式指定 `excel_render_mode` 时，默认 `overlay`；未显式指定顺序时按创建时间稳定输出。
 - 单图场景：按单条记录锚点直接落图，不触发并列排布逻辑。
 
+### 6.6 `instance_idx` 持久化与回填（独立数据库模式）
+
+为保证「DB 中的记录能准确写回 Excel 的对应槽位」，`records` 表新增 `instance_idx` 字段：
+
+1. **写入时**：
+   - `UiProvider.persist_fields(incoming, instance_idx=write_k)` → `SecureSQLite.insert_or_update(..., instance_idx=write_k)`。
+   - `write_k` 由 UI 根据 `selected_instance_idx` / `current_instance_index` 解析得到。
+2. **查询时**：
+   - `query_by_id` / `query_all` 返回的 dict 均带 `instance_idx` 键；旧记录缺省时默认 `0`。
+3. **激活加载**：
+   - `ForMain.load_template` 在独立库模式下调用 `ui_provider.get_data()`，将全部记录按 `instance_idx` 回填到 `session_rows`。
+   - `current_instance_index` 初始化为 `max(instance_idx) + 1`（受 `input_capacity` 限制）。
+4. **导出时**：
+   - `handle_save_as` 将 `session_rows` 全部传给 `ExcelWriter.write_back(..., instance_idx=0)`。
+   - `write_back` 优先读取每条记录自身的 `instance_idx`，保证即使表格被用户排序，仍能写回正确 Excel 槽位。
+5. **删除时**：
+   - `handle_delete_checked_session_rows` 在独立库模式下调用 `db.delete_record(rid)`，同步删除 DB 行与关联图片，避免重载后死灰复燃。
+
 ## 7) 错误处理与降级
 
 对 UI 可见的 store 结果须带中文 `message`（与 `paddle_ocr` 同一约定：不暴露 HTTP 码或英文异常类名）。
@@ -288,8 +338,12 @@
 - 导出开关验证：`export_attach_images=off` 时无图片输出，且纯文本导出结果与历史一致。
 - 缺图/坏图容错：存在异常图片时导出流程不中断，告警信息可追踪到 `image_id`。
 - **模板即库**：确认 `use_independent_db=false` 时无 `insert_or_update` / `save_image` 调用路径。
-- **模板即库 · 选中行保存**：点击已有 `instance_k` → 改 draft →「保存」后，模板 xlsx 与输入表该行均更新为新值；未选中时「保存」写 `current_instance_index`。
-- **模板即库 · 选中行添加数据**：选中 `k` 后点「添加数据」写回同一 `k`，不得写到末尾空 instance。
+- **模板即库 · 选中行保存**：点击已有 `instance_idx` → 改 draft →「保存」后，模板 xlsx 与输入表该行均更新为新值；未选中时「保存」写 `current_instance_index`。
+- **模板即库 · 选中行添加数据**：选中 `instance_idx` 后点「添加数据」写回同一 `instance_idx`，不得写到末尾空 instance。
+- **独立库 · instance_idx 持久化**：`persist_fields(draft, instance_idx=3)` 后，`query_all` 返回的记录 `instance_idx == 3`。
+- **独立库 · 激活加载**：重启会话后 `session_rows` 包含 DB 中全部记录，且 `current_instance_index == max(instance_idx) + 1`。
+- **独立库 · 删除同步**：删除 `session_rows` 一行后，DB 中对应 `records.id` 与 `record_images` 均被清除。
+- **独立库 · 导出回填**：多记录导出时，每条记录写回自身的 `instance_idx`，表格排序不改变最终 Excel 槽位。
 
 ## 10) 后续扩展
 

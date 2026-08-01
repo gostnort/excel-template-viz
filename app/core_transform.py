@@ -1,4 +1,5 @@
 """外部数据源与 Input_sheet 读写（路径 B）。见 docs/data_flow_design.md。"""
+
 from __future__ import annotations
 import argparse
 import json
@@ -11,19 +12,20 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter, range_boundaries
 from PIL import Image, ImageDraw, ImageFont
 from .core_toml import (
+    AreaRect,
     GetTomlValues,
     TomlDefault,
     _parse_input_areas,
     _parse_section_areas,
     _validate_id_rules,
     apply_instance_shift,
-    ij_from_k,
     is_scene2_section,
     locate_cell_section,
     move_to_directions,
     offset_cell,
     primary_move_to,
     shift_value_cell,
+    split_instance_idx,
 )
 
 
@@ -92,7 +94,9 @@ def _load_sheet_rows(workbook_path: Path, sheet_name: str) -> list[dict[str, Any
         wb.close()
 
 
-def _find_row_by_id(rows: list[dict[str, Any]], id_column: str, id_value: Any) -> dict[str, Any] | None:
+def _find_row_by_id(
+    rows: list[dict[str, Any]], id_column: str, id_value: Any
+) -> dict[str, Any] | None:
     """
     函数名: _find_row_by_id
     作用: 在数据源行列表中按 ID 列匹配一行
@@ -164,7 +168,9 @@ def _read_area_cell_grid(ws: Any, area: str) -> list[list[str]]:
     for row_idx in range(min_row, max_row + 1):
         row_cells: list[str] = []
         for col_idx in range(min_col, max_col + 1):
-            row_cells.append(_cell_display_text(ws.cell(row=row_idx, column=col_idx).value))
+            row_cells.append(
+                _cell_display_text(ws.cell(row=row_idx, column=col_idx).value)
+            )
         grid.append(row_cells)
     return grid
 
@@ -218,7 +224,6 @@ class Template2DB:
     def __init__(self, cfg: GetTomlValues) -> None:
         self.cfg = cfg
 
-
     def resolve_source_path(self, source_key: str) -> Path | None:
         """
         函数名: resolve_source_path
@@ -238,7 +243,6 @@ class Template2DB:
                 return None
             return Path(str(raw))
         return None
-
 
     def apply_regex(self, value: Any, pattern: str | None) -> Any:
         """
@@ -261,7 +265,6 @@ class Template2DB:
         if match.lastindex:
             return match.group(1)
         return match.group(0)
-
 
     def fetch_row_by_id(self, id_value: Any) -> dict[str, Any]:
         """
@@ -286,7 +289,9 @@ class Template2DB:
                 continue
             cache_key = (str(source_path), rule.source_sheet)
             if cache_key not in sheet_cache:
-                sheet_cache[cache_key] = _load_sheet_rows(source_path, rule.source_sheet)
+                sheet_cache[cache_key] = _load_sheet_rows(
+                    source_path, rule.source_sheet
+                )
             rows = sheet_cache[cache_key]
             matched = _find_row_by_lookup_keys(rows, lookup_keys, id_value)
             if matched is None:
@@ -297,22 +302,94 @@ class Template2DB:
         return record
 
 
+def _shift_rect(rect: AreaRect, direction: str, offset: int) -> AreaRect:
+    """把矩形 rect 沿 direction 平移 offset 格；direction 须为 up/down/left/right。"""
+    direction = direction.strip().lower()
+    if direction == "down":
+        return rect[0] + offset, rect[1], rect[2] + offset, rect[3]
+    if direction == "up":
+        return rect[0] - offset, rect[1], rect[2] - offset, rect[3]
+    if direction == "right":
+        return rect[0], rect[1] + offset, rect[2], rect[3] + offset
+    if direction == "left":
+        return rect[0], rect[1] - offset, rect[2], rect[3] - offset
+    raise ValueError(f"unsupported direction: {direction}")
+
+
+def _rect_out_of_bounds(rect: AreaRect, bound: int) -> bool:
+    """矩形是否超出 1..bound 边界。"""
+    return rect[0] < 1 or rect[1] < 1 or rect[2] > bound or rect[3] > bound
+
+
+def _rect_hits_any(rect: AreaRect, others: list[AreaRect]) -> bool:
+    """矩形 rect 是否与 others 中任一矩形有实际重叠。"""
+    for other in others:
+        if (
+            rect[0] <= other[2]
+            and rect[2] >= other[0]
+            and rect[1] <= other[3]
+            and rect[3] >= other[1]
+        ):
+            return True
+    return False
+
+
+def _collect_base_cells(ws: Any, rects: list[AreaRect]) -> list[tuple[int, int, Any]]:
+    """收集给定矩形并集内所有非公式单元格，用于模板值匹配。"""
+    cells: list[tuple[int, int, Any]] = []
+    for rect in rects:
+        for r in range(rect[0], rect[2] + 1):
+            for c in range(rect[1], rect[3] + 1):
+                value = ws.cell(row=r, column=c).value
+                if isinstance(value, str) and value.startswith("="):
+                    continue
+                cells.append((r, c, value))
+    return cells
+
+
+def _scene2_row_idx_matches(
+    ws: Any,
+    base_cells: list[tuple[int, int, Any]],
+    primary_dir: str,
+    offset: int,
+    bound: int,
+) -> bool:
+    """场景2：把 instance 0 的 base_cells 沿主轴平移 offset 格，比较是否仍与模板一致；公式格不计。"""
+    if offset < 1:
+        return False
+    for r0, c0, base_value in base_cells:
+        try:
+            rk, ck = offset_cell(r0, c0, primary_dir, offset)
+        except ValueError:
+            return False
+        if rk < 1 or ck < 1 or rk > bound or ck > bound:
+            return False
+        shifted_value = ws.cell(row=rk, column=ck).value
+        if isinstance(shifted_value, str) and shifted_value.startswith("="):
+            continue
+        if shifted_value != base_value:
+            return False
+    return True
 
 
 class ExcelWriter:
-    """按 verify_toml 的 located + input_section k 组平移读写值格；定位用 Input_label 不用 index。"""
+    """按 verify_toml 的 located + input_section instance_idx 组平移读写值格；定位用 Input_label 不用 index。"""
 
-    def __init__(self, cfg: GetTomlValues, located: dict[str, dict[str, int]] | None = None) -> None:
+    def __init__(
+        self, cfg: GetTomlValues, located: dict[str, dict[str, int]] | None = None
+    ) -> None:
         self.cfg = cfg
         # located: {Input_label: {label_row,label_col,value_row,value_col}}，来自 core_toml.verify_toml
         self.located = dict(located) if located else {}
         # 场景1：沿 move_to[0] 可铺步数；场景2：次轴槽数（secondary_span）；由 max_instance_count 写入
         self.primary_span: int = 0
+        # 由 max_instance_count 写入：数据库模式下的自然容量上界（值匹配测得），模板即库模式仅作参考
+        self._input_capacity: int = 0
+        self._capacity_computed_for: Path | None = None
         # Input_label → TomlDefault（写回跳过 cell_role=formula）
         self._rules_by_label: dict[str, TomlDefault] = {
             r.Input_label: r for r in (cfg.field_rules or [])
         }
-
 
     def _worksheet_name(self, workbook_path: Path) -> str:
         """解析 cfg.work_sheet 或回退 active sheet。"""
@@ -324,11 +401,9 @@ class ExcelWriter:
         finally:
             wb.close()
 
-
     def _is_scene2(self) -> bool:
         """当前配置是否为场景2 嵌套 input_section。"""
         return is_scene2_section(self.cfg.input_section)
-
 
     def _label_is_major(self, label: str) -> bool:
         """
@@ -344,17 +419,18 @@ class ExcelWriter:
         coord = self.located.get(label)
         if not coord:
             return False
-        loc = locate_cell_section(coord["value_row"], coord["value_col"], self.cfg.input_section)
+        loc = locate_cell_section(
+            coord["value_row"], coord["value_col"], self.cfg.input_section
+        )
         return loc is not None and loc[0] == 0
 
-
-    def _value_cell(self, label: str, instance_k: int) -> tuple[int, int] | None:
+    def _value_cell(self, label: str, instance_idx: int) -> tuple[int, int] | None:
         """
         函数名: ExcelWriter._value_cell
-        作用: 由 located 的 instance 0 值格，按 input_section 平移得第 k 组值格坐标
+        作用: 由 located 的 instance 0 值格，按 input_section 平移得第 instance_idx 组值格坐标
         输入:
             label (str) - Input_label
-            instance_k (int) - 组序（0 即 instance 0，不平移）
+            instance_idx (int) - 组序（0 即 instance 0，不平移）
         输出:
             tuple[int, int] | None - (row, col)；label 不在 located 时 None
         """
@@ -363,16 +439,15 @@ class ExcelWriter:
             return None
         value_row = coord["value_row"]
         value_col = coord["value_col"]
-        if instance_k <= 0:
+        if instance_idx <= 0:
             return value_row, value_col
         return shift_value_cell(
             value_row,
             value_col,
             self.cfg.input_section,
-            instance_k,
+            instance_idx,
             primary_span=self.primary_span,
         )
-
 
     def _minor_writable_labels(self) -> list[str]:
         """场景2：minor 段且非 formula 的 Input_label 列表；场景1：全部非 formula located。"""
@@ -386,16 +461,17 @@ class ExcelWriter:
             labels.append(label)
         return labels
 
-
     def _instance_is_empty(
-        self, ws_data: Any, ws_form: Any | None, instance_k: int
+        self, ws_data: Any, ws_form: Any | None, instance_idx: int
     ) -> bool:
         """按场景空槽定义判断 instance 是否为空。"""
-        labels = self._minor_writable_labels() if self._is_scene2() else list(self.located)
+        labels = (
+            self._minor_writable_labels() if self._is_scene2() else list(self.located)
+        )
         if not labels:
             labels = list(self.located)
         for label in labels:
-            cell = self._value_cell(label, instance_k)
+            cell = self._value_cell(label, instance_idx)
             if cell is None:
                 continue
             if ws_form is not None:
@@ -407,26 +483,29 @@ class ExcelWriter:
                 return False
         return True
 
-
-    def _read_instance(self, ws_data: Any, ws_form: Any | None, instance_k: int) -> tuple[dict[str, Any], dict[str, bool]]:
-        """读取第 k 组全部 located 值格，键为 Input_label。返回 (值字典, 公式掩码字典)"""
+    def _read_instance(
+        self, ws_data: Any, ws_form: Any | None, instance_idx: int
+    ) -> tuple[dict[str, Any], dict[str, bool]]:
+        """读取第 instance_idx 组全部 located 值格，键为 Input_label。返回 (值字典, 公式掩码字典)"""
         values: dict[str, Any] = {}
         masks: dict[str, bool] = {}
         try:
             for label in self.located:
-                cell = self._value_cell(label, instance_k)
+                cell = self._value_cell(label, instance_idx)
                 if cell is None:
                     continue
                 # If out of bounds, openpyxl cell() might still work but it's safe to check.
                 if cell[0] > 1048576 or cell[1] > 16384:
                     raise ValueError("Cell out of bounds")
-                
+
                 val = ws_data.cell(row=cell[0], column=cell[1]).value
                 values[label] = val
-                
+
                 if ws_form:
                     form_val = ws_form.cell(row=cell[0], column=cell[1]).value
-                    masks[label] = isinstance(form_val, str) and form_val.startswith("=")
+                    masks[label] = isinstance(form_val, str) and form_val.startswith(
+                        "="
+                    )
                 else:
                     masks[label] = False
                 # TOML cell_role=formula 也标为公式（与运行时 mask 取并集）
@@ -436,17 +515,18 @@ class ExcelWriter:
         except ValueError:
             # Propagate up to stop reading when we hit sheet bounds via offset_cell
             raise
-            
+
         return values, masks
 
-
-    def read_values(self, excel_path: Path, instance_k: int = 0) -> tuple[dict[str, Any], dict[str, bool]]:
+    def read_values(
+        self, excel_path: Path, instance_idx: int = 0
+    ) -> tuple[dict[str, Any], dict[str, bool]]:
         """
         函数名: read_values
         作用: 读取单个 instance 的填写值格（键为 Input_label）及公式掩码
         输入:
             excel_path (Path) - 模板 xlsx
-            instance_k (int) - 组序
+            instance_idx (int) - 组序
         输出:
             tuple - (值字典, 公式掩码字典)
         """
@@ -454,16 +534,17 @@ class ExcelWriter:
         wb_data = load_workbook(excel_path, data_only=True)
         wb_form = load_workbook(excel_path, data_only=False)
         try:
-            return self._read_instance(wb_data[sheet_name], wb_form[sheet_name], instance_k)
+            return self._read_instance(
+                wb_data[sheet_name], wb_form[sheet_name], instance_idx
+            )
         finally:
             wb_data.close()
             wb_form.close()
 
-
     def get_total_instance_count(self, excel_path: Path) -> int:
         """
         函数名: get_total_instance_count
-        作用: 使用二分查找快速找到文件中非空 instance 的总数 (O(log N))
+        作用: 线性扫描找到非空 instance 总数；扫描上界由 max_instance_count 给出的自然边界决定
         输入:
             excel_path (Path) - 模板 xlsx
         输出:
@@ -471,52 +552,33 @@ class ExcelWriter:
         """
         if not self.located:
             return 0
+        # 确保自然边界已计算；缓存避免重复打开工作簿
+        if self._capacity_computed_for != excel_path:
+            self.max_instance_count(excel_path)
+        capacity = self._input_capacity if self._input_capacity >= 1 else 1
         sheet_name = self._worksheet_name(excel_path)
         wb_data = load_workbook(excel_path, data_only=True)
         wb_form = load_workbook(excel_path, data_only=False)
         try:
             ws_data = wb_data[sheet_name]
             ws_form = wb_form[sheet_name]
-            
-            def is_empty_instance(k: int) -> bool:
+            for instance_idx in range(capacity):
                 try:
-                    return self._instance_is_empty(ws_data, ws_form, k)
+                    if self._instance_is_empty(ws_data, ws_form, instance_idx):
+                        return instance_idx
                 except ValueError:
-                    return True
-            
-            # 主轴步长：场景2 用 major 矩阵首元；场景1 用标量 offset
-            section = self.cfg.input_section
-            if isinstance(section.offset, list):
-                step = int(section.offset[0][0]) if section.offset and section.offset[0] else 1
-            else:
-                step = int(section.offset) if int(section.offset or 0) >= 1 else 1
-            max_r = ws_data.max_row or 1
-            max_c = ws_data.max_column or 1
-            # 场景2：总 k 上界 ≈ 行数 * 次轴 span
-            if self._is_scene2():
-                span = self.primary_span if self.primary_span >= 1 else 1
-                high = (max_r // step + 2) * span + span
-            elif primary_move_to(section.move_to) in ("down", "up"):
-                high = max_r // step + 2
-            else:
-                high = max_c // step + 2
-                
-            low = 0
-            ans = 0
-            while low <= high:
-                mid = (low + high) // 2
-                if not is_empty_instance(mid):
-                    ans = mid + 1
-                    low = mid + 1
-                else:
-                    high = mid - 1
-            return ans
+                    return instance_idx
+            return capacity
         finally:
             wb_data.close()
             wb_form.close()
 
     def read_instances(
-        self, excel_path: Path, limit: int | None = None, offset_k: int | None = None, reverse: bool = True
+        self,
+        excel_path: Path,
+        limit: int | None = None,
+        offset_k: int | None = None,
+        reverse: bool = True,
     ) -> tuple[list[dict[str, Any]], list[dict[str, bool]]]:
         """
         函数名: read_instances
@@ -524,18 +586,18 @@ class ExcelWriter:
         输入:
             excel_path (Path) - 模板 xlsx
             limit (int | None) - 读取条数
-            offset_k (int | None) - 起始 instance_k（reverse=True时表示向下的上限，为None则从最新开始）
-            reverse (bool) - 是否从大 k 倒序读取（默认倒序）
+            offset_k (int | None) - 起始 instance_idx（reverse=True时表示向下的上限，为None则从最新开始）
+            reverse (bool) - 是否从大 instance_idx 倒序读取（默认倒序）
         输出:
-            tuple - (值字典列表, 公式掩码字典列表)，值字典带有 "instance_k" 键
+            tuple - (值字典列表, 公式掩码字典列表)，值字典带有 "instance_idx" 键
         """
         if not self.located:
             return [], []
-            
+
         total_count = self.get_total_instance_count(excel_path)
         if total_count == 0:
             return [], []
-            
+
         sheet_name = self._worksheet_name(excel_path)
         wb_data = load_workbook(excel_path, data_only=True)
         wb_form = load_workbook(excel_path, data_only=False)
@@ -544,20 +606,25 @@ class ExcelWriter:
             ws_form = wb_form[sheet_name]
             instances: list[dict[str, Any]] = []
             masks: list[dict[str, bool]] = []
-            
+
             start_k = offset_k if offset_k is not None else total_count - 1
             if start_k >= total_count:
                 start_k = total_count - 1
-                
+
             if reverse:
-                k_range = range(start_k, max(-1, start_k - (limit if limit else total_count)), -1)
+                k_range = range(
+                    start_k, max(-1, start_k - (limit if limit else total_count)), -1
+                )
             else:
-                k_range = range(start_k, min(total_count, start_k + (limit if limit else total_count)))
-                
-            for k in k_range:
+                k_range = range(
+                    start_k,
+                    min(total_count, start_k + (limit if limit else total_count)),
+                )
+
+            for instance_idx in k_range:
                 try:
-                    values, mask = self._read_instance(ws_data, ws_form, k)
-                    values["instance_k"] = k
+                    values, mask = self._read_instance(ws_data, ws_form, instance_idx)
+                    values["instance_idx"] = instance_idx
                     instances.append(values)
                     masks.append(mask)
                 except ValueError:
@@ -567,11 +634,10 @@ class ExcelWriter:
             wb_data.close()
             wb_form.close()
 
-
     def max_instance_count(self, excel_path: Path) -> int:
         """
         函数名: max_instance_count
-        作用: 测定容量；场景1 模板值匹配；场景2 几何测次轴槽数并估算总槽数
+        作用: 测定容量；场景1 模板值匹配；场景2 几何测次轴槽数并按模板值匹配测主轴可铺行数
         输入:
             excel_path (Path) - 模板 xlsx
         输出:
@@ -584,75 +650,82 @@ class ExcelWriter:
         try:
             ws = wb[sheet_name]
             dirs = move_to_directions(section.move_to)
-            # ---- 场景2：几何测 secondary_span ----
+            primary_dir = primary_move_to(section.move_to)
+
+            # ---- 场景2：几何测 secondary_span + 值匹配测主轴可铺行数 ----
             if self._is_scene2():
                 major_rects, minor_rects = _parse_section_areas(section)
                 if not minor_rects:
                     self.primary_span = 1
+                    self._input_capacity = 1
+                    self._capacity_computed_for = excel_path
                     return 1
                 offset_matrix = section.offset  # type: ignore[assignment]
                 secondary_dir = dirs[1] if len(dirs) > 1 else dirs[0]
-                span = 1
-                for j in range(1, BOUND):
+
+                # 几何测 secondary_span：minor 矩形整体平移后是否与 major 相交
+                secondary_span = 1
+                for secondary_slot in range(1, BOUND):
                     hit_stop = False
                     for b_idx, rect in enumerate(minor_rects):
                         step = int(offset_matrix[1][b_idx])  # type: ignore[index]
                         try:
-                            # 平移矩形四角检测是否落入 major
-                            corners = [
-                                (rect[0], rect[1]),
-                                (rect[0], rect[3]),
-                                (rect[2], rect[1]),
-                                (rect[2], rect[3]),
-                            ]
-                            for r0, c0 in corners:
-                                rk, ck = offset_cell(r0, c0, secondary_dir, step * j)
-                                if rk > BOUND or ck > BOUND:
-                                    hit_stop = True
-                                    break
-                                for mr in major_rects:
-                                    if mr[0] <= rk <= mr[2] and mr[1] <= ck <= mr[3]:
-                                        hit_stop = True
-                                        break
-                                if hit_stop:
-                                    break
+                            shifted = _shift_rect(
+                                rect, secondary_dir, step * secondary_slot
+                            )
+                            if _rect_out_of_bounds(shifted, BOUND) or _rect_hits_any(
+                                shifted, major_rects
+                            ):
+                                hit_stop = True
+                                break
                         except ValueError:
                             hit_stop = True
                         if hit_stop:
                             break
                     if hit_stop:
                         break
-                    span = j + 1
-                self.primary_span = span
-                # 总容量：沿主轴能铺多少行 × span（用 major 步长粗估）
+                    secondary_span = secondary_slot + 1
+                self.primary_span = secondary_span
+
+                # 沿主轴值匹配：input_area 并集（槽0）向下平移，遇到非公式内容改变即停
                 major_step = int(offset_matrix[0][0])  # type: ignore[index]
-                max_r = ws.max_row or 1
-                max_c = ws.max_column or 1
-                if primary_move_to(section.move_to) in ("down", "up"):
-                    rows = max(1, max_r // major_step)
-                else:
-                    rows = max(1, max_c // major_step)
-                return min(BOUND, rows * span)
+                base_cells = _collect_base_cells(ws, major_rects + minor_rects)
+                valid_rows = 1
+                for row_idx in range(1, BOUND):
+                    if not _scene2_row_idx_matches(
+                        ws, base_cells, primary_dir, major_step * row_idx, BOUND
+                    ):
+                        break
+                    valid_rows += 1
+                capacity = min(BOUND, valid_rows * secondary_span)
+                self._input_capacity = capacity
+                self._capacity_computed_for = excel_path
+                return capacity
 
             # ---- 场景1：原模板值匹配 ----
             areas = _parse_input_areas(section.input_area)
-            base_cells: list[tuple[int, int, Any]] = []
-            for min_row, min_col, max_row, max_col in areas:
-                for r in range(min_row, max_row + 1):
-                    for c in range(min_col, max_col + 1):
-                        value = ws.cell(row=r, column=c).value
-                        if isinstance(value, str) and value.startswith("="):
-                            continue
-                        base_cells.append((r, c, value))
+            base_cells = _collect_base_cells(ws, areas)
             if not base_cells:
                 self.primary_span = 0
+                self._input_capacity = 1
+                self._capacity_computed_for = excel_path
                 return 1
-            step = int(section.offset) if isinstance(section.offset, int) and section.offset >= 1 else 1
-            def _block_matches(k: int, primary_span: int) -> bool:
+            step = (
+                int(section.offset)
+                if isinstance(section.offset, int) and section.offset >= 1
+                else 1
+            )
+
+            def _block_matches(instance_idx: int, primary_span: int) -> bool:
                 for r0, c0, base_value in base_cells:
                     try:
                         rk, ck = apply_instance_shift(
-                            r0, c0, section.move_to, step, k, primary_span=primary_span
+                            r0,
+                            c0,
+                            section.move_to,
+                            step,
+                            instance_idx,
+                            primary_span=primary_span,
                         )
                     except ValueError:
                         return False
@@ -661,45 +734,50 @@ class ExcelWriter:
                     if ws.cell(row=rk, column=ck).value != base_value:
                         return False
                 return True
+
             if len(dirs) == 1:
                 count = 1
-                for k in range(1, BOUND):
-                    if not _block_matches(k, 0):
+                for instance_idx in range(1, BOUND):
+                    if not _block_matches(instance_idx, 0):
                         break
                     count += 1
                 self.primary_span = 0
+                self._input_capacity = count
+                self._capacity_computed_for = excel_path
                 return count
+
             primary_span = 1
-            for k in range(1, BOUND):
-                if not _block_matches(k, 0):
+            for instance_idx in range(1, BOUND):
+                if not _block_matches(instance_idx, 0):
                     break
-                primary_span = k + 1
+                primary_span = instance_idx + 1
             count = 1
-            for k in range(1, BOUND):
-                if not _block_matches(k, primary_span):
+            for instance_idx in range(1, BOUND):
+                if not _block_matches(instance_idx, primary_span):
                     break
                 count += 1
             self.primary_span = primary_span
+            self._input_capacity = count
+            self._capacity_computed_for = excel_path
             return count
         finally:
             wb.close()
-
 
     def write_back(
         self,
         excel_path: Path,
         output_path: Path,
         records: list[dict[str, Any]] | dict[str, Any],
-        instance_k: int = 0,
+        instance_idx: int = 0,
     ) -> None:
         """
         函数名: write_back
-        作用: 把记录各 Input_label 值写入对应 located 值格（k 组平移）并另存
+        作用: 把记录各 Input_label 值写入对应 located 值格（instance_idx 组平移）并另存
         输入:
             excel_path (Path) - 源模板
             output_path (Path) - 输出路径
-            records - 单条 dict（写第 instance_k 组）或多条 list（从 instance_k 起依次写）
-            instance_k (int) - 起始组序
+            records - 单条 dict（写第 instance_idx 组）或多条 list（从 instance_idx 起依次写）
+            instance_idx (int) - 起始组序
         输出: 无
         """
         if isinstance(records, dict):
@@ -714,10 +792,14 @@ class ExcelWriter:
             ws = wb[sheet_name]
             scene2 = self._is_scene2()
             span = self.primary_span if self.primary_span >= 1 else 1
-            # 第 i 条记录写入第 instance_k+i 组值格
+            # 第 offset_idx 条记录写入第 record_k 组值格
             for offset_idx, record in enumerate(record_list):
-                k = record.get("instance_k", instance_k + offset_idx)
-                _i, j = ij_from_k(int(k), span, scene2=scene2) if scene2 else (0, 0)
+                record_k = record.get("instance_idx", instance_idx + offset_idx)
+                row_idx, secondary_slot = (
+                    split_instance_idx(int(record_k), span, scene2=scene2)
+                    if scene2
+                    else (0, 0)
+                )
                 for label in self.located:
                     if label not in record:
                         continue
@@ -725,27 +807,26 @@ class ExcelWriter:
                     # 空值不覆盖模板既有内容
                     if _cell_empty(value):
                         continue
-                    # 场景2：major 仅 j==0 写入
-                    if scene2 and j > 0 and self._label_is_major(label):
+                    # 场景2：major 仅 secondary_slot == 0 时写入
+                    if scene2 and secondary_slot > 0 and self._label_is_major(label):
                         continue
                     # TOML cell_role=formula 永不写
                     rule = self._rules_by_label.get(label)
                     if rule and rule.cell_role == "formula":
                         continue
-                    cell = self._value_cell(label, k)
+                    cell = self._value_cell(label, record_k)
                     if cell is None:
                         continue
                     # 公式格保护：即使有非空输入也不覆盖公式
                     existing = ws.cell(row=cell[0], column=cell[1]).value
                     if isinstance(existing, str) and existing.startswith("="):
                         continue
-                        
+
                     ws.cell(row=cell[0], column=cell[1]).value = value
             output_path.parent.mkdir(parents=True, exist_ok=True)
             wb.save(output_path)
         finally:
             wb.close()
-
 
     def get_print_areas(self, excel_path: Path) -> list[dict[str, Any]]:
         """
@@ -797,7 +878,6 @@ class ExcelWriter:
         finally:
             wb.close()
 
-
     def render_print_area_image(
         self,
         excel_path: Path,
@@ -820,8 +900,12 @@ class ExcelWriter:
         try:
             ws = wb[sheet_name]
             min_col, min_row, max_col, max_row = range_boundaries(area)
-            col_widths = [_column_pixel_width(ws, c, scale) for c in range(min_col, max_col + 1)]
-            row_heights = [_row_pixel_height(ws, r, scale) for r in range(min_row, max_row + 1)]
+            col_widths = [
+                _column_pixel_width(ws, c, scale) for c in range(min_col, max_col + 1)
+            ]
+            row_heights = [
+                _row_pixel_height(ws, r, scale) for r in range(min_row, max_row + 1)
+            ]
             img_w = sum(col_widths) + 2
             img_h = sum(row_heights) + 2
             image = Image.new("RGB", (img_w, img_h), "white")
@@ -839,7 +923,9 @@ class ExcelWriter:
                     x0, y0 = x_cursor, y_cursor
                     x1, y1 = x_cursor + col_w, y_cursor + row_h
                     draw.rectangle((x0, y0, x1, y1), outline="#cccccc", fill="white")
-                    text = _cell_display_text(ws.cell(row=row_idx, column=col_idx).value)
+                    text = _cell_display_text(
+                        ws.cell(row=row_idx, column=col_idx).value
+                    )
                     if text:
                         draw.text((x0 + 4, y0 + 2), text, fill="black", font=font)
                     x_cursor += col_w
@@ -847,7 +933,6 @@ class ExcelWriter:
             return image
         finally:
             wb.close()
-
 
     def render_print_area_png_bytes(
         self,
@@ -863,8 +948,6 @@ class ExcelWriter:
         return buffer.getvalue()
 
 
-
-
 def main() -> None:
     """
     函数名: _demo_main
@@ -877,6 +960,7 @@ def main() -> None:
     from .core_registry import PROJECT_ROOT
     from .core_store import SecureSQLite, UiProvider, default_db_path
     from .core_toml import _config_from_dict, verify_toml
+
     docs_dir = PROJECT_ROOT / "docs" / "sample"
     default_toml = docs_dir / "sample_template.toml"
     default_excel = docs_dir / "sample_template.xlsx"
@@ -889,16 +973,39 @@ def main() -> None:
         "recreate himself without changing his dob on records on 1978/02/29"
     )
     parser = argparse.ArgumentParser(description="Data Sheet Core sample verification")
-    parser.add_argument("--template-id", default=default_template_id, help="DB basename / template id")
-    parser.add_argument("--toml", type=Path, default=default_toml, help="TOML config path")
-    parser.add_argument("--excel", type=Path, default=default_excel, help="Input_sheet template xlsx")
-    parser.add_argument("--textbox", type=str, default=default_textbox, help="path A: tab-separated string")
-    parser.add_argument("--source-id", type=str, default=default_source_id, help="path B: external row ID")
-    parser.add_argument("--output", type=Path, default=None, help="write-back xlsx; default exports/{template_id}/sample_template_demo_out.xlsx")
+    parser.add_argument(
+        "--template-id", default=default_template_id, help="DB basename / template id"
+    )
+    parser.add_argument(
+        "--toml", type=Path, default=default_toml, help="TOML config path"
+    )
+    parser.add_argument(
+        "--excel", type=Path, default=default_excel, help="Input_sheet template xlsx"
+    )
+    parser.add_argument(
+        "--textbox",
+        type=str,
+        default=default_textbox,
+        help="path A: tab-separated string",
+    )
+    parser.add_argument(
+        "--source-id",
+        type=str,
+        default=default_source_id,
+        help="path B: external row ID",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="write-back xlsx; default exports/{template_id}/sample_template_demo_out.xlsx",
+    )
     args = parser.parse_args()
     toml_path = Path(args.toml)
     excel_path = Path(args.excel)
-    out_path = args.output or (PROJECT_ROOT / "exports" / args.template_id / "sample_template_demo_out.xlsx")
+    out_path = args.output or (
+        PROJECT_ROOT / "exports" / args.template_id / "sample_template_demo_out.xlsx"
+    )
     if not toml_path.is_file():
         raise SystemExit(f"TOML not found: {toml_path}")
     if not excel_path.is_file():
@@ -956,7 +1063,7 @@ def main() -> None:
         row_primary = db.query_by_id(rid_primary)
         if row_primary is not None:
             write_records.append(row_primary)
-        # 第二条记录：演示第 k≥1 组值格平移写回
+        # 第二条记录：演示第 instance_idx≥1 组值格平移写回
         source_second = t2db.fetch_row_by_id(default_second_id)
         read_payload["source_incoming_second"] = source_second
         excel_row_second = excel_instances[1] if len(excel_instances) > 1 else {}
@@ -968,8 +1075,8 @@ def main() -> None:
             write_records.append(row_second)
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        # write_records[i] 写入第 i 组值格（instance_k 从 0 起）
-        writer.write_back(excel_path, out_path, write_records, instance_k=0)
+        # write_records[offset_idx] 写入第 offset_idx 组值格（instance_idx 从 0 起）
+        writer.write_back(excel_path, out_path, write_records, instance_idx=0)
         read_payload["output_excel"] = str(out_path)
         print("=== 1. 从 Excel / 数据源读取的数据 ===")
         print(json.dumps(read_payload, ensure_ascii=False, indent=2, default=str))
@@ -977,7 +1084,10 @@ def main() -> None:
         print(json.dumps(db.query_all(), ensure_ascii=False, indent=2, default=str))
         print("=== 3. Gradio 可获得的数据 ===")
         print("labels:", json.dumps(ui.get_labels(), ensure_ascii=False))
-        print("data:", json.dumps(ui.get_data(), ensure_ascii=False, indent=2, default=str))
+        print(
+            "data:",
+            json.dumps(ui.get_data(), ensure_ascii=False, indent=2, default=str),
+        )
     finally:
         db.close()
 

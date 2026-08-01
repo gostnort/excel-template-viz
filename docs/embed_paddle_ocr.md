@@ -91,7 +91,7 @@ paddle_ocr/
   main.py                  # PaddleOcr / PaddleOcrTasks / HealthCheck / EnsureModels + main() CLI（编排引擎 + 门禁）
   config.py                # OCR 开关、内存阈值、VL 版本、RefinePathEnabled 缓存键
   models_catalog.py        # fast 必需模型 + 可选 VL 模型清单；prune 逻辑（VL 按硬件去留）
-  (deps)                   # 根 pyproject.toml extras: ocr | ocr-gpu；见 docs/install_uv_docker.md
+  (deps)                   # 根 pyproject.toml extras: ocr | ocr-gpu；见 README.md
   models/                  # OCR/structure/VL 权重（PADDLE_PDX_CACHE_HOME，gitignored）
     official_models/       # PP-OCRv4 mobile / PP-DocLayout_plus-L / SLANeXt / RT-DETR / PP-DocLayoutV3 / PaddleOCR-VL-1.6
   engines/                 # 三个独立 OCR 引擎，物理隔离

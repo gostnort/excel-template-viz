@@ -157,7 +157,7 @@ Target: phone browsers in **portrait**; same Python handlers as desktop.
 * **Touch (拍照 / OCR 菜单):** see §3.1 — **do not** use double-tap or long-press on the textarea as the primary trigger (见 §3.1「移动端」).
   * **Camera:** use `<input type="file" accept="image/*" capture="environment">` hidden trigger; prefer rear camera on mobile.
   * **Secure context (HTTPS):** browsers allow `getUserMedia` on `http://localhost` / `127.0.0.1` only. Access via LAN IP (`http://192.168.x.x` with `host='0.0.0.0'`) **requires HTTPS** — see §8.1.
-* **Session table:** `ui.table` horizontal scroll inside card; checkbox column retained; **`row_key` = `instance_k`** when sortable columns enabled.
+* **Session table:** `ui.table` horizontal scroll inside card; checkbox column retained; **`row_key` = `instance_idx`** when sortable columns enabled.
 
 Breakpoint suggestion (Tailwind): `max-width: 639px` → mobile rules; `sm:` and up → desktop field grid.
 
@@ -260,14 +260,14 @@ Wireframes use **placeholder** labels only (显示名甲、字段A、列1…) �
 
   * **Do not** use Gradio `gr.Dataframe` or raw HTML + hidden textbox bridges.
   * **Preferred:** `ui.table(columns=..., rows=..., row_key=..., selection='single'|'multiple')` with columns for checkbox/labels.
-  * **Interactions:** row click loads row into `draft` and refreshes `input_fields` — resolve row by **`instance_k`**, never by sorted `tbody` index; checkbox column for bulk delete (delete by **`instance_k`**); highlight selected row via `selected` binding or table API.
+  * **Interactions:** row click loads row into `draft` and refreshes `input_fields` — resolve row by **`instance_idx`**, never by sorted `tbody` index; checkbox column for bulk delete (delete by **`instance_idx`**); highlight selected row via `selected` binding or table API.
   * If `ui.table` selection API is insufficient, use `@ui.refreshable` HTML table inside `ui.card` — still wire clicks to Python handlers directly (`on_click` on row buttons), not JSON bridges. Each `<tr>` must carry `data-instance-k` (or equivalent row key).
 
-* **Stable `instance_k` (required for correct write-back)**
-  * Every `session_rows` entry includes **`instance_k: int`** (0-based), assigned at load/append and **immutable** for that record.
-  * `read_instances` → row `i` gets `instance_k = i`; new instance on **添加数据** uses **`current_instance_index`** as `instance_k` (sequential), not a scan for the next empty slot.
-  * **`write_back`**, template-as-DB direct write, **保存** export, row edit, **删除选中**: always key off **`instance_k`**, not visual row order after sort.
-  * `current_instance_index` / `selected_session_index` should resolve through **`instance_k`** (prefer storing `selected_instance_k` in `SessionState` when sort is enabled).
+* **Stable `instance_idx` (required for correct write-back)**
+  * Every `session_rows` entry includes **`instance_idx: int`** (0-based), assigned at load/append and **immutable** for that record.
+  * `read_instances` → row `i` gets `instance_idx = i`; new instance on **添加数据** uses **`current_instance_index`** as `instance_idx` (sequential), not a scan for the next empty slot.
+  * **`write_back`**, template-as-DB direct write, **保存** export, row edit, **删除选中**: always key off **`instance_idx`**, not visual row order after sort.
+  * `current_instance_index` / `selected_session_index` should resolve through **`instance_idx`** (prefer storing `selected_instance_idx` in `SessionState` when sort is enabled).
 
 * **Sheet geometry vs UI table**（见 [`toml_config_design.md`](../toml_config_design.md)、[`excel_transform.md`](../excel_transform.md) §4.6.5）：
   * UI 表始终：**一行 = 一个 instance**；**一列 = 一个 `Input_label`**。不再根据 `move_to` 自动切换「行号 / 列号」表头，也不再把 `left`/`right` 解释成「表行 = Sheet 列向 instance」。
@@ -276,10 +276,10 @@ Wireframes use **placeholder** labels only (显示名甲、字段A、列1…) �
 
 * **Column-header sort (view-only) (已实现)**
   * **Supported:** click `Input_label` column headers to sort displayed rows (asc/desc).
-  * **Not sortable:** checkbox column; **`#` / `instance_k` column** if shown.
+  * **Not sortable:** checkbox column; **`#` / `instance_idx` column** if shown.
   * **`删除选中`:** implements a two-step deletion. Click once to enter `delete_mode` (reveals checkbox column `chkcol` and turns button red/says "确认删除"). Click again to remove checked items in memory. If no rows are checked on the second click, it cancels `delete_mode`. **Note:** Deletion is purely in-memory within the UI session and does NOT automatically write back or delete physical rows from the `.xlsx` file.
-  * Sorting **must not** reorder canonical `session_rows` used for `write_back`. It is purely a visual reordering on `tbody` rendering, keeping `instance_k` stable.
-  * After sort: row click, delete, and commit still use **`instance_k`** so data is not written to the wrong instance/column on the sheet.
+  * Sorting **must not** reorder canonical `session_rows` used for `write_back`. It is purely a visual reordering on `tbody` rendering, keeping `instance_idx` stable.
+  * After sort: row click, delete, and commit still use **`instance_idx`** so data is not written to the wrong instance/column on the sheet.
   * **State tracking:** Uses `sort_column` and `sort_descending` in `SessionState` (cleared on template/db switch).
   * Same rules apply to DB tab **全部数据 / 数据表已存数据** when using `ui.table` (§3.4).
 
@@ -309,12 +309,12 @@ Wireframes use **placeholder** labels only (显示名甲、字段A、列1…) �
 
   * **`move_to` 为单个方向字符串**：Right group **只画一个**对应按钮。
   * **`move_to` 为两项列表**（主轴 + 次轴，如 `["right","down"]`）：Right group **画两个按钮**，顺序与列表一致；例如 Ginger / 场景1 为 `⇨ 右向添加` 与 `⇩ 下方添加`。
-  * 点击某方向按钮：在当前 `draft` / `instance_k` 提交后，沿**该方向**按 `offset` 推进到下一可写槽（二维时只增加该轴步数，另一轴保持）；具体坐标仍由 `core_transform` / `apply_instance_shift` 计算，UI 不自算 Excel 坐标。
+  * 点击某方向按钮：在当前 `draft` / `instance_idx` 提交后，沿**该方向**按 `offset` 推进到下一可写槽（二维时只增加该轴步数，另一轴保持）；具体坐标仍由 `core_transform` / `apply_instance_shift` 计算，UI 不自算 Excel 坐标。
   * **取消**：不再根据 `move_to` 是上下还是左右，去改表头「行号 / 列号」或推断「写入行 vs 写入列」；表头固定为 instance 序号（或省略该列），几何语义只体现在按钮上。
 
 * **添加（方向按钮提交）**（原「下一行」/「添加数据」）
-  * Commits the current `draft` at **`current_instance_index` / `instance_k`**. UI table always shows one row per instance；Sheet 落点由所点按钮的方向 + `offset` 决定，**不是**「单一自动下一行」。
-  * **No empty-slot detection:** the input fields already show whatever is at the active `instance_k` (from activation, row click, or prior `read_values`). If that instance already has data, the user sees it and may overwrite by editing and clicking the same direction button again — the UI does not search for the next blank instance.
+  * Commits the current `draft` at **`current_instance_index` / `instance_idx`**. UI table always shows one row per instance；Sheet 落点由所点按钮的方向 + `offset` 决定，**不是**「单一自动下一行」。
+  * **No empty-slot detection:** the input fields already show whatever is at the active `instance_idx` (from activation, row click, or prior `read_values`). If that instance already has data, the user sees it and may overwrite by editing and clicking the same direction button again — the UI does not search for the next blank instance.
   * Always require `verify_report.ok`.
   * **Independent DB (`use_independent_db=true`):**
     * Require `current_instance_index < input_capacity`; if at capacity: `ui.notify` 「容量已满，无法继续添加」, do not clear inputs.
@@ -324,11 +324,11 @@ Wireframes use **placeholder** labels only (显示名甲、字段A、列1…) �
   * **Template-as-DB (`use_independent_db=false`):**
     * **No capacity check** — direction buttons always enabled when verify ok (no 「已满」 blocking).
     * **Skip** `ui.persist_fields` and **skip** `save_image`; discard pending `field_images` on commit.
-    * `write_back` keyed by **`instance_k`**, not table display order; refresh session table via `read_instances` / `load_template`.
+    * `write_back` keyed by **`instance_idx`**, not table display order; refresh session table via `read_instances` / `load_template`.
     * After commit, advance along the clicked axis; optional `read_values` for the new index so fields reflect sheet content — user may leave or overwrite.
 
 * **保存**（原「另存为」）
-  * **Independent DB:** write timestamped export — path `exports/{template_id}/{template_id}_{db_suffix}_{YYYYMMDD}_{HHMMSS}.xlsx`. Persist current row same as **添加数据** (text + images per rules above) before or as part of export transaction. `ExcelWriter.write_back(template_path, output_path, session_rows, instance_k=0)` (or include current `draft` if `session_rows` empty).
+  * **Independent DB:** write timestamped export — path `exports/{template_id}/{template_id}_{db_suffix}_{YYYYMMDD}_{HHMMSS}.xlsx`. Persist current row same as **添加数据** (text + images per rules above) before or as part of export transaction. `ExcelWriter.write_back(template_path, output_path, session_rows, instance_idx=0)` (or include current `draft` if `session_rows` empty).
   * **Template-as-DB:** write **directly to the template workbook** (`templates/{template_id}/{template_id}.xlsx` on `work_sheet`) — not a separate “save as copy” dialog. Same persist rules as **添加数据** for the active `draft` / `session_rows` before `write_back`.
   * **Excel output never embeds images** (`export_attach_images=off` for NiceGUI product — text/cells only). Pending/committed photos remain in `core_store` for UI reload only when independent-DB mode is on.
   * Non-export actions disabled when `verify_report.ok` is false.
@@ -391,14 +391,14 @@ Wireframe: `nicegui_ui_db.html`. Same CSS Grid shell as index.
 
 * **当前数据库 controls (checked mode only):** `ui.select` of `list_db_paths(template_id)`; `切换` enabled only when selection ≠ `active_db_suffix`; `新建库` → `allocate_next_db_path`.
 
-* **全部数据 / 数据表已存数据** (`ui.table`; columns = TOML `Input_label` keys; optional leading **`#`** column = `instance_k`):
+* **全部数据 / 数据表已存数据** (`ui.table`; columns = TOML `Input_label` keys; optional leading **`#`** column = `instance_idx`):
 
   | `use_independent_db` | Table data source | API |
   |----------------------|-------------------|-----|
   | **true (default)** | Active suffix SQLite | `ui_provider.get_data()` |
   | **false** | **Template xlsx on disk** | `ExcelWriter.read_instances(session.template_path)` — same instance-group semantics as Input tab; path is the **template file**, not `exports/` |
 
-  Column-header sort: **view-only**; row identity = **`instance_k`** (template-as-DB) or DB `records.id` (independent DB). Template-store **覆盖保存** must target the selected row’s **`instance_k`**, not sorted row index.
+  Column-header sort: **view-only**; row identity = **`instance_idx`** (template-as-DB) or DB `records.id` (independent DB). Template-store **覆盖保存** must target the selected row’s **`instance_idx`**, not sorted row index.
 
   After **添加数据** / **保存** in template-store mode, refresh this table from `read_instances(template_path)` so the grid reflects what was written into the workbook.
 
@@ -464,9 +464,9 @@ class SessionState:
     current_instance_index: int = 0
     draft: dict = field(default_factory=dict)
     session_rows: list = field(default_factory=list)
-    # each row: {instance_k: int, Input_label: value, ...} — instance_k immutable; write_back uses k not sort order
-    selected_instance_k: int | None = None
-    selected_instance_indices: set = field(default_factory=set)  # members are instance_k, not sorted row index
+    # each row: {instance_idx: int, Input_label: value, ...} — instance_idx immutable; write_back uses k not sort order
+    selected_instance_idx: int | None = None
+    selected_instance_indices: set = field(default_factory=set)  # members are instance_idx, not sorted row index
     suppress_id_search: bool = False
     pending_id_value: int | None = None
     exported_files: list = field(default_factory=list)
@@ -732,8 +732,8 @@ ui.run(
 4. Desktop field grid: `auto-fill` ~400px cells; textareas autogrow vertically, scroll horizontally when needed.
 5. Template activation always runs `verify_toml`; failure disables 输入 write/export/print.
 6. Input fields from `ui.get_labels()`; primary key blur + dialog flow.
-7. Session table: select, highlight, 删除选中 (two-step mode), 刷新数据; column-header sort **view-only** with stable **`instance_k`**; row click / write-back / delete by **`instance_k`**, not sorted index; optional `#` / instance 序号列（**不再**按 `move_to` 切换「行号/列号」）. **Template-as-DB:** table preloaded from `read_instances`; formula fields readonly.
-8. Toolbar Right group: one or two **方向添加** buttons from `move_to` (`⇨ 右向添加` / `⇩ 下方添加` / `⇦ 左向添加` / `⇧ 上方添加`); commit + persist text per mode; images only when `use_independent_db` (see `db_store.md`). **Independent DB:** cap at `input_capacity`. **Template-as-DB:** no cap; always allow direction add when verify ok; `write_back` to template xlsx at target `instance_k` (no empty-slot scan).
+7. Session table: select, highlight, 删除选中 (two-step mode), 刷新数据; column-header sort **view-only** with stable **`instance_idx`**; row click / write-back / delete by **`instance_idx`**, not sorted index; optional `#` / instance 序号列（**不再**按 `move_to` 切换「行号/列号」）. **Template-as-DB:** table preloaded from `read_instances`; formula fields readonly.
+8. Toolbar Right group: one or two **方向添加** buttons from `move_to` (`⇨ 右向添加` / `⇩ 下方添加` / `⇦ 左向添加` / `⇧ 上方添加`); commit + persist text per mode; images only when `use_independent_db` (see `db_store.md`). **Independent DB:** cap at `input_capacity`. **Template-as-DB:** no cap; always allow direction add when verify ok; `write_back` to template xlsx at target `instance_idx` (no empty-slot scan).
 9. **保存** (independent DB): path under `exports/{template_id}/...`; **保存** (template-as-DB): writes template xlsx in place; **xlsx has no embedded images**.
 10. DB tab: **使用独立数据库** default checked; unchecked → template xlsx read/write, table **数据表已存数据**, no images, no capacity-full on Input tab.
 11. TOML save rebuilds engines and resets/reloads input session per storage mode (§3.3 step 5).
@@ -750,7 +750,7 @@ ui.run(
 | `docs/nicegui_ui/nicegui_ui_plan.md` | canonical UI specification (this document) |
 | `docs/nicegui_ui/nicegui_ui_*.html` | wireframes; all tabs use CSS Grid shell; `index` = field-grid + session table; `db` = §3.4 checkbox in section title |
 | `docs/db_store.md` | image commit API + `record_images` schema; **§2.1** template-as-DB bypasses store; UI defers `save_image` until 添加数据/保存 (independent DB only) |
-| `docs/excel_transform.md` | **§4.6** template-as-DB read/write + formula protection; **§4.6.5** `instance_k` + sheet row/column geometry |
+| `docs/excel_transform.md` | **§4.6** template-as-DB read/write + formula protection; **§4.6.5** `instance_idx` + sheet row/column geometry |
 | `plans/nicegui_ui_migration/` | Speckit plan / spec / tasks / constitution |
 | `nicegui_ui/` | sole runtime UI package |
 | `docs/embed_paddle_ocr.md` | OCR platform API; UI menu spec is **here** (§3.1) |

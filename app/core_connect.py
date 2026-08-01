@@ -634,8 +634,8 @@ class SheetOperation:
             FetchFieldsResult - 含主表浅拷贝与逐 ID 的字段记录
         """
         alias, sheet_name = self._primary
-        primary_rows = self._conn._tables.get(self._primary, [])
-        sheet_rows = list(primary_rows)
+        row_idxs = self._conn._tables.get(self._primary, [])
+        sheet_rows = list(row_idxs)
         primary_id_columns = self._conn._id_columns_by_sheet.get(self._primary, [])
         records: list[FieldRecord] = []
         for id_value in id_values:
@@ -703,10 +703,8 @@ class SheetOperation:
         输出:
             FieldRecord - found 与 data 已填充
         """
-        primary_rows = self._conn._tables.get(self._primary, [])
-        primary_match = _find_row_by_id_columns(
-            primary_rows, primary_id_columns, id_value
-        )
+        row_idxs = self._conn._tables.get(self._primary, [])
+        primary_match = _find_row_by_id_columns(row_idxs, primary_id_columns, id_value)
         if primary_match is None:
             return FieldRecord(id_value, False, alias, sheet_name, None, {})
         row_index = primary_match[0]
