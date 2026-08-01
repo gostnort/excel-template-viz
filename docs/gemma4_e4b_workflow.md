@@ -1,11 +1,13 @@
 # Gemma 4 E4B · TOML Configuration Wizard (Application Spec)
 
-> Status: **v8.2** (8 UI steps; Step 7 one-click「保存配置文件」; skipped drafts → `index=-1` full overwrite; empty JSON `""` tokens kept)  
-> Date: 2026-07-30  
+> Status: **v8.3** (Step 2 dialog: multi `input_area` + multi-select `move_to`; aligns UI with [`toml_config_design.md`](toml_config_design.md) list forms)  
+> Date: 2026-07-31  
 > Platform: [`embed_gemma4.md`](embed_gemma4.md) (`open_session` / `generate` / `StartGemma`)  
 > Business: [`toml_config_design.md`](toml_config_design.md), [`connect_google.md`](connect_google.md), [`db_store.md`](db_store.md) §2.1 (runtime persist after wizard), `app/core_toml.py`, `app/core_split.py`
 
 **Authority**: This document is the source of truth. Existing `toml_wizard.py` / `wizard/orchestrator.py` are prototypes with **no compatibility obligation**. Re-align implementation to this spec.
+
+**v8.3 vs v8.2**: Step 2 layout dialog **must** let the user enter **multiple** `input_area` ranges (union) and **multi-select** `move_to` directions (1 or 2 axes), matching TOML list semantics in [`toml_config_design.md`](toml_config_design.md). Dialog copy must explain both capabilities; do not present layout as a single hardcoded range + single-direction radio only.
 
 **v8.2 vs v8.1**: Step 3 reads **live** Input-tab field widgets via `read_field_drafts()` (not only stale `session.draft`). Empty-draft labels in 4.2 are set to `match_type=none`, `index=-1` so `generate_toml` / overlay **fully overwrites** prior sidecar indexes (do not keep old `index`). Step 7 CTA is「保存配置文件」; default `db_id=None` may be confirmed **without** opening the dropdown. Step 8 trial cancelled. Brace-JSON preprocess **keeps** empty `""` tokens in `indexed_segments`.
 
@@ -91,7 +93,7 @@ Read from `health_check().litert_backend` or `profiles/{profile}.toml`:
 
 ### 1.6 In-memory vs on-disk TOML
 
-`needs_regex`, `match_type`, etc. live only in `WizardState` / `FieldState`. On-disk `.toml` follows [`toml_config_design.md`](toml_config_design.md). Empty regex → `regex = ""`.
+`needs_regex`, `match_type`, etc. live only in `WizardState` / `FieldState`. On-disk `.toml` follows [`toml_config_design.md`](toml_config_design.md). Empty regex → `regex = ''` (TOML single-quoted literal).
 
 ### 1.7 Shared split logic (`app/core_split.py`)
 
@@ -127,7 +129,7 @@ Runtime `record_from_textbox` dual path: legacy OCR TOMLs with all `index < 0` m
 | UI step | Tab focus | Business |
 |---------|-----------|----------|
 | 1 | Google 连接 | Data sources / Google Sheet (optional) |
-| 2 | 输入配置 | `[[input_section]]` layout in dialog →「下一步配置」in dialog →「输入」 |
+| 2 | 输入配置 | `[[input_section]]`：多 `input_area` + 多选 `move_to` + `offset` →「下一步配置」→「输入」 |
 | 3 | 输入 | Ghost / draft **testing data** |
 | 4 | 输入配置 | Ghost field match (4.1 preprocess → 4.2 plan → 4.3 match) |
 | 5 | Google 连接 | Sheet column match (skip if no Sheet) |
@@ -164,19 +166,37 @@ Collect `[[sources]]` (local / Google Sheet).
 
 ### Step 2 · Input layout (`[[input_section]]`) — **before testing data**
 
-User opens the current Excel template and answers three questions from [`toml_config_design.md`](toml_config_design.md):
+User opens the current Excel template and answers three questions from [`toml_config_design.md`](toml_config_design.md). Semantics of list vs scalar forms are owned by that guide; this step only collects them in the dialog and persists one `[[input_section]]`.
 
-1. `input_area` — the changing fill-value region (range string for **this** template; no global hardcoded skeleton such as `A2:G2`).
-2. `move_to` — next-instance pan direction: one of `up` / `down` / `left` / `right` (radio).
-3. `offset` — pan step as `int >= 1`.
+1. `input_area` — instance 0 **fill-value** region(s) for **this** template (**not** label cells; no global hardcoded skeleton such as only `A2:G2`).
+2. `move_to` — next-instance pan direction(s): `up` / `down` / `left` / `right`.
+3. `offset` — pan step as `int >= 1` (same step on each selected axis).
+
+#### Dialog UI (normative)
+
+The Step 2 dialog **must** make multi-region and multi-direction layout discoverable — not only a single range + single radio.
+
+| Control | Behavior | User-facing guidance (dialog must say, Chinese OK) |
+|---------|----------|-----------------------------------------------------|
+| **`input_area`** | Allow **one or more** Excel range strings. Prefer a repeatable list editor (add/remove rows) or comma/newline multi-entry that normalizes to `list[str]`. A single continuous range remains valid. | Tell the user they **can assign multiple input areas**; non-contiguous blocks are a **union** (e.g. `A2` + `C2:G2` + `M2`). Values of instance 0 must fall in that union. |
+| **`move_to`** | **Multi-select** among `up` / `down` / `left` / `right` (checkboxes or equivalent — **not** a single-choice radio that hides 2D layout). Selection count: **1** → single-axis pan; **2** → main axis then secondary axis (order = selection order or explicit primary/secondary); **0 or >2** → validation error. | Tell the user they **can multi-select moving directions**: one direction = rows/columns along that axis; two directions = 2D grid expand (first = main axis, second = secondary). |
+| **`offset`** | One positive integer shared by every selected axis. | Explain: step size in cells per axis; labels do not move. |
+
+**Defaults** when opening the dialog: load from existing sidecar / `CreateDefaultFromTemplate` for **this** template (may already be a list). Pre-fill controls so list `input_area` and list `move_to` round-trip visibly (do not collapse a two-direction TOML back to one radio).
+
+**Normalization before persist:**
+
+- One area string → may write scalar or one-element list (prefer matching existing TOML style; patcher may keep list when length > 1).
+- One direction → scalar string or one-element list; two directions → `move_to = ["…","…"]` with order preserved.
+- Reject empty `input_area` list; reject unknown direction tokens; reject 0 or >2 selected directions.
 
 **Responsibilities:**
 
-1. Read answers from the step dialog; validate; write into `WizardState.input_area` / `move_to` / `offset`.
-2. Persist sidecar TOML via `toml_patcher` (base = existing TOML or `CreateDefaultFromTemplate(xlsx)` for **this** template only).
+1. Read answers from the step dialog; validate; write into `WizardState.input_area` / `move_to` / `offset` (types allow `str | list[str]` for area and directions — see §4.1).
+2. Persist sidecar TOML via `toml_patcher` (base = existing TOML or `CreateDefaultFromTemplate(xlsx)` for **this** template only). When the user changed `input_area`, rebuild `[[fields]]` so value cells stay consistent with the **union** (same rule as today’s single-area rebuild, applied to the union).
 3. **`work_sheet` must exist in the template xlsx.** If the sidecar names a missing sheet (e.g. stale `Input_sheet`), patcher replaces it with the sheet resolved by `CreateDefaultFromTemplate` / active sheet that has header labels — never leave `work_sheet not found` after a wizard persist.
 4. Apply TOML engines (`trigger_toml_save`) and switch Tab to「输入」.
-5. Progress: `[Step 2/8] input_section area=… move_to=… offset=…`
+5. Progress: `[Step 2/8] input_section areas=N move_to=[…] offset=…`
 
 **Forbidden in step 2:**
 
@@ -184,6 +204,8 @@ User opens the current Excel template and answers three questions from [`toml_co
 - Gemma matching or determiner inference.
 - Hardcoded cross-template layout defaults in the patcher skeleton.
 - Keeping a `work_sheet` value that is not in `wb.sheetnames`.
+- UI that **only** offers a single range textbox + single-direction radio with **no** copy explaining multi-area / multi-direction (spec violation even if TOML already supports lists).
+- Silently dropping extra areas or a second `move_to` axis when loading an existing list-form sidecar.
 
 Advances UI to step 3 (Input testing).
 
@@ -581,8 +603,8 @@ class WizardState:
     data_sources: list[dict]
     template_id: str = ""
     template_path: Path | None = None
-    input_area: str = ""             # set in step 2; empty = unset
-    move_to: str = ""                # up|down|left|right; empty = unset
+    input_area: str | list[str] = ""   # step 2; "" / [] = unset; list = union of ranges
+    move_to: str | list[str] = ""      # step 2; one dir or [main, secondary]; empty = unset
     offset: int = 0                  # 0 = unset; persist only when >= 1
     ghost_text_sample: str
     sample_kind: str = ""            # brace_json | plain_text
@@ -642,6 +664,8 @@ indexed = parts_to_indexed_dict(split_by_determiner(raw_sample, determiners))
 
 0. **Putting Input layout (`input_area` / `move_to` / `offset`) after Ghost matching** — layout is Step 2, immediately after Google / sources and before Input testing data.
 0b. **Persisting a `work_sheet` that is not in the template xlsx** (e.g. copying sample `Input_sheet` into a workbook that only has `Sheet1`) — patcher must sync from `CreateDefaultFromTemplate` / real sheet names.
+0c. **Step 2 UI limited to one range + one-direction radio** without explaining multi-area union / multi-select directions — dialog must teach and collect list forms per [`toml_config_design.md`](toml_config_design.md).
+0d. **Collapsing list `input_area` / two-axis `move_to` when reopening Step 2** — round-trip existing list-form sidecars.
 1. **Single blocking `advance(4)`** that preprocess + match all fields without intermediate user feedback.
 2. **Determiner inference via `_main_turn` / `wizard_main`**.
 3. **Building index dict from cleaned string tokenization** instead of `split_by_determiner(raw, determiners)`.
@@ -671,8 +695,9 @@ indexed = parts_to_indexed_dict(split_by_determiner(raw_sample, determiners))
 ## 8. Acceptance criteria
 
 1. Opening the wizard from Input Config; Tab switches keep wizard chrome alive.
-2. After Step 1, Step 2 asks `input_area` / `move_to` / `offset` **before** any Input testing data; TOML persists and UI switches to「输入」.
-3. Step 2 layout defaults come from **this template** only (existing TOML or `CreateDefaultFromTemplate`); no global hardcoded skeleton.
+2. After Step 1, Step 2 asks `input_area` / `move_to` / `offset` **before** any Input testing data; dialog states that **multiple input areas** and **multi-select move directions** are allowed; TOML persists and UI switches to「输入」.
+3. Step 2 layout defaults come from **this template** only (existing TOML or `CreateDefaultFromTemplate`); no global hardcoded skeleton; list-form sidecar values reopen as multi-entry area + multi-select directions (not collapsed to one radio).
+3b. Saving Step 2 with two areas + `move_to=["right","down"]` writes list forms into `[[input_section]]` and still passes `verify_toml` when value cells sit in the union.
 4. Step 3 reads real Ghost paste and **live** field widget values via `read_field_drafts`, without an LLM structure call.
 5. Step 4.1 shows token dict (and determiner for plain text) **before** field matching starts; empty `""` tokens appear in the dict when present in the sample.
 6. Step 4.2 plans only non-empty drafts; empty drafts skip Gemma and get `index=-1` in memory and on disk after save.

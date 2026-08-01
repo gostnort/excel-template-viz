@@ -11,6 +11,8 @@ from app.core_toml import (
     TomlGenerator,
     _cell_in_area,
     _core_toml_path,
+    _input_area_from_raw,
+    _move_to_from_raw,
     _parse_area,
     _parse_input_areas,
     _scan_worksheet_labels_diagonal,
@@ -18,6 +20,57 @@ from app.core_toml import (
     offset_cell,
 )
 from llm_gemma4.wizard.state import FieldState, WizardState
+
+
+def _layout_area_is_set(area: str | list[str] | None) -> bool:
+    """
+    函数名: _layout_area_is_set
+    作用: 判断向导是否已确认 input_area（标量或列表）
+    输入:
+        area (str | list[str] | None): WizardState.input_area
+    输出:
+        bool: 有非空区域则为 True
+    """
+    if area is None:
+        return False
+    if isinstance(area, list):
+        return any(str(x).strip() for x in area)
+    return bool(str(area).strip())
+
+
+def _areas_as_list(raw: Any) -> list[str]:
+    """
+    函数名: _areas_as_list
+    作用: 把 input_area 规范成非空字符串列表（供步骤 2 表单预填）
+    输入:
+        raw (Any): 标量或列表
+    输出:
+        list[str]: 区域字符串列表；无效则为空列表
+    """
+    parsed = _input_area_from_raw(raw)
+    if parsed is None:
+        return []
+    if isinstance(parsed, list):
+        return [str(x).strip() for x in parsed if str(x).strip()]
+    text = str(parsed).strip()
+    return [text] if text else []
+
+
+def _moves_as_list(raw: Any) -> list[str]:
+    """
+    函数名: _moves_as_list
+    作用: 把 move_to 规范成 1～2 个方向列表（供步骤 2 多选预填）
+    输入:
+        raw (Any): 标量或列表
+    输出:
+        list[str]: 方向列表；无效则默认 ["down"]
+    """
+    parsed = _move_to_from_raw(raw)
+    if parsed is None:
+        return ["down"]
+    if isinstance(parsed, list):
+        return list(parsed)
+    return [str(parsed)]
 
 
 def _xlsx_sheet_names(template_path: Path) -> tuple[list[str], str]:
@@ -67,10 +120,9 @@ def _ensure_work_sheet(base: dict[str, Any], state: WizardState) -> dict[str, An
         resolved = active or names[0]
     base["work_sheet"] = resolved
     # 错误表名下的 input_section 不可信；向导未确认 layout 时用本表推导值
-    area = (state.input_area or "").strip()
-    if not area:
+    if not _layout_area_is_set(state.input_area):
         section = derived.get("input_section")
-        if isinstance(section, dict) and str(section.get("input_area") or "").strip():
+        if isinstance(section, dict) and _input_area_from_raw(section.get("input_area")) is not None:
             base["input_section"] = dict(section)
         # fields 若为空则用推导；已有标签列表则保留向导/底稿字段
         if not list(base.get("fields") or []):
@@ -307,15 +359,21 @@ def generate_toml(state: WizardState) -> str:
                 sources.append(row)
         if sources:
             base["sources"] = sources
-    # [[input_section]]：用户确认区域后覆盖，并按该区域重建 fields（与 verify 自洽）
-    area = (state.input_area or "").strip()
-    if area:
-        move = (state.move_to or "").strip().lower()
-        if move not in ("up", "down", "left", "right"):
+    # [[input_section]]：用户确认区域后覆盖，并按该区域并集重建 fields（与 verify 自洽）
+    if _layout_area_is_set(state.input_area):
+        area = state.input_area
+        if isinstance(area, list):
+            area = [str(x).strip() for x in area if str(x).strip()]
+            if len(area) == 1:
+                area = area[0]
+        else:
+            area = str(area).strip()
+        move = _move_to_from_raw(state.move_to)
+        if move is None:
             # 方向未选时沿用底稿方向
             section = base.get("input_section") or {}
             if isinstance(section, dict):
-                move = str(section.get("move_to") or "down").strip().lower() or "down"
+                move = _move_to_from_raw(section.get("move_to", "down")) or "down"
             else:
                 move = "down"
         offset = state.offset if isinstance(state.offset, int) and state.offset >= 1 else None
@@ -333,7 +391,7 @@ def generate_toml(state: WizardState) -> str:
             "move_to": move,
             "offset": offset,
         }
-        # 禁止沿用旧 sidecar 里越界的 [[fields]]；按 xlsx + 新 area 重建
+        # 禁止沿用旧 sidecar 里越界的 [[fields]]；按 xlsx + 新 area 并集重建
         kept, dropped = _rebuild_fields_for_input_area(base, state, area)
         base["fields"] = kept
         _sync_state_labels_after_layout(state, kept, dropped)
@@ -380,28 +438,42 @@ def persist_wizard_toml(state: WizardState, template_id: str = "") -> Path:
 def layout_hints_for_template(state: WizardState) -> dict[str, Any]:
     """
     函数名: layout_hints_for_template
-    作用: 为步骤 2 表单提供本模板 xlsx 推导的 input_section 提示（禁止用旧 sidecar 区域写死）
+    作用: 为步骤 2 表单提供本模板 input_section 提示（保留列表形态；sidecar 优先，否则 xlsx 推导）
     输入:
         state (WizardState): 当前向导状态
     输出:
-        dict[str, Any]: input_area / move_to / offset；失败时返回空串与安全占位
+        dict[str, Any]: input_area / move_to / offset（可为 str 或 list）
     """
-    # 优先从本模板 xlsx 标准范式推导，避免把旧 TOML 的 area 当成不可改默认值
+    def _from_section(section: dict[str, Any]) -> dict[str, Any] | None:
+        if not isinstance(section, dict):
+            return None
+        area = _input_area_from_raw(section.get("input_area"))
+        if area is None:
+            return None
+        move = _move_to_from_raw(section.get("move_to", "down")) or "down"
+        try:
+            offset = int(section.get("offset") or 1)
+        except (TypeError, ValueError):
+            offset = 1
+        if offset < 1:
+            offset = 1
+        return {"input_area": area, "move_to": move, "offset": offset}
+    # 已有 sidecar：完整 round-trip 列表形态（用户仍可改）
+    tid = (state.template_id or "").strip()
+    if tid:
+        existing = load_toml(tid)
+        if existing is not None:
+            found = _from_section(dict((existing.ToDict() or {}).get("input_section") or {}))
+            if found is not None:
+                return found
+    # 否则从本模板 xlsx 标准范式推导
     tpath = state.template_path
     if tpath is not None and Path(tpath).is_file():
         try:
             derived = TomlGenerator().CreateDefaultFromTemplate(Path(tpath))
-            section = derived.get("input_section") or {}
-            if isinstance(section, dict):
-                area = str(section.get("input_area") or "").strip()
-                move = str(section.get("move_to") or "down").strip().lower() or "down"
-                try:
-                    offset = int(section.get("offset") or 1)
-                except (TypeError, ValueError):
-                    offset = 1
-                if offset < 1:
-                    offset = 1
-                return {"input_area": area, "move_to": move, "offset": offset}
+            found = _from_section(dict(derived.get("input_section") or {}))
+            if found is not None:
+                return found
         except Exception:
             pass
     return {"input_area": "", "move_to": "down", "offset": 1}

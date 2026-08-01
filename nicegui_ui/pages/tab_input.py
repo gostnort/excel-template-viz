@@ -139,10 +139,22 @@ def _clear_session_row_selection(session) -> None:
     session.selected_instance_indices.clear()
 
 
+def _is_edit_selected(session) -> bool:
+    """
+    函数名: _is_edit_selected
+    作用: 是否处于勾选编辑（覆盖）模式
+    输入:
+        session: 当前会话
+    输出:
+        bool: 已勾选编辑目标时为 True
+    """
+    return getattr(session, "selected_instance_k", None) is not None
+
+
 def _resolve_write_instance_k(session) -> int:
     """
     函数名: _resolve_write_instance_k
-    作用: 模板即库写回目标 instance_k——有选中行用选中，否则用当前待录入 index
+    作用: 写回目标 instance_k——勾选编辑用选中行，否则用当前待录入 index（新建）
     输入:
         session: 当前会话
     输出:
@@ -173,7 +185,18 @@ def _sync_draft_from_field_inputs(session) -> None:
 
 
 def _load_session_row_into_draft(session, row_k: int) -> None:
+    """
+    函数名: _load_session_row_into_draft
+    作用: 勾选/点击行时载入上方字段，并进入覆盖编辑模式
+    输入:
+        session: 当前会话
+        row_k (int): 行 instance_k
+    输出: 无
+    """
     session.selected_instance_k = row_k
+    # 非删除模式下勾选列与编辑选中同步为单选
+    if not getattr(session, "delete_mode", False):
+        session.selected_instance_indices = {row_k}
     idx = next(
         (
             i
@@ -186,19 +209,86 @@ def _load_session_row_into_draft(session, row_k: int) -> None:
         session.draft = session.session_rows[idx].copy()
         session.draft.pop("_index", None)
         session.suppress_id_search = True
-
         # update formula_mask based on the selected row
         if getattr(session, "session_masks", None) and idx < len(session.session_masks):
             session.formula_mask = session.session_masks[idx].copy()
+        # 刷新整页以同步提示文案与字段区
+        render_input_tab.refresh()
 
-        render_dynamic_fields.refresh()
-        render_session_table.refresh()
+
+def _unselect_edit_keep_draft(session, row_k: int) -> None:
+    """
+    函数名: _unselect_edit_keep_draft
+    作用: 取消勾选编辑目标；先同步控件值进 draft，上方字段内容保留
+    输入:
+        session: 当前会话
+        row_k (int): 被取消的 instance_k
+    输出: 无
+    """
+    # 取消前把上方已改内容写入 draft，避免整页 refresh 丢字
+    _sync_draft_from_field_inputs(session)
+    if session.selected_instance_k == row_k:
+        session.selected_instance_k = None
+    session.selected_instance_indices.discard(row_k)
+    render_input_tab.refresh()
+
+
+def _commit_draft_to_session_rows(session, write_k: int, *, overwrite: bool) -> dict[str, Any]:
+    """
+    函数名: _commit_draft_to_session_rows
+    作用: 把当前 draft 写入 session_rows（覆盖选中行或新建插入）
+    输入:
+        session: 当前会话
+        write_k (int): 该条记录的 instance_k
+        overwrite (bool): True 覆盖同 instance_k 行；False 头部插入新行
+    输出:
+        dict: 写入后的行副本
+    """
+    row_copy = session.draft.copy()
+    row_copy.pop("_index", None)
+    row_copy["instance_k"] = write_k
+    if overwrite:
+        idx = next(
+            (
+                i
+                for i, r in enumerate(session.session_rows)
+                if r.get("instance_k", i) == write_k
+            ),
+            None,
+        )
+        if idx is not None:
+            session.session_rows[idx] = row_copy
+        else:
+            session.session_rows.insert(0, row_copy)
+    else:
+        session.session_rows.insert(0, row_copy)
+    return row_copy
+
+
+def _write_draft_to_excel(session, write_k: int) -> None:
+    """
+    函数名: _write_draft_to_excel
+    作用: 把当前 draft 写回模板 xlsx 的指定 instance_k
+    输入:
+        session: 当前会话
+        write_k (int): 目标 instance
+    输出: 无
+    """
+    if not session.writer or not session.template_path:
+        return
+    d = session.draft.copy()
+    d.pop("_index", None)
+    d.pop("instance_k", None)
+    session.writer.write_back(
+        session.template_path, session.template_path, d, instance_k=write_k
+    )
 
 
 @ui.refreshable
 def render_session_table(session, labels: list[str]) -> None:
-    """本次已录入：HTML5 表格 + 勾选列 + 行点击载入 draft。"""
+    """本次已录入：HTML5 表格 + 常驻勾选列（编辑单选 / 删除多选）+ 行点击载入。"""
     checked = session.selected_instance_indices
+    delete_mode = getattr(session, "delete_mode", False)
 
     def toggle_sort(session, column: str) -> None:
         if getattr(session, "sort_column", None) == column:
@@ -218,9 +308,9 @@ def render_session_table(session, labels: list[str]) -> None:
         with ui.element("table").classes("records w-full"):
             with ui.element("thead").classes("sticky top-0 bg-gray-200 z-10 shadow-sm"):
                 with ui.element("tr"):
-                    if getattr(session, "delete_mode", False):
-                        with ui.element("th").classes("chkcol"):
-                            ui.label("")
+                    # 常驻勾选列
+                    with ui.element("th").classes("chkcol"):
+                        ui.label("☐")
                     if not session.use_independent_db:
                         with ui.element("th"):
                             ui.label("#")
@@ -242,10 +332,11 @@ def render_session_table(session, labels: list[str]) -> None:
                             )
                             ui.label(lbl + suffix)
             with ui.element("tbody"):
+                extra_cols = 1 + (0 if session.use_independent_db else 1)
                 if not session.session_rows:
                     with ui.element("tr"):
                         with ui.element("td").props(
-                            f"colspan={len(labels) + 2 if not session.use_independent_db else len(labels) + 1}"
+                            f"colspan={len(labels) + extra_cols}"
                         ):
                             ui.label("（尚无录入行）").classes("text-gray-500")
 
@@ -259,24 +350,34 @@ def render_session_table(session, labels: list[str]) -> None:
 
                 for idx, row in displayed_rows:
                     row_k = row.get("instance_k", idx)
-                    row_class = (
-                        "selected" if session.selected_instance_k == row_k else ""
-                    )
+                    is_edit = (not delete_mode) and session.selected_instance_k == row_k
+                    row_class = "selected" if is_edit else ""
                     with ui.element("tr").classes(row_class):
-                        if getattr(session, "delete_mode", False):
-                            with ui.element("td").classes("chkcol"):
+                        with ui.element("td").classes("chkcol"):
 
-                                def on_toggle(event, r_k: int = row_k) -> None:
+                            def on_toggle(event, r_k: int = row_k) -> None:
+                                if delete_mode:
                                     if event.value:
                                         session.selected_instance_indices.add(r_k)
                                     else:
                                         session.selected_instance_indices.discard(r_k)
                                     render_session_table.refresh()
+                                    return
+                                # 编辑模式：勾选=载入并单选；取消=保留上方字段
+                                if event.value:
+                                    _load_session_row_into_draft(session, r_k)
+                                else:
+                                    _unselect_edit_keep_draft(session, r_k)
 
-                                ui.checkbox(
-                                    value=row_k in checked,
-                                    on_change=on_toggle,
-                                ).props("dense")
+                            box_val = (
+                                row_k in checked
+                                if delete_mode
+                                else (session.selected_instance_k == row_k)
+                            )
+                            ui.checkbox(
+                                value=box_val,
+                                on_change=on_toggle,
+                            ).props("dense")
                         if not session.use_independent_db:
                             with ui.element("td").on(
                                 "click",
@@ -482,21 +583,23 @@ def render_input_tab():
             "session-panel session-list flex-1 flex flex-col min-h-[150px] overflow-hidden"
         ):
             if session.use_independent_db:
-                lbl_hint = (
-                    "（请勾选要删除的行）"
-                    if getattr(session, "delete_mode", False)
-                    else "（点击数据格载入上方编辑）"
-                )
+                if getattr(session, "delete_mode", False):
+                    lbl_hint = "（请勾选要删除的行）"
+                elif _is_edit_selected(session):
+                    lbl_hint = "（已勾选：保存/方向按钮将覆盖该条；取消勾选不清空上方）"
+                else:
+                    lbl_hint = "（勾选载入上方；未勾选时保存/方向=新建）"
                 ui.label(f"本次已录入 {lbl_hint}").classes("title shrink-0")
                 ui.label(
                     f"当前 {session.current_instance_index + 1} / 容量 {session.input_capacity}（到达容量上限时不再清空输入）"
                 ).classes("ghost-note shrink-0")
             else:
-                lbl_hint = (
-                    "（请勾选要删除的行）"
-                    if getattr(session, "delete_mode", False)
-                    else "（点击数据格载入上方编辑）"
-                )
+                if getattr(session, "delete_mode", False):
+                    lbl_hint = "（请勾选要删除的行）"
+                elif _is_edit_selected(session):
+                    lbl_hint = "（已勾选：保存/方向按钮将覆盖该 instance；取消勾选不清空上方）"
+                else:
+                    lbl_hint = "（勾选载入上方；未勾选时保存/方向=新建写入）"
                 ui.label(f"模板已存数据 {lbl_hint}").classes("title shrink-0")
                 ui.label(
                     f"当前将录入至 instance {session.current_instance_index}"
@@ -562,12 +665,25 @@ def render_dynamic_fields(session, labels: list[str]):
     global _field_inputs
     # refresh 会重建控件，先清空登记再按当前标签重绑
     _field_inputs = {}
+    select_options = {}
+    if session.verify_report:
+        select_options = dict(session.verify_report.get("select_options") or {})
+    rules_by_label = {}
+    if session.cfg is not None:
+        for rule in session.cfg.field_rules or []:
+            rules_by_label[rule.Input_label] = rule
     for lbl in labels:
         is_pk = False
-        for rule in session.cfg.field_rules:
-            if rule.Input_label == lbl and getattr(rule, "id", False):
-                is_pk = True
-                break
+        rule = rules_by_label.get(lbl)
+        if rule is not None and getattr(rule, "id", False):
+            is_pk = True
+        ui_widget = getattr(rule, "ui_widget", "text") if rule else "text"
+        cell_role = getattr(rule, "cell_role", "input") if rule else "input"
+        is_readonly = (
+            bool(getattr(session, "formula_mask", {}).get(lbl))
+            or cell_role == "formula"
+            or ui_widget == "readonly"
+        )
 
         def create_on_change(label: str):
             def on_change(event) -> None:
@@ -655,15 +771,31 @@ def render_dynamic_fields(session, labels: list[str]):
             ui.label(lbl).classes("field-label primary" if is_pk else "field-label")
 
             with ui.element("div").classes("field-input-row"):
-                inp = (
-                    ui.textarea(
-                        value=str(session.draft.get(lbl, "") or ""),
-                        on_change=create_on_change(lbl),
+                draft_val = session.draft.get(lbl, "")
+                draft_str = "" if draft_val is None else str(draft_val)
+                if ui_widget == "select" and not is_readonly:
+                    opts = list(select_options.get(lbl) or [])
+                    cur = draft_str if draft_str in opts else (draft_str or None)
+                    inp = (
+                        ui.select(
+                            options=opts,
+                            value=cur,
+                            on_change=create_on_change(lbl),
+                            with_input=True,
+                        )
+                        .classes("input-box")
+                        .props("dense borderless hide-bottom-space")
                     )
-                    .classes("input-box")
-                    .props('autogrow dense borderless hide-bottom-space rows="1"')
-                )
-                if getattr(session, "formula_mask", {}).get(lbl):
+                else:
+                    inp = (
+                        ui.textarea(
+                            value=draft_str,
+                            on_change=create_on_change(lbl),
+                        )
+                        .classes("input-box")
+                        .props('autogrow dense borderless hide-bottom-space rows="1"')
+                    )
+                if is_readonly:
                     inp.props("readonly")
                 if is_pk:
                     inp.on("blur", create_on_blur(lbl))
@@ -671,19 +803,20 @@ def render_dynamic_fields(session, labels: list[str]):
                     inp.on("blur", create_sync_blur(lbl))
                 # 向导步骤 3 可直接读控件当前值
                 _field_inputs[lbl] = inp
-                with inp:
-                    with ui.context_menu():
-                        add_image_pick_menu_items(session, lbl, inp)
-                btn = ui.button("···").classes("mobile-menu-btn").props("flat dense")
-                with btn:
-                    with ui.menu():
-                        add_image_pick_menu_items(session, lbl, inp)
+                if not is_readonly and ui_widget != "select":
+                    with inp:
+                        with ui.context_menu():
+                            add_image_pick_menu_items(session, lbl, inp)
+                    btn = ui.button("···").classes("mobile-menu-btn").props("flat dense")
+                    with btn:
+                        with ui.menu():
+                            add_image_pick_menu_items(session, lbl, inp)
 
 
 def handle_next_row(session, direction: str = "down"):
     """
     函数名: handle_next_row
-    作用: 提交当前 draft，并沿指定 move_to 方向推进到下一 instance
+    作用: 提交当前 draft（勾选=覆盖，未勾选=新建），写入 DB/Excel，再沿方向推进
     输入:
         session: 当前会话
         direction (str): 用户点击的方向（up/down/left/right）
@@ -691,78 +824,68 @@ def handle_next_row(session, direction: str = "down"):
     """
     use_db = getattr(session, "use_independent_db", True)
     _sync_draft_from_field_inputs(session)
+    from app.core_toml import is_scene2_section
     move_to = "down"
+    scene2 = False
     if session.cfg is not None and getattr(session.cfg, "input_section", None):
         move_to = session.cfg.input_section.move_to
+        scene2 = is_scene2_section(session.cfg.input_section)
     primary_span = int(getattr(session, "primary_span", 0) or 0)
+    overwrite = _is_edit_selected(session)
     write_k = _resolve_write_instance_k(session)
-    next_k = next_instance_k_along(write_k, direction, move_to, primary_span)
-    if use_db and write_k >= session.input_capacity:
+    next_k = next_instance_k_along(
+        write_k, direction, move_to, primary_span, scene2=scene2
+    )
+    # 新建时才受独立库容量限制（覆盖不占新槽）
+    if use_db and (not overwrite) and write_k >= session.input_capacity:
         ui.notify("容量已满，无法继续添加", type="warning")
         return
     if next_k is None:
         ui.notify("该方向已无空位，请改用另一方向或检查版式", type="warning")
         return
-    if use_db:
-        record_id = session.ui_provider.persist_fields(session.draft)
-        if getattr(session, "field_images", None):
-            for label, img_data in list(session.field_images.items()):
-                res = session.db.save_image(
-                    cfg=session.cfg,
-                    template_id=session.template_id,
-                    record_id=record_id,
-                    input_label=label,
-                    image_bytes=img_data["bytes"],
-                    mime=img_data["mime"],
-                )
-                if res.get("ok"):
-                    image_id = res["image_id"]
-                    ocr_text = img_data.get("ocr_text")
-                    ocr_status = img_data.get("ocr_status")
-                    if ocr_text or ocr_status:
-                        session.db.update_image_ocr(
-                            image_id=image_id, ocr_text=ocr_text, ocr_status=ocr_status
-                        )
-                del session.field_images[label]
-        row_copy = session.draft.copy()
-        row_copy.pop("_index", None)
-        row_copy["instance_k"] = write_k
-        if getattr(session, "selected_instance_k", None) is not None:
-            idx = next(
-                (
-                    i
-                    for i, r in enumerate(session.session_rows)
-                    if r.get("instance_k", i) == session.selected_instance_k
-                ),
-                None,
-            )
-            if idx is not None:
-                session.session_rows[idx] = row_copy
-            session.selected_instance_k = None
+    if getattr(session, "field_images", None) and not use_db:
+        session.field_images.clear()
+    try:
+        if use_db:
+            record_id = session.ui_provider.persist_fields(session.draft)
+            if getattr(session, "field_images", None):
+                for label, img_data in list(session.field_images.items()):
+                    res = session.db.save_image(
+                        cfg=session.cfg,
+                        template_id=session.template_id,
+                        record_id=record_id,
+                        input_label=label,
+                        image_bytes=img_data["bytes"],
+                        mime=img_data["mime"],
+                    )
+                    if res.get("ok"):
+                        image_id = res["image_id"]
+                        ocr_text = img_data.get("ocr_text")
+                        ocr_status = img_data.get("ocr_status")
+                        if ocr_text or ocr_status:
+                            session.db.update_image_ocr(
+                                image_id=image_id, ocr_text=ocr_text, ocr_status=ocr_status
+                            )
+                    del session.field_images[label]
+            _commit_draft_to_session_rows(session, write_k, overwrite=overwrite)
+            # 方向按钮：覆盖或新建后都写入 excel
+            _write_draft_to_excel(session, write_k)
         else:
-            session.session_rows.insert(0, row_copy)
-        session.current_instance_index = next_k
-        session.draft.clear()
-        if getattr(session, "template_defaults", None):
-            session.draft.update(session.template_defaults)
-    else:
-        # 模板即库：写入当前 write_k，再沿点击方向推进
-        if getattr(session, "field_images", None):
-            session.field_images.clear()
-        row_copy = session.draft.copy()
-        row_copy.pop("_index", None)
-        row_copy.pop("instance_k", None)
-        try:
-            session.writer.write_back(
-                session.template_path, session.template_path, row_copy, instance_k=write_k
-            )
+            # 模板即库：写回当前 write_k
+            _write_draft_to_excel(session, write_k)
             from nicegui_ui.components.for_main import ForMain
             ForMain.refresh_session_from_source(session, notify=False)
             from nicegui_ui.pages.tab_db import render_db_tab
             render_db_tab.refresh()
-            session.current_instance_index = next_k
-            session.selected_instance_k = None
-            # 载入推进后的格内容（可能为空）供继续编辑
+        session.current_instance_index = next_k
+        session.selected_instance_k = None
+        session.selected_instance_indices.clear()
+        # 载入推进后的格（模板即库）或清空为默认（独立库）
+        if use_db:
+            session.draft.clear()
+            if getattr(session, "template_defaults", None):
+                session.draft.update(session.template_defaults)
+        else:
             if session.writer and session.template_path:
                 val, mask = session.writer.read_values(
                     session.template_path, session.current_instance_index
@@ -770,14 +893,22 @@ def handle_next_row(session, direction: str = "down"):
                 session.draft.clear()
                 session.draft.update(val)
                 session.formula_mask = mask
-        except Exception as e:
-            ui.notify(f"写入模板失败: {str(e)}", type="negative")
-            return
+    except Exception as e:
+        ui.notify(f"写入失败: {str(e)}", type="negative")
+        return
     render_input_tab.refresh()
-    ui.notify("已记录", type="positive")
+    mode = "已覆盖" if overwrite else "已新建"
+    ui.notify(f"{mode}并写入 Excel，已推进", type="positive")
 
 
 def handle_save_as(session):
+    """
+    函数名: handle_save_as
+    作用: 勾选时覆盖 DB/会话行；未勾选时新增。独立库另导出 xlsx；模板即库写回模板。
+    输入:
+        session: 当前会话
+    输出: 无
+    """
     _sync_draft_from_field_inputs(session)
     if not session.session_rows and not any(
         str(v).strip() for v in session.draft.values() if v is not None
@@ -786,34 +917,20 @@ def handle_save_as(session):
         return
 
     use_db = getattr(session, "use_independent_db", True)
-
-    rows_to_write = [dict(r) for r in session.session_rows]
-    for r in rows_to_write:
-        r.pop("_index", None)
-
+    overwrite = _is_edit_selected(session)
+    write_k = _resolve_write_instance_k(session)
     is_draft_active = any(
         str(v).strip() for v in session.draft.values() if v is not None
     )
-    if is_draft_active and use_db and getattr(session, "selected_instance_k", None) is None:
-        d = session.draft.copy()
-        d.pop("_index", None)
-        rows_to_write.append(d)
 
     try:
         if use_db:
-            from app.core_store import _read_active_suffix_token
-            suffix = _read_active_suffix_token(session.template_id) or "0000"
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"{session.template_id}_{suffix}_{ts}.xlsx"
-            export_dir = ensure_exports_dir(session.template_id)
-            out_path = export_dir / filename
-            for row in rows_to_write:
-                # We skip persisting to DB here for draft, handle_next_row already does it,
-                # but if draft is active it wasn't persisted yet, let's persist it?
-                # Actually, in existing code it persists rows_to_write... wait, they are already persisted?
-                # The existing code did persist_fields(row). It's fine.
-                record_id = session.ui_provider.persist_fields(row)
-                if row == rows_to_write[-1] and getattr(session, "field_images", None):
+            if is_draft_active:
+                if use_db and (not overwrite) and write_k >= session.input_capacity:
+                    ui.notify("容量已满，无法新建", type="warning")
+                    return
+                record_id = session.ui_provider.persist_fields(session.draft)
+                if getattr(session, "field_images", None):
                     for label, img_data in list(session.field_images.items()):
                         res = session.db.save_image(
                             cfg=session.cfg,
@@ -833,36 +950,50 @@ def handle_save_as(session):
                                 session.db.update_image_ocr(
                                     image_id, ocr_text, ocr_status
                                 )
-                    session.field_images.clear()
+                        del session.field_images[label]
+                _commit_draft_to_session_rows(session, write_k, overwrite=overwrite)
+                if not overwrite:
+                    # 新建后推进待录入指针，便于连续录入
+                    session.current_instance_index = write_k + 1
+                # 保存后退出勾选覆盖模式，draft 保留便于继续改或再新建
+                session.selected_instance_k = None
+                session.selected_instance_indices.clear()
+            # 导出全部会话行到 exports/
+            rows_to_write = [dict(r) for r in session.session_rows]
+            for r in rows_to_write:
+                r.pop("_index", None)
+            if not rows_to_write:
+                ui.notify("没有数据可以导出", type="warning")
+                return
+            from app.core_store import _read_active_suffix_token
+            suffix = _read_active_suffix_token(session.template_id) or "0000"
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{session.template_id}_{suffix}_{ts}.xlsx"
+            export_dir = ensure_exports_dir(session.template_id)
+            out_path = export_dir / filename
             session.writer.write_back(
                 session.template_path, out_path, rows_to_write, instance_k=0
             )
             session.exported_files.append(out_path)
             session.last_export_path = out_path
-            ui.notify(f"保存成功: {filename}", type="positive")
+            mode = "已覆盖数据库" if overwrite else "已新增记录"
+            ui.notify(f"{mode}并导出: {filename}", type="positive")
         else:
-            # 模板即库：保存 = 按 instance_k 写回模板（选中行覆盖 / 否则当前待录入）
+            # 模板即库：保存 = 按 instance_k 写回模板（勾选覆盖 / 未勾选新建槽）
             if getattr(session, "field_images", None):
                 session.field_images.clear()
             if not is_draft_active:
                 ui.notify("没有可写入模板的编辑内容", type="warning")
                 return
-            d = session.draft.copy()
-            d.pop("_index", None)
-            d.pop("instance_k", None)
-            k = _resolve_write_instance_k(session)
-            session.writer.write_back(
-                session.template_path,
-                session.template_path,
-                d,
-                instance_k=k,
-            )
+            _write_draft_to_excel(session, write_k)
             from nicegui_ui.components.for_main import ForMain
             ForMain.refresh_session_from_source(session, notify=False)
-            ui.notify(f"已写入模板第 {k + 1} 行", type="positive")
+            session.selected_instance_k = None
+            session.selected_instance_indices.clear()
+            mode = "已覆盖" if overwrite else "已新建写入"
+            ui.notify(f"{mode}模板 instance {write_k}", type="positive")
         render_input_tab.refresh()
         from nicegui_ui.pages.tab_db import render_db_tab
-
         render_db_tab.refresh()
     except Exception as e:
         ui.notify(f"保存失败: {str(e)}", type="negative")

@@ -18,8 +18,11 @@ _shell_switch_tab: Callable[[str], None] | None = None
 _refresh_chrome: Callable[[], None] | None = None
 _refresh_sidebar: Callable[[], None] | None = None
 _current_dialog: ui.dialog | None = None
-_layout_input_area: Any = None
-_layout_move_to: Any = None
+_layout_area_inputs: list[Any] = []
+_layout_area_values: list[str] = []
+_layout_move_order: list[str] = []
+_layout_move_checks: dict[str, Any] = {}
+_layout_move_order_label: Any = None
 _layout_offset: Any = None
 _step7_db_id: str = ""
 _step7_select: Any = None
@@ -28,9 +31,10 @@ _step7_saving: bool = False
 _DB_ID_NONE = "None"
 # 须在对话框内确认「下一步」的步骤（布局 / regex / 主键）
 _DIALOG_NEXT_STEPS = frozenset({2, 6, 7})
-# Excel 区域：单个 A1:B2；用于识别「A2:G2A2:F2」这类追加粘贴
-_EXCEL_AREA_RE = re.compile(r"^[A-Za-z]+\d+:[A-Za-z]+\d+$")
-_EXCEL_AREA_FIND_RE = re.compile(r"[A-Za-z]+\d+:[A-Za-z]+\d+")
+_VALID_MOVE_TO = ("up", "down", "left", "right")
+# Excel 区域：A1:B2 或单格 A2；用于识别拼接粘贴
+_EXCEL_AREA_RE = re.compile(r"^[A-Za-z]+\d+(?::[A-Za-z]+\d+)?$")
+_EXCEL_AREA_FIND_RE = re.compile(r"[A-Za-z]+\d+(?::[A-Za-z]+\d+)?")
 
 
 # 步骤对应的默认 Tab
@@ -196,7 +200,9 @@ def _show_step_dialog(step: int, *, client: Client | None = None) -> None:
     输出: 无
     """
     global _current_dialog
-    global _layout_input_area, _layout_move_to, _layout_offset
+    global _layout_area_inputs, _layout_area_values
+    global _layout_move_order, _layout_move_checks, _layout_move_order_label
+    global _layout_offset
     global _step7_select, _step7_db_id
     _close_dialog()
     ctrl = get_toml_wizard()
@@ -212,30 +218,38 @@ def _show_step_dialog(step: int, *, client: Client | None = None) -> None:
                 ).classes("text-sm")
             elif step == 2:
                 ui.label(
-                    "请打开当前 Excel 模板，准备回答 [[input_section]] 三项（见 toml_config_design）："
-                    "1) 每次变化的填写值区域 input_area；"
-                    "2) 下一组平移方向 move_to；"
-                    "3) 平移步长 offset。"
+                    "请打开当前 Excel 模板，配置 [[input_section]]（见 toml_config_design）："
+                    "可填写多个 input_area（非连续区域取并集）；"
+                    "可多选 move_to（1 个=单轴，2 个=主轴+次轴二维展开）；"
+                    "再设统一 offset。"
                     "确认后点本对话框内「下一步配置」：写入 TOML、加载新规则，并进入「输入」页填写测试数据。"
                 ).classes("text-sm mb-2")
-                # 提示来自本模板 xlsx 推导；用户可改任意区域，落盘时按区域重建 fields
-                from llm_gemma4.wizard.toml_patcher import layout_hints_for_template
+                from llm_gemma4.wizard.toml_patcher import (
+                    _areas_as_list,
+                    _layout_area_is_set,
+                    _moves_as_list,
+                    layout_hints_for_template,
+                )
                 hints = {"input_area": "", "move_to": "down", "offset": 1}
                 if ctrl.orchestrator is not None:
                     st = ctrl.orchestrator.state
-                    # 步骤 1 已写入 template_id/path 时可取 xlsx 推导提示
                     try:
                         hints = layout_hints_for_template(st)
                     except Exception:
                         pass
-                    if (st.input_area or "").strip():
-                        hints["input_area"] = st.input_area.strip()
-                    if (st.move_to or "").strip() in ("up", "down", "left", "right"):
-                        hints["move_to"] = st.move_to.strip()
+                    # 本轮已确认的列表形态优先 round-trip，勿折叠成单选
+                    if _layout_area_is_set(st.input_area):
+                        hints["input_area"] = st.input_area
+                    if isinstance(st.move_to, list) or (
+                        isinstance(st.move_to, str) and st.move_to.strip()
+                    ):
+                        hints["move_to"] = st.move_to
                     if isinstance(st.offset, int) and st.offset >= 1:
                         hints["offset"] = st.offset
-                default_area = str(hints.get("input_area") or "")
-                default_move = str(hints.get("move_to") or "down")
+                default_areas = _areas_as_list(hints.get("input_area"))
+                if not default_areas:
+                    default_areas = [""]
+                default_moves = _moves_as_list(hints.get("move_to"))
                 default_offset = int(hints.get("offset") or 1)
                 # 若上次布局校验失败，在对话框内展示原因（勿直接跳到步骤 3）
                 session = SessionRegistry.for_current()
@@ -243,7 +257,7 @@ def _show_step_dialog(step: int, *, client: Client | None = None) -> None:
                 if report and not report.get("ok"):
                     ui.label(
                         "上次布局校验未通过，工作区已锁定；请确认区域后重试"
-                        "（系统会按区域重建 fields）："
+                        "（系统会按区域并集重建 fields）："
                     ).classes("text-sm text-negative font-bold mb-1")
                     if report.get("out_of_area_labels"):
                         ui.label(
@@ -256,30 +270,92 @@ def _show_step_dialog(step: int, *, client: Client | None = None) -> None:
                     if report.get("errors"):
                         for err in report["errors"]:
                             ui.label(f"- {err}").classes("text-sm text-negative")
-                _layout_input_area = ui.input(
-                    label="1. 每次变化的填写值区域 input_area（对照本模板 Excel）",
-                    placeholder=default_area or "由本模板推导，请对照 Excel 确认",
-                    value=default_area,
-                ).classes("w-full").props("clearable")
-                # 聚焦全选，避免在旧值后追加（如 A2:G2A2:F2）
-                def _select_area_text(_e=None) -> None:
-                    if _layout_input_area is not None:
-                        try:
-                            _layout_input_area.run_method("select")
-                        except Exception:
-                            pass
-                _layout_input_area.on("focus", _select_area_text)
-                ui.label("2. 下一组填写值平移方向 move_to").classes("text-sm mt-2")
-                _layout_move_to = ui.radio(
-                    ["up", "down", "left", "right"],
-                    value=default_move if default_move in ("up", "down", "left", "right") else "down",
-                ).props("inline")
+                ui.label(
+                    "1. input_area — 可添加多个填写值区域（并集；例 A2、C2:G2、M2）"
+                ).classes("text-sm font-bold mt-1")
+                ui.label(
+                    "标签格不必落在区域内；instance 0 的填写值格必须落在并集内。"
+                ).classes("text-xs text-grey-8 mb-1")
+                _layout_area_values = list(default_areas)
+
+                @ui.refreshable
+                def _render_area_rows() -> None:
+                    global _layout_area_inputs
+                    _layout_area_inputs = []
+                    for idx, val in enumerate(_layout_area_values):
+                        with ui.row().classes("w-full items-center no-wrap gap-2"):
+                            inp = (
+                                ui.input(
+                                    label=f"区域 {idx + 1}",
+                                    placeholder="例 A2:G2 或单格 A2",
+                                    value=val,
+                                )
+                                .classes("flex-grow")
+                                .props("clearable dense")
+                            )
+                            _layout_area_inputs.append(inp)
+
+                            def _remove_area(i: int = idx) -> None:
+                                _sync_area_values_from_inputs()
+                                if len(_layout_area_values) <= 1:
+                                    _layout_area_values[0] = ""
+                                else:
+                                    _layout_area_values.pop(i)
+                                _render_area_rows.refresh()
+
+                            AppBtn("删除", variant="danger", on_click=_remove_area)
+
+                    def _add_area() -> None:
+                        _sync_area_values_from_inputs()
+                        _layout_area_values.append("")
+                        _render_area_rows.refresh()
+
+                    with ui.row().classes("w-full mt-1"):
+                        AppBtn("添加区域", variant="excel", on_click=_add_area)
+
+                _render_area_rows()
+                ui.label(
+                    "2. move_to — 可多选平移方向（勾选顺序：第 1 个=主轴，第 2 个=次轴）"
+                ).classes("text-sm font-bold mt-3")
+                ui.label(
+                    "选 1 个为单轴展开；选 2 个为二维网格（主轴+次轴）。最多选 2 个。"
+                ).classes("text-xs text-grey-8 mb-1")
+                _layout_move_order = [d for d in default_moves if d in _VALID_MOVE_TO][:2]
+                if not _layout_move_order:
+                    _layout_move_order = ["down"]
+                _layout_move_checks = {}
+                with ui.row().classes("w-full items-center gap-3 flex-wrap"):
+                    for direction in _VALID_MOVE_TO:
+
+                        def _on_move_toggle(e, d: str = direction) -> None:
+                            checked = bool(getattr(e, "value", False))
+                            if checked:
+                                if d not in _layout_move_order:
+                                    if len(_layout_move_order) >= 2:
+                                        box = _layout_move_checks.get(d)
+                                        if box is not None:
+                                            box.value = False
+                                        ui.notify("最多选择 2 个方向（主轴+次轴）", type="warning")
+                                        return
+                                    _layout_move_order.append(d)
+                            elif d in _layout_move_order:
+                                _layout_move_order.remove(d)
+                            _refresh_move_order_label()
+
+                        box = ui.checkbox(
+                            direction,
+                            value=direction in _layout_move_order,
+                            on_change=_on_move_toggle,
+                        )
+                        _layout_move_checks[direction] = box
+                _layout_move_order_label = ui.label("").classes("text-sm mt-1")
+                _refresh_move_order_label()
                 _layout_offset = ui.number(
-                    label="3. 平移步长 offset（行/列数，≥1）",
+                    label="3. offset — 每一轴平移步长（单元格数，≥1；标签格不移动）",
                     value=default_offset if default_offset >= 1 else 1,
                     min=1,
                     precision=0,
-                ).classes("w-full")
+                ).classes("w-full mt-2")
             elif step == 3:
                 ui.label(
                     "TOML 布局已应用。请在「输入」页填写/粘贴测试数据（Ghost 样本或字段草稿），"
@@ -385,42 +461,97 @@ def enter_step(step: int, *, client: Client | None = None) -> None:
 
 
 
-def _normalize_input_area(raw: str) -> tuple[str, str]:
+def _sync_area_values_from_inputs() -> None:
     """
-    函数名: _normalize_input_area
-    作用: 规范化并校验 Excel 区域字符串；拒绝追加粘贴产生的双区域
+    函数名: _sync_area_values_from_inputs
+    作用: 把步骤 2 区域输入控件当前值写回 _layout_area_values
+    输入: 无
+    输出: 无
+    """
+    global _layout_area_values
+    synced: list[str] = []
+    for inp in _layout_area_inputs:
+        try:
+            synced.append(str(inp.value or ""))
+        except Exception:
+            synced.append("")
+    if synced:
+        _layout_area_values = synced
+    elif not _layout_area_values:
+        _layout_area_values = [""]
+
+
+def _refresh_move_order_label() -> None:
+    """
+    函数名: _refresh_move_order_label
+    作用: 更新步骤 2 方向勾选顺序说明（主轴/次轴）
+    输入: 无
+    输出: 无
+    """
+    if _layout_move_order_label is None:
+        return
+    if not _layout_move_order:
+        _layout_move_order_label.set_text("尚未选择方向（须选 1～2 个）")
+    elif len(_layout_move_order) == 1:
+        _layout_move_order_label.set_text(f"当前：主轴 {_layout_move_order[0]}（单轴）")
+    else:
+        _layout_move_order_label.set_text(
+            f"当前：主轴 {_layout_move_order[0]} · 次轴 {_layout_move_order[1]}"
+        )
+
+
+def _normalize_one_input_area(raw: str) -> tuple[str, str]:
+    """
+    函数名: _normalize_one_input_area
+    作用: 规范化并校验单个 Excel 区域字符串（含单格）；拒绝同框内拼接粘贴
     输入:
-        raw (str): 用户输入的 input_area
+        raw (str): 用户输入的单个区域
     输出:
         tuple[str, str]: (规范化区域, 错误文案)；成功时错误文案为空串
     """
     s = (raw or "").strip().replace(" ", "")
     if not s:
-        return "", "请填写本模板的 input_area（对照 Excel 填写值区域）"
+        return "", ""
     # 识别 A2:G2A2:F2 这类未全选就改写导致的拼接
     found = _EXCEL_AREA_FIND_RE.findall(s)
     if len(found) > 1 and "".join(found) == s:
-        return "", f"input_area 疑似重复粘贴（{raw.strip()}），请清空后只填一个区域"
+        return "", f"input_area 疑似重复粘贴（{raw.strip()}），请拆成多行区域"
     if not _EXCEL_AREA_RE.match(s):
-        return "", f"input_area 格式无效: {raw.strip()}（例 A2:G2）"
+        return "", f"input_area 格式无效: {raw.strip()}（例 A2:G2 或 A2）"
     return s.upper(), ""
 
 
 def _read_layout_payload() -> dict[str, Any]:
     """
     函数名: _read_layout_payload
-    作用: 从步骤 2（Google 之后、输入试填之前）对话框读取 input_section 表单值
+    作用: 从步骤 2 对话框读取 input_section（多区域并集 + 多选方向）
     输入: 无
     输出:
-        dict[str, Any]: 含 input_area / move_to / offset / area_error
+        dict[str, Any]: input_area / move_to / offset / area_error / move_error
     """
-    area = ""
+    _sync_area_values_from_inputs()
+    areas: list[str] = []
     area_error = ""
-    if _layout_input_area is not None:
-        area, area_error = _normalize_input_area(str(_layout_input_area.value or ""))
-    move_to = "down"
-    if _layout_move_to is not None:
-        move_to = str(_layout_move_to.value or "down").strip().lower() or "down"
+    for raw in _layout_area_values:
+        normalized, err = _normalize_one_input_area(str(raw or ""))
+        if err:
+            area_error = err
+            break
+        if normalized:
+            areas.append(normalized)
+    if not area_error and not areas:
+        area_error = "请至少填写一个 input_area（可添加多个区域）"
+    input_area: str | list[str] = areas[0] if len(areas) == 1 else areas
+    move_error = ""
+    move_dirs = [d for d in _layout_move_order if d in _VALID_MOVE_TO]
+    if not move_dirs:
+        move_error = "请至少勾选 1 个 move_to 方向"
+        move_to: str | list[str] = "down"
+    elif len(move_dirs) > 2:
+        move_error = "move_to 最多勾选 2 个方向（主轴+次轴）"
+        move_to = move_dirs[:2]
+    else:
+        move_to = move_dirs[0] if len(move_dirs) == 1 else move_dirs
     offset = 1
     if _layout_offset is not None:
         try:
@@ -428,10 +559,11 @@ def _read_layout_payload() -> dict[str, Any]:
         except (TypeError, ValueError):
             offset = 1
     return {
-        "input_area": area,
+        "input_area": input_area,
         "move_to": move_to,
         "offset": offset,
         "area_error": area_error,
+        "move_error": move_error,
     }
 
 
@@ -495,17 +627,18 @@ async def on_next_click() -> None:
                     with resolved:
                         ui.notify(area_error, type="warning")
                 return
+            move_error = str(layout.get("move_error") or "")
+            if move_error:
+                resolved = _resolve_client(client)
+                if resolved is not None:
+                    with resolved:
+                        ui.notify(move_error, type="warning")
+                return
             if not layout["input_area"]:
                 resolved = _resolve_client(client)
                 if resolved is not None:
                     with resolved:
-                        ui.notify("请填写本模板的 input_area（对照 Excel 填写值区域）", type="warning")
-                return
-            if layout["move_to"] not in ("up", "down", "left", "right"):
-                resolved = _resolve_client(client)
-                if resolved is not None:
-                    with resolved:
-                        ui.notify("move_to 须为 up/down/left/right", type="warning")
+                        ui.notify("请至少填写一个 input_area", type="warning")
                 return
             if int(layout["offset"]) < 1:
                 resolved = _resolve_client(client)

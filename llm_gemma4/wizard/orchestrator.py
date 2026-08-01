@@ -215,6 +215,61 @@ class WizardOrchestrator:
             if str(self.state.user_draft.get(label) or "").strip()
         ]
 
+
+    def _normalize_layout_area(self, raw: Any) -> str | list[str]:
+        """
+        函数名: _normalize_layout_area
+        作用: 规范化步骤 2 的 input_area（单项字符串或多区域列表）
+        输入:
+            raw (Any): 表单 payload 中的 input_area
+        输出:
+            str | list[str]: 落盘用区域；非法则抛 ValueError
+        """
+        parts: list[str] = []
+        if isinstance(raw, list):
+            for item in raw:
+                text = str(item or "").strip().replace(" ", "")
+                if text:
+                    parts.append(text.upper())
+        else:
+            text = str(raw or "").strip().replace(" ", "")
+            if text:
+                parts.append(text.upper())
+        if not parts:
+            raise ValueError("input_area is required")
+        return parts[0] if len(parts) == 1 else parts
+
+
+    def _normalize_layout_move(self, raw: Any) -> str | list[str]:
+        """
+        函数名: _normalize_layout_move
+        作用: 规范化步骤 2 的 move_to（1 或 2 个方向，顺序=主轴+次轴）
+        输入:
+            raw (Any): 表单 payload 中的 move_to
+        输出:
+            str | list[str]: 落盘用方向；非法则抛 ValueError
+        """
+        valid = ("up", "down", "left", "right")
+        dirs: list[str] = []
+        if isinstance(raw, list):
+            for item in raw:
+                direction = str(item or "").strip().lower()
+                if not direction:
+                    continue
+                if direction not in valid:
+                    raise ValueError("move_to must be one of up/down/left/right")
+                if direction not in dirs:
+                    dirs.append(direction)
+        else:
+            direction = str(raw or "").strip().lower()
+            if direction:
+                if direction not in valid:
+                    raise ValueError("move_to must be one of up/down/left/right")
+                dirs.append(direction)
+        if not dirs or len(dirs) > 2:
+            raise ValueError("move_to must select 1 or 2 directions")
+        return dirs[0] if len(dirs) == 1 else dirs
+
     def _announce_match(
         self,
         label: str,
@@ -451,34 +506,32 @@ class WizardOrchestrator:
             self._persist_toml("[Step 1/8]")
             self.state.current_step = 2
         elif step == 2:
-            # Google 之后、输入试填之前：写入 [[input_section]]
+            # Google 之后、输入试填之前：写入 [[input_section]]（可多区域 / 多方向）
             if payload.get("template_id"):
                 self.state.template_id = str(payload.get("template_id") or self.state.template_id)
             tpath = payload.get("template_path")
             if tpath:
                 self.state.template_path = Path(tpath)
-            input_area = str(payload.get("input_area") or "").strip()
-            move_to = str(payload.get("move_to") or "").strip().lower()
+            input_area = self._normalize_layout_area(payload.get("input_area"))
+            move_to = self._normalize_layout_move(payload.get("move_to"))
             offset_raw = payload.get("offset", 1)
             try:
                 offset = int(offset_raw)
             except (TypeError, ValueError) as exc:
                 raise ValueError("offset must be int >= 1") from exc
-            if not input_area:
-                raise ValueError("input_area is required")
-            if move_to not in ("up", "down", "left", "right"):
-                raise ValueError("move_to must be one of up/down/left/right")
             if offset < 1:
                 raise ValueError("offset must be int >= 1")
             self.state.input_area = input_area
             self.state.move_to = move_to
             self.state.offset = offset
+            area_n = len(input_area) if isinstance(input_area, list) else 1
+            move_repr = move_to if isinstance(move_to, list) else [move_to]
             self._progress(
-                f"[Step 2/8] input_section area={input_area!r} "
-                f"move_to={move_to} offset={offset}"
+                f"[Step 2/8] input_section areas={area_n} "
+                f"move_to={move_repr} offset={offset}"
             )
             self._persist_toml("[Step 2/8]")
-            # generate_toml 已按 area 重建 fields；汇报保留标签
+            # generate_toml 已按 area 并集重建 fields；汇报保留标签
             kept = list(self.state.template_labels or [])
             self._progress(
                 f"[Step 2/8] fields rebuilt for area: {len(kept)} labels"

@@ -51,10 +51,91 @@
 
 ### 4.2 坐标定位与转换写回（ExcelWriter）
 1. 使用 `located[Input_label]` 的 instance 0 值格坐标。
-2. 对 instance k 按 `input_section.move_to` + `offset` 做平移，仅平移值格。
-3. 读取或写入每个 `Input_label` 对应单元格。
-4. 批量读取场景中，逐组读取直到整组为空则停止。
+2. 对 instance k 按 `input_section.move_to` + `offset` 做平移，仅平移值格（场景1 标量 / 场景2 嵌套矩阵，见 §4.2.1–4.2.3）。
+3. 读取或写入每个 `Input_label` 对应单元格（场景2 major 写回见 §4.2.4）。
+4. 批量读取场景中，逐组读取直到「空槽」停止（场景2 空槽定义见 §4.2.5）。
 5. **模板即库**（`use_independent_db=false`）时，模板 xlsx 即持久化载体；读写契约见 §4.6。
+
+版式契约源见 [`toml_config_design.md`](toml_config_design.md)（场景1 扁平 / 场景2 两段式）。本模块负责把 `located` + `input_section` 落成 Excel 坐标读写，不解析 TOML 文件本身。
+
+#### 4.2.1 场景1（扁平）与场景2（嵌套）判定
+
+| 形态 | `input_area` | `offset` | 平移 API |
+|------|--------------|----------|----------|
+| 场景1 | 字符串或字符串列表（并集） | 正整数**标量** | 现有 `apply_instance_shift(..., offset: int, primary_span=)` |
+| 场景2 | `[[major...], [minor...]]` 长度 2 | 与 `input_area` **同形**的正整数矩阵 | `shift_value_cell`（段/块感知）；不得把矩阵当标量 |
+
+场景2 轴语义（与 toml 一致）：`move_to[0]` = 主轴（major 行，如 `down`）；`move_to[1]` = 次轴（minor 槽，如 `right`）。minor 跟随主轴时步长取 `offset[0]`（要求 major 各块步长全等）。
+
+#### 4.2.2 `k ↔ (i,j)` 编码分叉
+
+逻辑记录：**1 条 session 行 / 1 个 `instance_k` = 1 个槽 `(i,j)`**（不是一整物理行）。major 字段在各槽记录中冗余出现（读时复制）。
+
+| 模式 | `ExcelWriter.primary_span` 语义 | `k → (i,j)` |
+|------|--------------------------------|-------------|
+| 场景1 扁平二维 | 沿 `move_to[0]` 可铺步数 | `i = k % span`，`j = k // span`（先主轴） |
+| 场景2 嵌套 | **次轴槽数**（`secondary_span`；字段名仍叫 `primary_span`） | `j = k % span`，`i = k // span`（**次轴优先**） |
+
+Frozen lot 例（`secondary_span=3`）：`k: 0→(0,0) 1→(0,1) 2→(0,2) 3→(1,0)`。
+
+实现必须 `if scene2: ... else: ...`，不得假装与场景1 `apply_instance_shift`「已对齐」。
+
+`next_instance_k_along`（场景2）：
+
+- 沿 `move_to[1]`（右）：`j+1`；`j+1 >= span` → `None`
+- 沿 `move_to[0]`（下）：`i+1`，**保持当前 j**；`k = i * span + j`
+
+#### 4.2.3 场景2 值格平移与次轴 span 测定
+
+值格先判定所属段/块（major/minor 第 block 块），再平移：
+
+- major：只沿 `move_to[0]`，步长 `offset[0][block] * i`
+- minor：先主轴（继承的 major 步长 × `i`），再沿 `move_to[1]`，步长 `offset[1][block] * j`
+
+**次轴槽数（几何优先，禁止纯空模板值匹配）**：
+
+1. 只取 minor 段 instance 0 各矩形。
+2. `i=0`，`j=1,2,…`：各 minor 块按 `offset[1][block]*j` 沿次轴平移。
+3. 停止（先到先停）：任一目标格落入 **major 并集**；或越出工作表界 / `16384`。
+4. `secondary_span` = 连续合法的最大 `j+1`（含 j=0）；写入 `ExcelWriter.primary_span`。
+5. Frozen lot：`j=3` 时 A→D ∈ D:J → span=3。
+
+否决：仅用「非公式格 cell.value 与 instance 0 一致」测 span——空模板会虚高。
+
+总容量 / 已占用：在已知 span 下按 §4.2.5 空槽定义扫描或二分；**禁止** `offset or 1` 把矩阵当标量。首期靠手工 `input_capacity` 避开同表 lookup（如 Frozen lot 约第 12 行起）；不新增 `stop_before_row` TOML 键。
+
+#### 4.2.4 major 字段写回
+
+同一物理行上 `(i,0)` 与 `(i,1)` 的 major 值格**重合**（如 D–J、AF–AH）。
+
+| 操作 | 规则 |
+|------|------|
+| 读 | major + 该槽 minor 都读；各槽记录带同一份 major（冗余） |
+| 写 | **minor** 总按 `(i,j)` 写；**major 仅当 `j==0` 写入**；`j>0` 跳过 major 键 |
+| UI | 首期引擎层 `j>0` 不落盘 major；UI 可不特判（draft 改了也不写 Excel） |
+
+另：模板中已是公式（`=`）或 `cell_role="formula"` 的格永不覆盖（与 §4.6.2 取严）。
+
+#### 4.2.5 空槽判定（场景2）
+
+`(i,j)` 为空 ⇔ **minor 段可写格**（非 `=`、且非 `cell_role="formula"`）皆空。
+
+- major 已填 **不**使 `j>0` 变为非空。
+- `get_total_instance_count` / `read_instances` 遇空停止时用此定义。
+
+场景1：仍为「整组 located 可写格皆空」则停止（与旧行为一致）。
+
+#### 4.2.6 下拉选项（读写边界）
+
+- 选项列表由 `verify_toml` 在激活时读出 → 报告 `select_options`（`options` 或 `list_range`）；见 toml 设计。`core_transform` **不**建控件、**不**在写回时重读 list。
+- 写回：`ui.select` 选中值按普通字符串写入值格；不修改 DataValidation。
+- `list_range` **不**随 `(i,j)` 平移。
+
+#### 4.2.7 公式与 `cell_role`
+
+- 读显示值：`data_only=True`；公式掩码：`data_only=False` 且 `startswith("=")`（§4.6.1）。
+- UI：`cell_role="formula"` **或** 运行时 mask → readonly；二者取并集。
+- 写回：单元格为公式 **或** `cell_role="formula"` → 跳过。引擎**不**重算 Excel 公式；无缓存时显示可为空。
 
 ### 4.4 图片落图流程（新增计划）
 1. 先读取用户导出开关：
@@ -104,18 +185,20 @@ writer 侧按以下最小字段消费：
 - `read_instances(..., with_formula_mask=True)` 返回 `list[dict[str, Any]]` 值，并附带同结构的 `list[dict[str, bool]]` 公式掩码；或
 - 每条记录为 `dict[Input_label, {"value": ..., "formula": bool}]`。
 
-单实例预填（`read_values` / 等价方法）同样返回 value + formula 掩码，供 UI 载入「下一行」编辑区。
+单实例预填（`read_values` / 等价方法）同样返回 value + formula 掩码，供 UI 载入「下一行」编辑区。另：`cell_role="formula"` 时 UI 亦只读，与掩码取并集（§4.2.7）。
 
-`read_instances` 仍按 instance 0 起逐组读取，遇**整组值格皆空**停止（与 §4.2 一致）。`max_instance_count` 已用 `data_only=False` 排除公式格参与块比较（与容量统计一致）。
+`read_instances` 按 instance 顺序读取；场景1 遇整组可写格皆空停止；场景2 按 §4.2.5（仅 minor 可写格）判定空槽。`max_instance_count`：场景1 用模板值匹配测主轴跨度；场景2 用 §4.2.3 几何规则测次轴槽数（写入 `primary_span`，语义见 §4.2.2）。
 
-#### 4.6.2 写回：保护公式格
+#### 4.6.2 写回：保护公式格与场景2 major
 
 `write_back` 写入前，对目标模板 xlsx 用 `data_only=False` 检测各 instance 值格：
 
 - 模板中已是公式（`=` 开头）的格：**永不覆盖**，即使 `record[Input_label]` 非空。
-- 非公式格：沿用现有语义（空值不覆盖模板既有内容；非空写入）。
+- `cell_role="formula"`：**永不覆盖**（即使单元格暂时不是公式文本）。
+- 场景2：**major 段字段仅当该 `instance_k` 的 `j==0` 时写入**；`j>0` 跳过 major（§4.2.4）。
+- 非公式、非跳过的格：沿用现有语义（空值不覆盖模板既有内容；非空写入）。
 
-独立数据库模式下的「另存为」导出仍走 `write_back` 到 `exports/`，同样跳过公式格。
+独立数据库模式下的「另存为」导出仍走 `write_back` 到 `exports/`，同样遵守上述规则。
 
 #### 4.6.3 容量语义（与独立库模式区分）
 
@@ -146,10 +229,11 @@ UI 底部表：**一行 = 一条逻辑记录 = 一个 instance `k`**；**一列 
 
 **`move_to` 与 UI（已取消「行/列」自动推断）**：
 
-- Sheet 上 instance 的物理展开方向由 `input_section.move_to`（`str` 或至多两项的列表）+ `offset` 决定；见 [`toml_config_design.md`](toml_config_design.md) 与 `apply_instance_shift`。
-- UI **不再**根据 `move_to` 是 `up`/`down` 还是 `left`/`right` 去切换表头「行号 / 列号」，也**不再**把「表行」解释成 Sheet 列向 instance。
-- 多方向时由 NiceGUI 工具栏绘制对应方向按钮（`⇨ 右向添加` / `⇩ 下方添加` / `⇦ 左向添加` / `⇧ 上方添加`）；详见 [`nicegui_ui/nicegui_ui_plan.md`](nicegui_ui/nicegui_ui_plan.md)「方向添加按钮」。
-- `value_from_label` 为 `left` / `right` 只描述**单条 instance 内**标签与值格的方位，**不**影响多 instance 展开或表头文案。
+- Sheet 上 instance 的物理展开由 `input_section.move_to` + `offset` 决定；场景1 / 场景2 的 `k↔(i,j)` 见 §4.2.2；坐标 API 见 `apply_instance_shift` / `shift_value_cell` 与 [`toml_config_design.md`](toml_config_design.md)。
+- UI **不再**根据 `move_to` 是 `up`/`down` 还是 `left`/`right` 去切换表头「行号 / 列号」。
+- 多方向时由 NiceGUI 工具栏绘制对应方向按钮；`next_instance_k_along` 在场景2 下按次轴优先编码步进（§4.2.2）。
+- `session.primary_span`：场景1 = 沿主轴可铺步数；场景2 = 次轴槽数（与 `ExcelWriter.primary_span` 同义）。
+- `value_from_label` 为 `left` / `right` 只描述**单条 instance 内**标签与值格的方位，**不**影响多 instance 展开。
 
 **列头排序（仅视图）**：
 
@@ -187,10 +271,11 @@ UI 底部表：**一行 = 一条逻辑记录 = 一个 instance `k`**；**一列 
 - 锚点附着验证：开关开启后，图片按锚点与目标 sheet 策略正确落位。
 - 多图顺序验证：同锚点多图在多次导出中顺序稳定。
 - 缺图/坏图容错验证：单图失败不阻断整份导出，告警可追踪。
-- **模板即库**：`read_instances` + 公式掩码与 `data_only=True` 显示值一致；公式格 `write_back` 不被覆盖。
-- **instance_k**：排序/筛选后 `write_back`、载入 draft、删除仍按 `instance_k` 写对 instance；方向展开由 `move_to` + UI 方向按钮决定，不按「行/列」自动改表头。
+- **模板即库**：`read_instances` + 公式掩码与 `data_only=True` 显示值一致；公式格 / `cell_role=formula` 的 `write_back` 不被覆盖。
+- **instance_k**：排序/筛选后 `write_back`、载入 draft、删除仍按 `instance_k` 写对 instance；方向展开由 `move_to` + UI 方向按钮决定。
+- **场景2**：`(0,0)/(0,1)/(0,2)/(1,0)` 坐标正确；几何测 `secondary_span=3`（不依赖 Jose）；`j>0` 不写坏 major；不毁 K/R/Y/AF 公式；select 写入 L 等字符串；空槽只看 minor 可写格。
 - **容量**：独立库模式「下一行」在 `input_capacity` 处阻断；模板即库模式无此阻断，仅写回越界时失败。
-- 模板即库闭环：激活加载全表 → 编辑 → `write_back` → 再读一致。
+- 模板即库闭环：激活加载 → 编辑 → `write_back` → 再读一致。
 
 ## 7. 后续扩展
 

@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 .venv/
 
+# Local install profile (accelerator / ocr flags from bootstrap)
+.install_profile
+
 
 # Google OAuth 凭证（勿提交）
 credentials/
@@ -17,6 +20,7 @@ app/models/*
 # Cursor / Agent 本地配置（勿提交）
 .cursor/
 .agents/
+.continue/
 
 # 本地模板数据（仅保留 README.txt 入库）
 templates/*

@@ -1,0 +1,55 @@
+[project]
+name = "excel-template-viz"
+version = "0.1.1"
+description = "Excel template visualization and data entry (NiceGUI)"
+readme = "README.md"
+requires-python = ">=3.10,<3.12"
+dependencies = [
+    "nicegui>=2.0",
+    "pandas>=2.0",
+    "polars>=0.20",
+    "openpyxl>=3.1",
+    "gspread>=6.0",
+    "google-auth>=2.0",
+    "google-auth-oauthlib>=1.2",
+    "PyYAML>=6.0",
+    "tomlkit>=0.13",
+    "Pillow>=10.0",
+    "cryptography",
+]
+
+[project.optional-dependencies]
+llm = [
+    # litert-lm 0.13.x lacks max_output_tokens on Conversation.send_message()
+    "litert-lm==0.14.0",
+    "huggingface-hub>=1.2.0,<2.0.0",
+    "psutil>=5.9.0",
+]
+ocr = [
+    "paddlepaddle>=3.3.1,<4.0",
+    "paddleocr>=3.7.0,<4.0",
+    "paddlex[ocr]>=3.7.0,<3.8",
+    "opencv-python-headless>=4.8",
+    "pillow-heif>=0.16",
+    "beautifulsoup4>=4.12",
+]
+ocr-gpu = [
+    "paddlepaddle-gpu==3.3.1",
+    "paddleocr>=3.7.0,<4.0",
+    "paddlex[ocr]>=3.7.0,<3.8",
+    "opencv-python-headless>=4.8",
+    "pillow-heif>=0.16",
+    "beautifulsoup4>=4.12",
+]
+
+[tool.uv]
+package = false
+
+# Paddle GPU wheels live on the official cu129 index (not PyPI).
+[[tool.uv.index]]
+name = "paddle-cu129"
+url = "https://www.paddlepaddle.org.cn/packages/stable/cu129/"
+explicit = true
+
+[tool.uv.sources]
+paddlepaddle-gpu = { index = "paddle-cu129" }

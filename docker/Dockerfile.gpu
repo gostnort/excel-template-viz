@@ -1,0 +1,37 @@
+# GPU image: core + llm + ocr-gpu (paddlepaddle-gpu from cu129 index).
+# Host needs NVIDIA Container Toolkit; run with --gpus all.
+# Models are NOT baked in — mount volumes.
+FROM nvidia/cuda:12.9.0-runtime-ubuntu22.04
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
+ENV UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    INSTALL_PROFILE=gpu \
+    DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# uv-managed CPython (matches requires-python >=3.10,<3.12)
+RUN uv python install 3.11
+
+COPY pyproject.toml uv.lock ./
+
+RUN uv sync --frozen --extra llm --extra ocr-gpu --python 3.11
+
+COPY . .
+
+RUN mkdir -p temp exports models/gemma4 paddle_ocr/models
+
+EXPOSE 8738
+
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["uv", "run", "--python", "3.11", "python", "-m", "nicegui_ui.app"]

@@ -10,46 +10,46 @@
 
 ## 安装
 
+依赖由 **uv** 管理（[`pyproject.toml`](pyproject.toml) + [`uv.lock`](uv.lock)）。详见 [`docs/install_uv_docker.md`](docs/install_uv_docker.md)。
+
 ### 环境要求
 
-- **Windows**（当前脚本为 `.bat`）
-- **Python 3.10** 或 **3.11**（推荐；`litert-lm` 与 Paddle 依赖 wheel 兼容性较好）
+- **Windows**（`install.bat` / `run.bat`）；Linux/macOS 可用同一套 `uv` 命令
+- **[uv](https://docs.astral.sh/uv/getting-started/installation/)** 在 PATH 中
+- **Python 3.10** 或 **3.11**（`requires-python = ">=3.10,<3.12"`）
 - 可联网（安装依赖；首次使用 Gemma 4 / PaddleOCR 时会下载模型）
-- **可选 GPU**：NVIDIA 显卡 + `paddlepaddle-gpu` 可启用 PaddleOCR-VL 精修档（见 `docs/embed_paddle_ocr.md`）
+- **可选 GPU**：NVIDIA 显卡；安装向导会探测并确认，OCR 走 `ocr-gpu`（`paddlepaddle-gpu` / VL）
 
 ### 一键安装（推荐）
-
-在项目根目录双击或执行：
 
 ```bat
 install.bat
 ```
 
-脚本会：
+脚本调用 [`scripts/bootstrap_install.py`](scripts/bootstrap_install.py)：
 
-1. 检测 Python 版本，必要时切换到 `py -3.10`
-2. 创建虚拟环境 `.venv`
-3. 执行 `pip install -r requirements.txt`（含 NiceGUI、`litert-lm` 等）
-4. 默认安装 `paddle_ocr/requirements.txt` 并运行 `python paddle_ocr/main.py` 做就绪门禁（日志见 `temp/install_paddle_ocr.log`）
-5. 创建运行时目录 `temp/`、`exports/`
-
-跳过 OCR 安装（仅主应用 + Gemma 4）：
+1. 确认已安装 uv；`uv venv` 创建**唯一** `.venv`
+2. 探测 NVIDIA，交互确认 GPU 或 CPU（可用 `--gpu` / `--cpu`）
+3. 写入本地 `.install_profile`；`uv sync --extra llm`，按需互斥加 `--extra ocr` 或 `ocr-gpu`
+4. 默认跑 OCR 门禁（`paddle_ocr/main.py`，日志 `temp/install_paddle_ocr.log`）
+5. 创建 `temp/`、`exports/`、`models/gemma4`
 
 ```bat
 install.bat --skip-ocr
+install.bat --gpu
+install.bat --cpu --force-profile
 ```
 
-### 手动安装
+### 手动安装（uv）
 
 ```bat
-py -3.10 -m venv .venv
-.venv\Scripts\activate.bat
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-pip install -r paddle_ocr/requirements.txt
-python paddle_ocr/main.py
-mkdir temp exports
+uv sync --extra llm
+uv sync --extra llm --extra ocr
+uv sync --extra llm --extra ocr-gpu
+uv run python paddle_ocr/main.py
 ```
+
+勿同时安装 `ocr` 与 `ocr-gpu`。
 
 ### 启动
 
@@ -57,15 +57,24 @@ mkdir temp exports
 run.bat
 ```
 
-或激活虚拟环境后：
+或：
 
 ```bat
-python -m nicegui_ui.app
+uv run python -m nicegui_ui.app
 ```
 
 浏览器访问：**http://127.0.0.1:8738**
 
 界面为 **NiceGUI**（`nicegui_ui/`）；原 Gradio `webui/` 已移除。
+
+### 容器（CPU / GPU）
+
+```bat
+docker compose --profile cpu up --build
+docker compose --profile gpu up --build
+```
+
+模型与 `templates/` / `exports/` 走卷挂载，不进镜像。见 [`docs/install_uv_docker.md`](docs/install_uv_docker.md)。
 
 ### 可选：Gemma 4 本地推理（`llm_gemma4/`）
 
@@ -80,14 +89,13 @@ python -m nicegui_ui.app
 Gemma 权重在**首次调用**时由 `hf_download` 后台拉取（约 3.66GB），也可预先下载：
 
 ```bat
-.venv\Scripts\activate.bat
-python -c "from llm_gemma4.hf_download import download_litert; print(download_litert())"
+uv run python -c "from llm_gemma4.hf_download import download_litert; print(download_litert())"
 ```
 
 一次性问答 smoke test：
 
 ```bat
-python -m llm_gemma4 "用一句话介绍你自己"
+uv run python -m llm_gemma4 "用一句话介绍你自己"
 ```
 
 **硬件 profile**（环境变量 `LLM_PROFILE` 或调用方传入；默认 `auto`）：
@@ -145,5 +153,6 @@ TOML 配置向导（应用层编排）规格见 `docs/gemma4_e4b_workflow.md`；
 - `docs/nicegui_ui/nicegui_ui_plan.md` — NiceGUI 迁移与交互规格
 - `docs/embed_gemma4.md` — Gemma 4 LiteRT 运行时
 - `docs/embed_paddle_ocr.md` — PaddleOCR 平台与内存分级精修
+- `docs/install_uv_docker.md` — uv 单环境安装与 CPU/GPU 容器
 - `docs/gemma4_e4b_workflow.md` — TOML 智能向导 7 步工作流与全局悬浮窗规格
 - `docs/db_store.md` — 附图落库与 `input_label` 关联

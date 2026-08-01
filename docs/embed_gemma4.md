@@ -121,7 +121,6 @@ llm_gemma4/
     litert/
       backend.py        # LiteRtBackend
       session.py        # LiteRtSession
-      requirements.txt
   wizard/               # 应用层；语义见 gemma4_e4b_workflow.md
     orchestrator.py
     prompts.py
@@ -232,9 +231,10 @@ CLI 最小形态：`python -m llm_gemma4 "问题"`（新进程单发，不享受
 ### 3.5 依赖
 
 ```bat
-pip install -r llm_gemma4/backends/litert/requirements.txt
-pip install huggingface-hub
+uv sync --extra llm
 ```
+
+（`litert-lm==0.14.0` 与 `huggingface-hub` 在根 `pyproject.toml` 的 `llm` extra。）
 
 **不需要** `playwright`（浏览器自动化已废弃）。
 

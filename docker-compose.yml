@@ -1,0 +1,43 @@
+# Compose: cpu and gpu profiles share volumes for models / templates / exports.
+# Usage:
+#   docker compose --profile cpu up --build
+#   docker compose --profile gpu up --build   # requires NVIDIA Container Toolkit
+
+services:
+  app-cpu:
+    profiles: ["cpu"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cpu
+    image: excel-template-viz:cpu
+    ports:
+      - "8738:8738"
+    environment:
+      INSTALL_PROFILE: cpu
+    volumes:
+      - ./models:/app/models
+      - ./paddle_ocr/models:/app/paddle_ocr/models
+      - ./templates:/app/templates
+      - ./exports:/app/exports
+      - ./temp:/app/temp
+      - ./certs:/app/certs
+
+  app-gpu:
+    profiles: ["gpu"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.gpu
+    image: excel-template-viz:gpu
+    gpus: all
+    ports:
+      - "8738:8738"
+    environment:
+      INSTALL_PROFILE: gpu
+      NVIDIA_VISIBLE_DEVICES: all
+    volumes:
+      - ./models:/app/models
+      - ./paddle_ocr/models:/app/paddle_ocr/models
+      - ./templates:/app/templates
+      - ./exports:/app/exports
+      - ./temp:/app/temp
+      - ./certs:/app/certs

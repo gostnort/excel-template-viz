@@ -1,0 +1,17 @@
+.git
+.venv
+.nicegui
+.cursor
+.agents
+.continue
+.pytest_cache
+__pycache__
+.install_profile
+models
+paddle_ocr/models
+exports
+temp
+certs
+test
+tests
+docs

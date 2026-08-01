@@ -43,9 +43,9 @@ class WizardState:
     google_sheet_sample: list[list[Any]] = field(default_factory=list)
     template_labels: list[str] = field(default_factory=list)
     fields: dict[str, FieldState] = field(default_factory=dict)
-    # input_section：空串 / offset<=0 表示尚未由用户步骤写入，落盘时保留模板底稿
-    input_area: str = ""
-    move_to: str = ""
+    # input_section：空 / offset<=0 表示尚未由用户步骤写入，落盘时保留模板底稿
+    input_area: str | list[str] = ""
+    move_to: str | list[str] = ""
     offset: int = 0
     db_id: str = ""
     is_finished: bool = False

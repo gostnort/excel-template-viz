@@ -91,7 +91,7 @@ paddle_ocr/
   main.py                  # PaddleOcr / PaddleOcrTasks / HealthCheck / EnsureModels + main() CLI（编排引擎 + 门禁）
   config.py                # OCR 开关、内存阈值、VL 版本、RefinePathEnabled 缓存键
   models_catalog.py        # fast 必需模型 + 可选 VL 模型清单；prune 逻辑（VL 按硬件去留）
-  requirements.txt         # paddle + paddleocr + paddlex[ocr] + pillow-heif + psutil
+  (deps)                   # 根 pyproject.toml extras: ocr | ocr-gpu；见 docs/install_uv_docker.md
   models/                  # OCR/structure/VL 权重（PADDLE_PDX_CACHE_HOME，gitignored）
     official_models/       # PP-OCRv4 mobile / PP-DocLayout_plus-L / SLANeXt / RT-DETR / PP-DocLayoutV3 / PaddleOCR-VL-1.6
   engines/                 # 三个独立 OCR 引擎，物理隔离
@@ -447,11 +447,11 @@ if not result["ok"]:
 
 ## 6. 安装
 
-默认装；`--skip-ocr` 可跳过。`requirements` 含 `paddlex[ocr]`。磁盘约 1GB+（structure + 可选 VL）。`enable_mkldnn=False`。
+默认装；`--skip-ocr` 可跳过。`ocr` / `ocr-gpu` extra 含 `paddlex[ocr]`。磁盘约 1GB+（structure + 可选 VL）。`enable_mkldnn=False`。
 
 **Gemma 语义门禁**依赖 [`llm_gemma4`](embed_gemma4.md) 与 `models/gemma4/`（与项目 install 既有链路一致）。**PaddleVL** 权重走 `PADDLE_PDX_CACHE_HOME`。
 
-**内存**：启用 OCR 时启动测量可用 RAM + VRAM，按 `RefineTier()` 分档预热——`none`(<4GB) 不预热；`gemma_only`(4-10GB) `StartGemma()`；`sequential`(10-14GB) `StartGemma()`（VL 按需）；`both_resident`(≥14GB) `StartGemma()` + 异步预热 VL。`requirements` 含 `psutil`（与 `llm_gemma4` 探测共用）。OCR `--skip-ocr` 时整段 OCR 含内存探测均跳过。
+**内存**：启用 OCR 时启动测量可用 RAM + VRAM，按 `RefineTier()` 分档预热——`none`(<4GB) 不预热；`gemma_only`(4-10GB) `StartGemma()`；`sequential`(10-14GB) `StartGemma()`（VL 按需）；`both_resident`(≥14GB) `StartGemma()` + 异步预热 VL。`llm` extra 含 `psutil`（与 `llm_gemma4` 探测共用）。OCR `--skip-ocr` 时整段 OCR 含内存探测均跳过。
 
 ---
 
@@ -517,7 +517,7 @@ if not result["ok"]:
 3. **`gate/gemma_correct.py`**：`GemmaCorrectUnits(fast)` 逐单元 `run_judgment`，`affirmative` 的单元 `ConversationOnce`（纠错系统提示）改字，写回 `string*`/`table*:rowN`（cells 数一致才替换），返回 `mode="gemma_corrected"` `MSG_GEMMA_CORRECTED`。
 4. **`gate/semantic_gate.py` 重构**：`ShouldTryVl` 加 `AcceleratorAvailable()` 前置；新增 `ShouldTryGemmaCorrection`（`RefinePathEnabled` + **非**`AcceleratorAvailable` + `HasOcrSemanticProblem`）。
 5. **`main.PaddleOcr` 分支重构**：fast `ok=false`→返回；`ShouldTryVl`→`LlmRefine`（GPU）；`ShouldTryGemmaCorrection`→`GemmaCorrectUnits`；否则 fast。`EnsureModels` 用 `detect_accelerator()` 决定 VL 模型去留（有加速器硬件则保留，纯 CPU 则 prune）；`main()` 检测到 GPU 硬件但未装 GPU paddle 时提示跑 `install_backend.py`，本次走 CPU-only Gemma4 纠错。
-6. **`scripts/install_backend.py` + `_warm_vl_gpu.py`**：探测硬件；GPU→`pip uninstall paddlepaddle` + `pip install paddlepaddle-gpu==3.3.1 -i …/cu129/` → 全新子进程 `_warm_vl_gpu.py` 构造 `PaddleOCRVL(device=gpu)` 触发 VL 模型下载；CPU→prune VL 模型；NPU→stub（未来 OpenVINO）。不能在已 import paddle 的进程内热替换库。
+6. **`scripts/install_backend.py` + `_warm_vl_gpu.py`**：探测硬件；GPU→`uv pip uninstall paddlepaddle` + `uv pip install paddlepaddle-gpu==3.3.1 -i …/cu129/`（无 uv 时回退 pip）→ 全新子进程 `_warm_vl_gpu.py` 构造 `PaddleOCRVL(device=gpu)` 触发 VL 模型下载；CPU→prune VL 模型；NPU→stub（未来 OpenVINO）。推荐主路径：`uv sync --extra ocr-gpu`（与 `ocr` 互斥）或 `install.bat --gpu`。不能在已 import paddle 的进程内热替换库。
 7. **`models_catalog.py` + `download_models.py` 重构**：VL 模型按 `detect_accelerator()` 去留；`_warm_vl` 仅 `AcceleratorAvailable` 时暖机。
 8. **`config.py`**：新增 `MSG_GEMMA_CORRECTED`；`DEFAULT_VL_PIPELINE_VERSION="v1.6"`；catalog VL 名修为 `PaddleOCR-VL-1.6`（去掉错误的 `-0.9B` 后缀）。
 9. **测试**：`test_paddlevl_gemma_e2e.py` 加 `AcceleratorAvailable` skip（无加速器不跑 VL）；新增 CPU-only Gemma4 纠错路径单测（mock `AcceleratorAvailable=false`，断言 `mode="gemma_corrected"`、VL 未构造）。

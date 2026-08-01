@@ -2,19 +2,24 @@
 echo Starting Excel Template Viz - NiceGUI...
 echo.
 
-REM Activate virtual environment
-call .venv\Scripts\activate.bat
-if errorlevel 1 (
-    echo ERROR: Virtual environment not found
-    echo Please run install.bat first
-    pause
-    exit /b 1
+where uv >nul 2>&1
+if not errorlevel 1 (
+    uv run python -m nicegui_ui.app
+    goto :after_run
 )
 
-REM Start NiceGUI application
-python -m nicegui_ui.app
+if exist .venv\Scripts\activate.bat (
+    call .venv\Scripts\activate.bat
+    python -m nicegui_ui.app
+    goto :after_run
+)
 
-REM If the script exits, pause to see any error messages
+echo ERROR: uv not found and .venv missing
+echo Please run install.bat first
+pause
+exit /b 1
+
+:after_run
 if errorlevel 1 (
     echo.
     echo Application exited with an error
