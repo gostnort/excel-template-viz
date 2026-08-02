@@ -35,7 +35,9 @@ def index_page():
     render_shell()
 
 if __name__ in {"__main__", "__mp_main__"}:
+    from nicegui_ui.asyncio_win import install_win_asyncio_reset_filter
     from nicegui_ui.ssl_manager import ensure_tls_certs
+    install_win_asyncio_reset_filter()
     cert_dir = Path(__file__).parent.parent / "certs"
     cert_file, key_file = ensure_tls_certs(cert_dir)
     run_kwargs = {

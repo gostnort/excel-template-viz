@@ -20,6 +20,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
 from app.core_toml import GetTomlValues, TomlDefault
+from app.core_transform import normalize_recv_date_cell
 
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
@@ -720,6 +721,8 @@ class SheetOperation:
                 data[rule.Input_label] = ""
                 continue
             raw_value = _lookup_value(matched_row, rule)
+            if rule.field == "recv. date":
+                raw_value = normalize_recv_date_cell(raw_value)
             data[rule.Input_label] = _apply_regex(raw_value, rule.regex)
         return FieldRecord(id_value, True, alias, sheet_name, row_index, data)
 
@@ -746,25 +749,6 @@ class AutoConnect:
     def __init__(self, conn: ConnectGoogle) -> None:
         self._conn = conn
 
-    @staticmethod
-    def cfg_has_google_sources(cfg: GetTomlValues) -> bool:
-        """
-        函数名: AutoConnect.cfg_has_google_sources
-        作用: 判断 TOML 是否引用 Google Sheet URL
-        输入:
-            cfg (GetTomlValues) - 当前模板配置
-        输出:
-            bool
-        """
-        for alias in ConnectGoogle._referenced_aliases(cfg):
-            try:
-                url = _resolve_source_url(cfg, alias)
-            except ConnectGoogleError:
-                continue
-            if url.startswith(_GOOGLE_SHEET_URL_PREFIX):
-                return True
-        return False
-
     def run(self, cfg: GetTomlValues, *, verify_ok: bool) -> GoogleSessionBundle:
         """
         函数名: AutoConnect.run
@@ -778,7 +762,8 @@ class AutoConnect:
         self._conn.disconnect()
         if not verify_ok or not self._conn.is_authorized():
             return self._disconnected_bundle()
-        if not self.cfg_has_google_sources(cfg):
+        # 独立库模式不自动连接 Google；模板即库（use_independent_db=false）才连接
+        if cfg.use_independent_db:
             return self._disconnected_bundle()
         try:
             self._conn.connect(cfg)

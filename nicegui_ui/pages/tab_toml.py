@@ -123,7 +123,11 @@ def trigger_toml_save(session):
             session.db = SecureSQLite(db_path)
             session.ui_provider = UiProvider(session.cfg, session.db)
             session.t2db = Template2DB(session.cfg)
-            session.writer = ExcelWriter(session.cfg, session.located)
+            session.writer = ExcelWriter(
+                session.cfg,
+                session.located,
+                formula_cells=session.verify_report.get("formula_cells") or {},
+            )
 
             session.input_capacity = session.writer.max_instance_count(
                 session.template_path

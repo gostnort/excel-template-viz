@@ -7,7 +7,7 @@ from nicegui_ui.components.general import SessionRegistry, list_export_files
 from app.core_connect import AutoConnect, ConnectGoogle
 from app.core_toml import _core_toml_path, load_toml, verify_toml, ensure_exists
 from app.core_store import SecureSQLite, default_db_path, UiProvider
-from app.core_transform import Template2DB, ExcelWriter
+from app.core_transform import Template2DB, ExcelWriter, recompute_formula_draft_fields
 from app.core_store import _normalize_id
 
 
@@ -59,13 +59,13 @@ class ForMain:
         state.last_export_path = None
         ForMain._clear_engines(state)
         try:
-            created = (
-                not _core_toml_path(template_id).exists()
-                or load_toml(template_id) is None
-            )
-            ensure_exists(template_id, xlsx_path)
-            if created:
+            toml_path = _core_toml_path(template_id)
+            created = not toml_path.exists()
+            ok = ensure_exists(template_id, xlsx_path)
+            if created and ok:
                 ui.notify(f"已生成默认 TOML: {template_id}", type="info")
+            elif created and not ok:
+                ui.notify(f"默认 TOML 生成失败: {template_id}", type="negative")
         except Exception as exc:
             ui.notify(f"TOML 准备失败: {exc}", type="warning")
         try:
@@ -92,7 +92,11 @@ class ForMain:
             state.db = SecureSQLite(db_path)
             state.ui_provider = UiProvider(cfg, state.db)
             state.t2db = Template2DB(cfg)
-            state.writer = ExcelWriter(cfg, state.located)
+            state.writer = ExcelWriter(
+                cfg,
+                state.located,
+                formula_cells=report.get("formula_cells") or {},
+            )
             state.input_capacity = state.writer.max_instance_count(xlsx_path)
             state.primary_span = int(getattr(state.writer, "primary_span", 0) or 0)
             # 初始化 Session 状态
@@ -128,6 +132,11 @@ class ForMain:
                 state.draft.clear()
                 state.draft.update(val)
                 state.formula_mask = mask
+                recompute_formula_draft_fields(
+                    state.draft,
+                    report.get("formula_cells") or {},
+                    state.located,
+                )
             else:
                 state.field_images.clear()
                 total = state.writer.get_total_instance_count(xlsx_path)
@@ -193,6 +202,7 @@ class ForMain:
             )
             session.draft.update(val)
             session.formula_mask = mask
+            _refresh_formula_draft(session)
             session.delete_mode = False
             session.selected_instance_idx = None
             session.selected_instance_indices.clear()
@@ -241,5 +251,10 @@ class IdLookup:
             return False
         session.draft.clear()
         session.draft.update(merged)
+        formula_cells = (getattr(session, "verify_report", None) or {}).get(
+            "formula_cells"
+        ) or {}
+        located = getattr(session, "located", None) or {}
+        recompute_formula_draft_fields(session.draft, formula_cells, located)
         session.suppress_id_search = True
         return True

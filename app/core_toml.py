@@ -23,12 +23,6 @@ DEFAULT_MOVE_TO = "down"
 DEFAULT_INPUT_OFFSET = 1
 FIELD_LABEL_KEY = "Input_label"
 OPTIONAL_FIELD_KEYS = ("field", "source_file", "source_sheet", "regex")
-# 字段扩展键（场景2 / WebUI）；落盘时空串或默认值
-EXTENDED_FIELD_KEYS = ("cell_role", "ui_widget", "list_range", "depends_on")
-DEFAULT_CELL_ROLE = "input"
-DEFAULT_UI_WIDGET = "text"
-VALID_CELL_ROLES = {"input", "formula", "constant"}
-VALID_UI_WIDGETS = {"text", "select", "readonly"}
 VALID_DIRECTIONS = {"up", "down", "left", "right"}
 VERIFY_SCAN_ROWS = 100
 VERIFY_SCAN_COLS = 100
@@ -80,11 +74,6 @@ class TomlDefault:
     index: int = -1
     regex: str | None = None
     id: bool = False
-    cell_role: str = DEFAULT_CELL_ROLE
-    ui_widget: str = DEFAULT_UI_WIDGET
-    list_range: str | None = None
-    options: list[str] | None = None
-    depends_on: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """
@@ -109,13 +98,6 @@ class TomlDefault:
             "index": self.index,
             "regex": self.regex if not _is_unmapped(self.regex) else None,
             "id": self.id,
-            "cell_role": self.cell_role or DEFAULT_CELL_ROLE,
-            "ui_widget": self.ui_widget or DEFAULT_UI_WIDGET,
-            "list_range": self.list_range
-            if not _is_unmapped(self.list_range)
-            else None,
-            "options": list(self.options) if self.options else None,
-            "depends_on": list(self.depends_on) if self.depends_on else None,
         }
 
 
@@ -822,35 +804,6 @@ def _field_from_dict(raw: Any) -> TomlDefault | None:
         raw.get("value_offset", DEFAULT_VALUE_OFFSET), DEFAULT_VALUE_OFFSET
     )
     index_val = _parse_int(raw.get("index", -1), -1)  # -1 表示不参与文本拆分
-    cell_role = (
-        str(raw.get("cell_role", DEFAULT_CELL_ROLE) or DEFAULT_CELL_ROLE)
-        .strip()
-        .lower()
-    )
-    if cell_role not in VALID_CELL_ROLES:
-        cell_role = DEFAULT_CELL_ROLE
-    ui_widget = (
-        str(raw.get("ui_widget", DEFAULT_UI_WIDGET) or DEFAULT_UI_WIDGET)
-        .strip()
-        .lower()
-    )
-    if ui_widget not in VALID_UI_WIDGETS:
-        ui_widget = DEFAULT_UI_WIDGET
-    # options：字符串列表；depends_on：Input_label 列表
-    options_raw = raw.get("options")
-    options: list[str] | None = None
-    if isinstance(options_raw, list):
-        options = [str(x) for x in options_raw if str(x).strip() != ""]
-        if not options:
-            options = None
-    depends_raw = raw.get("depends_on")
-    depends_on: list[str] | None = None
-    if isinstance(depends_raw, list):
-        depends_on = [str(x).strip() for x in depends_raw if str(x).strip()]
-        if not depends_on:
-            depends_on = None
-    elif isinstance(depends_raw, str) and depends_raw.strip():
-        depends_on = [depends_raw.strip()]
     return TomlDefault(
         Input_label=input_label,
         value_from_label=value_from_label,
@@ -861,11 +814,6 @@ def _field_from_dict(raw: Any) -> TomlDefault | None:
         index=index_val,
         regex=_optional_string(raw.get("regex")),
         id=_parse_bool(raw.get("id", False)),
-        cell_role=cell_role,
-        ui_widget=ui_widget,
-        list_range=_optional_string(raw.get("list_range")),
-        options=options,
-        depends_on=depends_on,
     )
 
 
@@ -975,20 +923,6 @@ def _dict_to_toml(config: dict[str, Any]) -> str:
             row[key] = _toml_string(key, rule_dict.get(key))  # 未映射写 ""
         row["index"] = rule.index
         row["id"] = rule.id
-        row["cell_role"] = rule.cell_role or DEFAULT_CELL_ROLE
-        row["ui_widget"] = rule.ui_widget or DEFAULT_UI_WIDGET
-        row["list_range"] = _toml_string("list_range", rule_dict.get("list_range"))
-        # options / depends_on：空则写空数组
-        opt_arr = array()
-        if rule.options:
-            for opt in rule.options:
-                opt_arr.append(str(opt))
-        row["options"] = opt_arr
-        dep_arr = array()
-        if rule.depends_on:
-            for dep in rule.depends_on:
-                dep_arr.append(str(dep))
-        row["depends_on"] = dep_arr
         fields_aot.append(row)
     doc["fields"] = fields_aot
     dumped = tomlkit.dumps(doc)
@@ -1413,6 +1347,80 @@ def _read_list_range_options(ws: Any, list_range: str) -> list[str] | None:
     return options
 
 
+def _cell_in_sqref(row: int, col: int, sqref: str) -> bool:
+    """
+    函数名: _cell_in_sqref
+    作用: 判断 (row, col) 是否落在 DataValidation.sqref 描述的一个或多个区域内
+    输入:
+        row (int) - 1-based 行
+        col (int) - 1-based 列
+        sqref (str) - 如 "$E$2:$E$23 E$2 E$3" 或 "A1:A10"
+    输出:
+        bool - 在任一区域内返回 True
+    """
+    if not sqref:
+        return False
+    for part in str(sqref).replace(",", " ").split():
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            rect = _parse_area(part)
+            if _cell_in_area(row, col, rect):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _parse_inline_options(formula1: str) -> list[str] | None:
+    """
+    函数名: _parse_inline_options
+    作用: 解析 Excel DataValidation 的 inline 列表，如 '"a,b,c"'
+    输入:
+        formula1 (str) - DataValidation.formula1
+    输出:
+        list[str] | None - 拆分后的选项；不是 inline 列表返回 None
+    """
+    text = str(formula1 or "").strip()
+    if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+        inner = text[1:-1]
+        return [opt.strip() for opt in inner.split(",") if opt.strip()]
+    return None
+
+
+def _detect_cell_dropdown(ws: Any, row: int, col: int) -> list[str] | None:
+    """
+    函数名: _detect_cell_dropdown
+    作用: 运行时检测单元格是否命中工作表上的 list 类型 DataValidation，并返回选项列表
+    输入:
+        ws (Any) - openpyxl 工作表
+        row (int) - 1-based 行
+        col (int) - 1-based 列
+    输出:
+        list[str] | None - 下拉选项；未命中或无法解析返回 None
+    """
+    validations = getattr(ws, "data_validations", None)
+    if not validations:
+        return None
+    for dv in getattr(validations, "dataValidation", []) or []:
+        if getattr(dv, "type", None) != "list":
+            continue
+        sqref = getattr(dv, "sqref", None)
+        if not sqref or not _cell_in_sqref(row, col, sqref):
+            continue
+        formula1 = getattr(dv, "formula1", None)
+        if not formula1:
+            continue
+        inline = _parse_inline_options(formula1)
+        if inline is not None:
+            return inline
+        opts = _read_list_range_options(ws, str(formula1))
+        if opts:
+            return opts
+    return None
+
+
 def _validate_field_regexes(cfg: GetTomlValues) -> list[str]:
     """
     函数名: _validate_field_regexes
@@ -1565,44 +1573,28 @@ def verify_toml(template_path: Path, cfg: GetTomlValues) -> dict[str, Any]:
                 }
                 continue
             out_of_area_labels.append(rule.Input_label)
-        # 公式格登记
+        # 公式格登记：运行时检测单元格是否以 '=' 开头，不依赖 TOML
         for rule in cfg.field_rules:
-            if rule.cell_role != "formula":
-                continue
             coord = located.get(rule.Input_label)
             if not coord:
                 continue
             form_val = ws.cell(row=coord["value_row"], column=coord["value_col"]).value
-            formula_cells[rule.Input_label] = {
-                "value_row": coord["value_row"],
-                "value_col": coord["value_col"],
-                "formula": str(form_val) if isinstance(form_val, str) else "",
-            }
-            if not (isinstance(form_val, str) and form_val.startswith("=")):
-                errors.append(
-                    f"{rule.Input_label}: cell_role=formula but cell is not a formula"
-                )
-        # 下拉选项（激活时必须读出）
+            if isinstance(form_val, str) and form_val.startswith("="):
+                formula_cells[rule.Input_label] = {
+                    "value_row": coord["value_row"],
+                    "value_col": coord["value_col"],
+                    "formula": form_val,
+                }
+        # 下拉选项（激活时必须读出）：运行时扫描 DataValidation
         for rule in cfg.field_rules:
-            if rule.ui_widget != "select":
+            coord = located.get(rule.Input_label)
+            if not coord:
                 continue
-            if rule.options:
-                select_options[rule.Input_label] = list(rule.options)
-                continue
-            if _is_unmapped(rule.list_range):
-                invalid_list_range.append(rule.Input_label)
-                errors.append(
-                    f"{rule.Input_label}: select widget missing list_range/options"
-                )
-                continue
-            opts = _read_list_range_options(ws, str(rule.list_range))
-            if opts is None:
-                invalid_list_range.append(rule.Input_label)
-                errors.append(
-                    f"{rule.Input_label}: invalid list_range {rule.list_range!r}"
-                )
-                continue
-            select_options[rule.Input_label] = opts
+            opts = _detect_cell_dropdown(
+                ws, coord["value_row"], coord["value_col"]
+            )
+            if opts:
+                select_options[rule.Input_label] = opts
     finally:
         wb.close()
     layout_ok = (
@@ -1635,16 +1627,17 @@ def ensure_exists(
 ) -> bool:
     """
     函数名: ensure_exists
-    作用: TOML 不存在或无法解析为合法配置时，按标准范式生成默认配置
+    作用: TOML 文件不存在时，按标准范式生成默认配置；**不会覆盖已存在的文件**
     输入:
         template_id (str) - 模板唯一标识
         template_path (Path) - 模板 xlsx 路径
         worksheet_name (str | None) - 目标工作表名，None 时取 active sheet
     输出:
-        bool - 已有合法 TOML 或生成成功返回 True
+        bool - 已有 TOML（无论能否解析）或生成成功返回 True；
+               文件已存在但解析失败时返回 False，由调用方提示用户手工检查
     """
     path = _core_toml_path(template_id)
-    if path.exists() and load_toml(template_id) is not None:
+    if path.exists():
         return True
     if not TomlGenerator().Reset(template_id, template_path, worksheet_name):
         return False

@@ -18,10 +18,54 @@ from app.core_toml import (
     move_to_directions,
     next_instance_idx_along,
 )
+from app.core_transform import recompute_formula_draft_fields
 
 
 _ghost_input: ui.textarea | None = None
 _field_inputs: dict[str, Any] = {}
+
+
+def _refresh_formula_draft(session) -> None:
+    """
+    函数名: _refresh_formula_draft
+    作用: 按当前 draft 重算公式字段（如 Lot No.）并同步只读控件显示
+    输入:
+        session: 当前会话
+    输出: 无
+    """
+    formula_cells = (getattr(session, "verify_report", None) or {}).get(
+        "formula_cells"
+    ) or {}
+    located = getattr(session, "located", None) or {}
+    recompute_formula_draft_fields(session.draft, formula_cells, located)
+    # 公式格为 readonly，on_change 不会重建控件，需直接写回控件值
+    for label in formula_cells:
+        inp = _field_inputs.get(label)
+        if inp is None:
+            continue
+        val = session.draft.get(label, "")
+        try:
+            inp.value = "" if val is None else str(val)
+        except Exception:
+            pass
+
+
+def _is_formula_blocked(session, lbl: str) -> bool:
+    """
+    函数名: _is_formula_blocked
+    作用: 判断字段是否为 Excel 公式格，WebUI 应灰显只读
+    输入:
+        session: 当前会话
+        lbl (str): Input_label
+    输出:
+        bool: True 表示公式格应锁定
+    """
+    if bool(getattr(session, "formula_mask", {}).get(lbl)):
+        return True
+    formula_cells = (getattr(session, "verify_report", None) or {}).get(
+        "formula_cells"
+    ) or {}
+    return lbl in formula_cells
 
 
 def read_ghost_sample() -> str:
@@ -184,6 +228,7 @@ def _sync_draft_from_field_inputs(session) -> None:
             labels = None
     live = read_field_drafts(labels)
     session.draft.update(live)
+    _refresh_formula_draft(session)
 
 
 def _load_session_row_into_draft(session, row_k: int) -> None:
@@ -211,6 +256,7 @@ def _load_session_row_into_draft(session, row_k: int) -> None:
         session.draft = session.session_rows[idx].copy()
         session.draft.pop("_index", None)
         session.suppress_id_search = True
+        _refresh_formula_draft(session)
         # update formula_mask based on the selected row
         if getattr(session, "session_masks", None) and idx < len(session.session_masks):
             session.formula_mask = session.session_masks[idx].copy()
@@ -297,11 +343,47 @@ def _write_draft_to_excel(session, write_k: int) -> None:
     )
 
 
+def _session_row_keys(session) -> set[int]:
+    """
+    函数名: _session_row_keys
+    作用: 收集 session_rows 中所有 instance_idx
+    输入:
+        session: 当前会话
+    输出:
+        set[int]: 行主键集合
+    """
+    keys: set[int] = set()
+    for idx, row in enumerate(session.session_rows):
+        keys.add(int(row.get("instance_idx", idx)))
+    return keys
+
+
+def _chkcol_excel_class(session, row_k: int, *, delete_mode: bool) -> str:
+    """
+    函数名: _chkcol_excel_class
+    作用: 勾选列是否应用 excel 绿底样式
+    输入:
+        session: 当前会话
+        row_k (int): 行 instance_idx
+        delete_mode (bool): 是否删除模式
+    输出:
+        str: 追加到 td.chkcol 的 class 名（空串表示无）
+    """
+    if delete_mode:
+        if row_k in session.selected_instance_indices:
+            return "excel-color"
+        return ""
+    if session.selected_instance_idx == row_k:
+        return "excel-color"
+    return ""
+
+
 @ui.refreshable
 def render_session_table(session, labels: list[str]) -> None:
     """本次已录入：HTML5 表格 + 常驻勾选列（编辑单选 / 删除多选）+ 行点击载入。"""
     checked = session.selected_instance_indices
     delete_mode = getattr(session, "delete_mode", False)
+    all_row_keys = _session_row_keys(session)
 
     def toggle_sort(session, column: str) -> None:
         if getattr(session, "sort_column", None) == column:
@@ -315,15 +397,38 @@ def render_session_table(session, labels: list[str]) -> None:
             session.sort_descending = False
         render_session_table.refresh()
 
-    with ui.element("div").classes(
-        "flex-1 overflow-y-auto w-full mt-2 session-table-wrap"
-    ):
+    wrap_classes = "flex-1 overflow-y-auto w-full mt-2 session-table-wrap"
+    if delete_mode:
+        wrap_classes += " delete-mode"
+    with ui.element("div").classes(wrap_classes):
         with ui.element("table").classes("records w-full"):
             with ui.element("thead").classes("sticky top-0 bg-gray-200 z-10 shadow-sm"):
                 with ui.element("tr"):
-                    # 常驻勾选列
+                    # 勾选列：普通模式无表头字符；删除模式为全选复选框
                     with ui.element("th").classes("chkcol"):
-                        ui.label("☐")
+                        if delete_mode and all_row_keys:
+
+                            def on_select_all(event) -> None:
+                                if event.value:
+                                    session.selected_instance_indices = set(all_row_keys)
+                                else:
+                                    session.selected_instance_indices.clear()
+                                render_session_table.refresh()
+
+                            all_checked = bool(
+                                all_row_keys
+                                and all_row_keys <= session.selected_instance_indices
+                            )
+                            partially = bool(
+                                session.selected_instance_indices
+                                and not all_checked
+                            )
+                            hdr = ui.checkbox(
+                                value=all_checked,
+                                on_change=on_select_all,
+                            ).props("dense")
+                            if partially:
+                                hdr.props("indeterminate")
                     if not session.use_independent_db:
                         with ui.element("th"):
                             ui.label("#")
@@ -367,32 +472,55 @@ def render_session_table(session, labels: list[str]) -> None:
                         not delete_mode
                     ) and session.selected_instance_idx == row_k
                     row_class = "selected" if is_edit else ""
+                    chk_classes = "chkcol " + _chkcol_excel_class(
+                        session, row_k, delete_mode=delete_mode
+                    ).strip()
                     with ui.element("tr").classes(row_class):
-                        with ui.element("td").classes("chkcol"):
 
-                            def on_toggle(event, r_k: int = row_k) -> None:
-                                if delete_mode:
+                        def on_chkcol_click(
+                            _event=None, r_k: int = row_k
+                        ) -> None:
+                            # 单选模式下再次点击已选 radio 列 → 取消编辑选中
+                            if delete_mode:
+                                return
+                            if session.selected_instance_idx == r_k:
+                                _unselect_edit_keep_draft(session, r_k)
+
+                        with ui.element("td").classes(chk_classes).on(
+                            "click", on_chkcol_click
+                        ):
+                            if delete_mode:
+
+                                def on_delete_toggle(
+                                    event, r_k: int = row_k
+                                ) -> None:
                                     if event.value:
                                         session.selected_instance_indices.add(r_k)
                                     else:
                                         session.selected_instance_indices.discard(r_k)
                                     render_session_table.refresh()
-                                    return
-                                # 编辑模式：勾选=载入并单选；取消=保留上方字段
-                                if event.value:
-                                    _load_session_row_into_draft(session, r_k)
-                                else:
-                                    _unselect_edit_keep_draft(session, r_k)
 
-                            box_val = (
-                                row_k in checked
-                                if delete_mode
-                                else (session.selected_instance_idx == row_k)
-                            )
-                            ui.checkbox(
-                                value=box_val,
-                                on_change=on_toggle,
-                            ).props("dense")
+                                ui.checkbox(
+                                    value=row_k in checked,
+                                    on_change=on_delete_toggle,
+                                ).props("dense")
+                            else:
+
+                                def on_edit_radio(
+                                    event, r_k: int = row_k
+                                ) -> None:
+                                    if event.value == r_k:
+                                        _load_session_row_into_draft(session, r_k)
+
+                                ui.radio(
+                                    [row_k],
+                                    value=(
+                                        row_k
+                                        if session.selected_instance_idx == row_k
+                                        else None
+                                    ),
+                                    on_change=on_edit_radio,
+                                ).props("dense")
                         if not session.use_independent_db:
                             with ui.element("td").on(
                                 "click",
@@ -440,6 +568,7 @@ def handle_delete_checked_session_rows(session) -> None:
     """删除勾选的 session_rows 行（含空行/部分填写行）；仅内存列表，不写 DB。"""
     if not getattr(session, "delete_mode", False):
         session.delete_mode = True
+        session.selected_instance_idx = None
         session.selected_instance_indices.clear()
         render_input_tab.refresh()
         return
@@ -575,6 +704,7 @@ def render_input_tab():
             try:
                 incoming = ui_provider.record_from_textbox(str(raw))
                 session.draft.update(incoming)
+                _refresh_formula_draft(session)
                 session.suppress_id_search = True
                 event.sender.value = ""
                 render_dynamic_fields.refresh()
@@ -668,7 +798,7 @@ def render_input_tab():
                     )
                 else:
                     AppBtn(
-                        "删除选中",
+                        "启用删除功能",
                         on_click=lambda: handle_delete_checked_session_rows(session),
                     )
             with ui.row().classes("gap-2 items-center"):
@@ -730,17 +860,16 @@ def render_dynamic_fields(session, labels: list[str]):
         rule = rules_by_label.get(lbl)
         if rule is not None and getattr(rule, "id", False):
             is_pk = True
-        ui_widget = getattr(rule, "ui_widget", "text") if rule else "text"
-        cell_role = getattr(rule, "cell_role", "input") if rule else "input"
-        is_readonly = (
-            bool(getattr(session, "formula_mask", {}).get(lbl))
-            or cell_role == "formula"
-            or ui_widget == "readonly"
-        )
+        # 控件类型与只读状态完全由运行时检测决定：
+        # - formula_mask / formula_cells 标记 Excel 公式格
+        # - select_options 来自 DataValidation list
+        is_blocked = _is_formula_blocked(session, lbl)
+        opts = list(select_options.get(lbl) or [])
 
         def create_on_change(label: str):
             def on_change(event) -> None:
                 session.draft[label] = event.value
+                _refresh_formula_draft(session)
 
             return on_change
 
@@ -810,6 +939,7 @@ def render_dynamic_fields(session, labels: list[str]):
                 sender_val = getattr(event.sender, "value", None)
                 if sender_val is not None:
                     session.draft[label] = str(sender_val)
+                _refresh_formula_draft(session)
 
             return on_blur
 
@@ -817,18 +947,20 @@ def render_dynamic_fields(session, labels: list[str]):
             dialog.close()
             session.draft.update(existing_row)
             session.suppress_id_search = True
+            _refresh_formula_draft(session)
             render_dynamic_fields.refresh()
 
         with ui.element("div").classes(
-            "field-cell id-field" if is_pk else "field-cell"
+            "field-cell id-field"
+            if is_pk
+            else ("field-cell formula-field" if is_blocked else "field-cell")
         ):
             ui.label(lbl).classes("field-label primary" if is_pk else "field-label")
 
             with ui.element("div").classes("field-input-row"):
                 draft_val = session.draft.get(lbl, "")
                 draft_str = "" if draft_val is None else str(draft_val)
-                if ui_widget == "select" and not is_readonly:
-                    opts = list(select_options.get(lbl) or [])
+                if opts and not is_blocked:
                     cur = draft_str if draft_str in opts else (draft_str or None)
                     inp = (
                         ui.select(
@@ -849,7 +981,7 @@ def render_dynamic_fields(session, labels: list[str]):
                         .classes("input-box")
                         .props('autogrow dense borderless hide-bottom-space rows="1"')
                     )
-                if is_readonly:
+                if is_blocked:
                     inp.props("readonly")
                 if is_pk:
                     inp.on("blur", create_on_blur(lbl))
@@ -857,7 +989,7 @@ def render_dynamic_fields(session, labels: list[str]):
                     inp.on("blur", create_sync_blur(lbl))
                 # 向导步骤 3 可直接读控件当前值
                 _field_inputs[lbl] = inp
-                if not is_readonly and ui_widget != "select":
+                if not is_blocked and not opts:
                     with inp:
                         with ui.context_menu():
                             add_image_pick_menu_items(session, lbl, inp)
@@ -948,6 +1080,7 @@ def handle_next_row(session, direction: str = "down"):
             session.draft.clear()
             if getattr(session, "template_defaults", None):
                 session.draft.update(session.template_defaults)
+            _refresh_formula_draft(session)
         else:
             if session.writer and session.template_path:
                 val, mask = session.writer.read_values(
@@ -956,6 +1089,7 @@ def handle_next_row(session, direction: str = "down"):
                 session.draft.clear()
                 session.draft.update(val)
                 session.formula_mask = mask
+                _refresh_formula_draft(session)
     except Exception as e:
         ui.notify(f"写入失败: {str(e)}", type="negative")
         return

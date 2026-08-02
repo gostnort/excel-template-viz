@@ -3,8 +3,9 @@ __pycache__/
 *.py[cod]
 .venv/
 
-# Local install profile (accelerator / ocr flags from bootstrap)
+# Local install profile (accelerator / ocr flags from bootup/bootstrap_install.py)
 .install_profile
+bootup/.install_profile
 
 
 # Google OAuth 凭证（勿提交）

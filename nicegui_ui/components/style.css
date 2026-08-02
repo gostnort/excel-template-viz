@@ -497,6 +497,20 @@ html, body {
 .field-cell.id-field .input-box .q-field__native {
   color: #1a1a1a;
 }
+/* Excel formula cells: gray blocked readonly */
+.field-cell.formula-field .input-box .q-field__control {
+  background: var(--color-btn-disabled-bg);
+  border-color: var(--color-btn-disabled-border);
+  cursor: not-allowed;
+}
+.field-cell.formula-field .input-box.q-field--focused .q-field__control {
+  background: var(--color-btn-disabled-bg);
+  border-color: var(--color-btn-disabled-border);
+}
+.field-cell.formula-field .input-box .q-field__native {
+  color: var(--color-btn-disabled-fg);
+  cursor: not-allowed;
+}
 /* NiceGUI ui.input / ui.select：高度随 font-size（2.77em ≈ 36px @ 13px） */
 .field-cell .input-box.q-field,
 .print-row .dropdown.q-field,
@@ -600,7 +614,21 @@ table.records th, table.records td, table.t th, table.t td {
 table.records th, table.t th { background: #eee; }
 table.records tbody tr:hover, table.t tbody tr:hover { background: #f7f7f7; cursor: pointer; }
 table.records tbody tr.selected, table.t tbody tr.selected { background: #e8e8e8; font-weight: bold; }
-.chkcol { width: 28px; text-align: center; }
+.chkcol { width: 28px; text-align: center; vertical-align: middle; }
+.chkcol .q-radio,
+.chkcol .q-checkbox { margin: 0; }
+table.records td.chkcol.excel-color {
+  background-color: var(--color-btn-excel-bg);
+  color: var(--color-btn-excel-fg);
+}
+table.records td.chkcol.excel-color .q-radio__inner,
+table.records td.chkcol.excel-color .q-checkbox__inner {
+  color: var(--color-btn-excel-fg);
+}
+table.records td.chkcol.excel-color .q-radio__inner--truthy,
+table.records td.chkcol.excel-color .q-checkbox__inner--truthy {
+  color: var(--color-btn-excel-fg);
+}
 .list-btns { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
 .list-btns-end { display: flex; gap: 8px; }
 

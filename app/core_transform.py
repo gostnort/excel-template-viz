@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import argparse
+import datetime
 import json
 import logging
 import re
@@ -9,7 +10,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter, range_boundaries
+from openpyxl.utils import column_index_from_string, get_column_letter, range_boundaries
 from PIL import Image, ImageDraw, ImageFont
 from .core_toml import (
     AreaRect,
@@ -35,6 +36,33 @@ logger = logging.getLogger(__name__)
 def _cell_empty(value: Any) -> bool:
     """单元格无有效文本内容时视为空。"""
     return value is None or str(value).strip() == ""
+
+
+def normalize_recv_date_cell(value: Any) -> Any:
+    """
+    函数名: normalize_recv_date_cell
+    作用: 将 recv. date 列的 datetime/ISO 文本规范为 M/D/YYYY，便于 TOML regex 提取 MM/DD
+    输入:
+        value (Any) - 数据源单元格原始值
+    输出:
+        Any - 规范化后的文本；无法识别时返回原值
+    """
+    if value is None:
+        return value
+    if isinstance(value, datetime.datetime):
+        dt = value
+    elif isinstance(value, datetime.date):
+        dt = datetime.datetime(value.year, value.month, value.day)
+    else:
+        text = str(value).strip()
+        iso = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})", text)
+        if iso:
+            dt = datetime.datetime(
+                int(iso.group(1)), int(iso.group(2)), int(iso.group(3))
+            )
+        else:
+            return value
+    return f"{dt.month}/{dt.day}/{dt.year}"
 
 
 def _column_names_for_rule(rule: TomlDefault) -> list[str]:
@@ -297,6 +325,8 @@ class Template2DB:
             if matched is None:
                 continue
             raw_value = _lookup_row_value(matched, rule)
+            if rule.field == "recv. date":
+                raw_value = normalize_recv_date_cell(raw_value)
             # 只写 Input_label 键；落库主键由 core_store 据 db_id 推导或自动生成
             record[rule.Input_label] = self.apply_regex(raw_value, rule.regex)
         return record
@@ -372,24 +402,306 @@ def _scene2_row_idx_matches(
     return True
 
 
+_FORMULA_REF_RE = re.compile(
+    r"^='([^']+)'!([A-Z]+)(\d+)$|^=([^!]+)!([A-Z]+)(\d+)$"
+)
+
+
+def _col_label_map(located: dict[str, dict[str, int]]) -> dict[int, str]:
+    """
+    函数名: _col_label_map
+    作用: 由 located 建立值格列号到 Input_label 的映射
+    输入:
+        located (dict) - verify_toml 的 located 字典
+    输出:
+        dict[int, str] - 列号 → Input_label
+    """
+    mapping: dict[int, str] = {}
+    for label, coord in located.items():
+        mapping[int(coord["value_col"])] = label
+    return mapping
+
+
+def _row_context_from_ws_row(
+    ws: Any, row_num: int, col_label_map: dict[int, str]
+) -> dict[str, Any]:
+    """
+    函数名: _row_context_from_ws_row
+    作用: 读取工作表一行值格，按 Input_label 组装上下文
+    输入:
+        ws - openpyxl 工作表
+        row_num (int) - 行号
+        col_label_map (dict[int, str]) - 列号到标签映射
+    输出:
+        dict[str, Any] - Input_label → 单元格值
+    """
+    ctx: dict[str, Any] = {}
+    for col_idx, label in col_label_map.items():
+        ctx[label] = ws.cell(row=row_num, column=col_idx).value
+    return ctx
+
+
+def _excel_mid(text: Any, start: Any, count: Any) -> str:
+    """
+    函数名: _excel_mid
+    作用: 模拟 Excel MID 函数
+    输入:
+        text (Any) - 源文本
+        start (Any) - 起始位置（1-based）
+        count (Any) - 截取长度
+    输出:
+        str - 截取结果
+    """
+    source = "" if text is None else str(text)
+    start_i = int(start)
+    count_i = int(count)
+    if start_i < 1:
+        return ""
+    begin = start_i - 1
+    return source[begin : begin + count_i]
+
+
+def _normalize_formula_pattern(formula: str) -> str:
+    """把公式中的行号归一化为 {row}，便于跨行匹配。"""
+    return re.sub(r"\d+", "{row}", str(formula or "").strip().upper())
+
+
+def _eval_lot_no_from_context(ctx: dict[str, Any]) -> str:
+    """
+    函数名: _eval_lot_no_from_context
+    作用: 按 Ginger_Lots 模板公式计算 Lot No.
+    输入:
+        ctx (dict[str, Any]) - 含 order/YY/MM/DD 的字段上下文
+    输出:
+        str - Lot No. 文本
+    """
+    dd = ctx.get("DD")
+    if _cell_empty(dd):
+        return None
+    yy = ctx.get("YY", "")
+    mm = ctx.get("MM", "")
+    order = ctx.get("order", "")
+    parts = [
+        "GIN",
+        _excel_mid(yy, 2, 1),
+        _excel_mid(yy, 1, 1),
+        _excel_mid(mm, 2, 1),
+        _excel_mid(mm, 1, 1),
+        _excel_mid(dd, 2, 1),
+        _excel_mid(dd, 1, 1),
+    ]
+    if not _cell_empty(order):
+        parts.append(str(order).strip())
+    return "".join(parts)
+
+
+def _eval_receiving_date_from_context(ctx: dict[str, Any]) -> str:
+    """
+    函数名: _eval_receiving_date_from_context
+    作用: 按 DATE(YY,MM,DD) 公式计算 Receiving Date 显示值
+    输入:
+        ctx (dict[str, Any]) - 含 YY/MM/DD 的字段上下文
+    输出:
+        str - M/D 格式日期或空串
+    """
+    dd = ctx.get("DD")
+    if _cell_empty(dd):
+        return None
+    try:
+        mm = int(float(ctx.get("MM", 0)))
+        dd_i = int(float(dd))
+        return f"{mm}/{dd_i}"
+    except (ValueError, TypeError):
+        return None
+
+
+def evaluate_formula_for_row(
+    formula: str,
+    row_ctx: dict[str, Any],
+    formula_cells: dict[str, dict[str, Any]],
+) -> Any:
+    """
+    函数名: evaluate_formula_for_row
+    作用: 对已知公式格（Lot No. / Receiving Date）按行上下文求值
+    输入:
+        formula (str) - Excel 公式文本
+        row_ctx (dict[str, Any]) - 当前行字段值
+        formula_cells (dict) - verify_toml.formula_cells
+    输出:
+        Any - 计算结果；未知公式返回 None
+    """
+    pattern = _normalize_formula_pattern(formula)
+    for label, info in formula_cells.items():
+        if _normalize_formula_pattern(info.get("formula", "")) != pattern:
+            continue
+        if label == "Lot No.":
+            return _eval_lot_no_from_context(row_ctx)
+        if label == "Receiving Date":
+            return _eval_receiving_date_from_context(row_ctx)
+    return None
+
+
+def recompute_formula_draft_fields(
+    draft: dict[str, Any],
+    formula_cells: dict[str, dict[str, Any]] | None,
+    located: dict[str, dict[str, int]] | None,
+) -> None:
+    """
+    函数名: recompute_formula_draft_fields
+    作用: 根据 draft 依赖字段重算公式格并写回 draft
+    输入:
+        draft (dict[str, Any]) - 当前草稿（原地更新）
+        formula_cells (dict | None) - verify_toml.formula_cells
+        located (dict | None) - verify_toml.located
+    输出: 无
+    """
+    if not formula_cells or not located:
+        return
+    for _label, info in formula_cells.items():
+        formula = str(info.get("formula") or "")
+        if not formula.startswith("="):
+            continue
+        value = evaluate_formula_for_row(formula, draft, formula_cells)
+        if value is not None:
+            draft[_label] = value
+
+
+def _parse_sheet_ref(formula: str) -> tuple[str, int, int] | None:
+    """
+    函数名: _parse_sheet_ref
+    作用: 解析 =Sheet!A1 形式跨表引用
+    输入:
+        formula (str) - 单元格公式
+    输出:
+        tuple[str, int, int] | None - (sheet, row, col) 或 None
+    """
+    text = str(formula or "").strip()
+    if not text.startswith("=") or "!" not in text:
+        return None
+    body = text[1:]
+    sheet_part, cell_part = body.rsplit("!", 1)
+    sheet_name = sheet_part.strip().strip("'\"")
+    col_letters = "".join(ch for ch in cell_part if ch.isalpha())
+    row_digits = "".join(ch for ch in cell_part if ch.isdigit())
+    if not col_letters or not row_digits:
+        return None
+    return sheet_name, int(row_digits), column_index_from_string(col_letters)
+
+
+def _cell_scalar_value(
+    wb: Any,
+    sheet_name: str,
+    row_num: int,
+    col_num: int,
+    col_label_map: dict[int, str],
+    formula_cells: dict[str, dict[str, Any]],
+    work_sheet: str,
+) -> Any:
+    """
+    函数名: _cell_scalar_value
+    作用: 读取单元格标量；List 公式格按行上下文求值，其它公式递归解析
+    输入:
+        wb - 工作簿
+        sheet_name (str) - 表名
+        row_num (int) - 行号
+        col_num (int) - 列号
+        col_label_map (dict[int, str]) - 列号映射
+        formula_cells (dict) - 公式格登记
+        work_sheet (str) - 主输入表名
+    输出:
+        Any - 标量值
+    """
+    if sheet_name not in wb.sheetnames:
+        return None
+    ws = wb[sheet_name]
+    raw = ws.cell(row=row_num, column=col_num).value
+    if sheet_name == work_sheet:
+        label = col_label_map.get(col_num)
+        if label and label in formula_cells and isinstance(raw, str) and raw.startswith("="):
+            row_ctx = _row_context_from_ws_row(ws, row_num, col_label_map)
+            for formula_label, info in formula_cells.items():
+                computed = evaluate_formula_for_row(
+                    str(info.get("formula") or ""), row_ctx, formula_cells
+                )
+                if computed is not None:
+                    row_ctx[formula_label] = computed
+            if label in row_ctx:
+                return row_ctx[label]
+    if isinstance(raw, str) and raw.startswith("="):
+        ref = _parse_sheet_ref(raw)
+        if ref is not None:
+            return _cell_scalar_value(
+                wb,
+                ref[0],
+                ref[1],
+                ref[2],
+                col_label_map,
+                formula_cells,
+                work_sheet,
+            )
+    return raw
+
+
+def materialize_print_sheet_formulas(
+    wb: Any,
+    cfg: GetTomlValues,
+    located: dict[str, dict[str, int]],
+    formula_cells: dict[str, dict[str, Any]] | None,
+) -> None:
+    """
+    函数名: materialize_print_sheet_formulas
+    作用: 将 print_sheet 上的跨表公式替换为标量，便于打印区预览与打印
+    输入:
+        wb - openpyxl 工作簿
+        cfg (GetTomlValues) - 模板配置
+        located (dict) - verify_toml.located
+        formula_cells (dict | None) - verify_toml.formula_cells
+    输出: 无
+    """
+    print_sheet = cfg.print_sheet
+    work_sheet = cfg.work_sheet
+    if not print_sheet or print_sheet not in wb.sheetnames or not work_sheet:
+        return
+    col_label_map = _col_label_map(located)
+    ws_print = wb[print_sheet]
+    for row in ws_print.iter_rows():
+        for cell in row:
+            formula = cell.value
+            if not isinstance(formula, str) or not formula.startswith("="):
+                continue
+            ref = _parse_sheet_ref(formula)
+            if ref is None:
+                continue
+            value = _cell_scalar_value(
+                wb,
+                ref[0],
+                ref[1],
+                ref[2],
+                col_label_map,
+                formula_cells or {},
+                work_sheet,
+            )
+            cell.value = value
+
+
 class ExcelWriter:
     """按 verify_toml 的 located + input_section instance_idx 组平移读写值格；定位用 Input_label 不用 index。"""
 
     def __init__(
-        self, cfg: GetTomlValues, located: dict[str, dict[str, int]] | None = None
+        self,
+        cfg: GetTomlValues,
+        located: dict[str, dict[str, int]] | None = None,
+        formula_cells: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self.cfg = cfg
         # located: {Input_label: {label_row,label_col,value_row,value_col}}，来自 core_toml.verify_toml
         self.located = dict(located) if located else {}
+        self.formula_cells = dict(formula_cells) if formula_cells else {}
         # 场景1：沿 move_to[0] 可铺步数；场景2：次轴槽数（secondary_span）；由 max_instance_count 写入
         self.primary_span: int = 0
         # 由 max_instance_count 写入：数据库模式下的自然容量上界（值匹配测得），模板即库模式仅作参考
         self._input_capacity: int = 0
         self._capacity_computed_for: Path | None = None
-        # Input_label → TomlDefault（写回跳过 cell_role=formula）
-        self._rules_by_label: dict[str, TomlDefault] = {
-            r.Input_label: r for r in (cfg.field_rules or [])
-        }
 
     def _worksheet_name(self, workbook_path: Path) -> str:
         """解析 cfg.work_sheet 或回退 active sheet。"""
@@ -450,12 +762,10 @@ class ExcelWriter:
         )
 
     def _minor_writable_labels(self) -> list[str]:
-        """场景2：minor 段且非 formula 的 Input_label 列表；场景1：全部非 formula located。"""
+        """场景2：minor 段且非 formula 的 Input_label 列表；场景1：全部非 formula located。
+        formula 判定以运行时单元格是否以 '=' 开头为准，不再读取 TOML cell_role。"""
         labels: list[str] = []
         for label in self.located:
-            rule = self._rules_by_label.get(label)
-            if rule and rule.cell_role == "formula":
-                continue
             if self._is_scene2() and self._label_is_major(label):
                 continue
             labels.append(label)
@@ -508,10 +818,6 @@ class ExcelWriter:
                     )
                 else:
                     masks[label] = False
-                # TOML cell_role=formula 也标为公式（与运行时 mask 取并集）
-                rule = self._rules_by_label.get(label)
-                if rule and rule.cell_role == "formula":
-                    masks[label] = True
         except ValueError:
             # Propagate up to stop reading when we hit sheet bounds via offset_cell
             raise
@@ -810,10 +1116,6 @@ class ExcelWriter:
                     # 场景2：major 仅 secondary_slot == 0 时写入
                     if scene2 and secondary_slot > 0 and self._label_is_major(label):
                         continue
-                    # TOML cell_role=formula 永不写
-                    rule = self._rules_by_label.get(label)
-                    if rule and rule.cell_role == "formula":
-                        continue
                     cell = self._value_cell(label, record_k)
                     if cell is None:
                         continue
@@ -823,6 +1125,9 @@ class ExcelWriter:
                         continue
 
                     ws.cell(row=cell[0], column=cell[1]).value = value
+            materialize_print_sheet_formulas(
+                wb, self.cfg, self.located, self.formula_cells
+            )
             output_path.parent.mkdir(parents=True, exist_ok=True)
             wb.save(output_path)
         finally:

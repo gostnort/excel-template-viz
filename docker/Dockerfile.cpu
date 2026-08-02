@@ -11,9 +11,9 @@ ENV UV_LINK_MODE=copy \
 WORKDIR /app
 
 # Lock + metadata first for layer cache
-COPY pyproject.toml uv.lock ./
+COPY bootup/pyproject.toml bootup/uv.lock bootup/
 
-RUN uv sync --frozen --extra llm --extra ocr
+RUN uv sync --frozen --project bootup --extra llm --extra ocr
 
 COPY . .
 
@@ -26,4 +26,4 @@ COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["uv", "run", "python", "-m", "nicegui_ui.app"]
+CMD ["uv", "run", "--project", "bootup", "python", "-m", "nicegui_ui.app"]

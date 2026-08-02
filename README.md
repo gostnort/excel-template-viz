@@ -10,11 +10,11 @@
 
 ## 安装
 
-依赖真相源：根目录 [`pyproject.toml`](pyproject.toml) + [`uv.lock`](uv.lock)。已删除旧版 `requirements.txt`；勿再用 `pip -r` 安装，也勿同时安装 `ocr` 与 `ocr-gpu`。
+依赖真相源：[`bootup/pyproject.toml`](bootup/pyproject.toml) + [`bootup/uv.lock`](bootup/uv.lock)。已删除旧版 `requirements.txt`；勿再用 `pip -r` 安装，也勿同时安装 `ocr` 与 `ocr-gpu`。
 
 ### 环境要求
 
-- **Windows**（`install.bat` / `run.bat`）；Linux/macOS 可用同一套 `uv` 命令
+- **Windows**（`install.bat` / `run.ps1`）；Linux/macOS 可用同一套 `uv` 命令
 - **[uv](https://docs.astral.sh/uv/getting-started/installation/)** 在 PATH 中
 - **Python 3.10** 或 **3.11**（`requires-python = ">=3.10,<3.12"`）
 - 可联网（安装依赖；首次使用 Gemma 4 / PaddleOCR 时会下载模型）
@@ -26,9 +26,9 @@
 install.bat
 ```
 
-等价于 `python scripts/bootstrap_install.py`，流程：
+等价于 `python bootup/bootstrap_install.py`，流程：
 
-1. `uv venv` → 单一项目 `.venv`
+1. `uv venv` → `bootup/.venv`
 2. 探测 NVIDIA（`nvidia-smi`）并确认 **GPU / CPU**
 3. 写入本地 `.install_profile`（已 gitignore）
 4. `uv sync --extra llm`；若启用 OCR 则互斥再加 `--extra ocr` 或 `--extra ocr-gpu`
@@ -56,25 +56,25 @@ ocr=true
 ### 手动安装（uv）
 
 ```bat
-uv sync --extra llm
-uv sync --extra llm --extra ocr
-uv sync --extra llm --extra ocr-gpu
-uv run python -m nicegui_ui.app
+uv sync --project bootup --extra llm
+uv sync --project bootup --extra llm --extra ocr
+uv sync --project bootup --extra llm --extra ocr-gpu
+uv run --project bootup python -m nicegui_ui.app
 ```
 
 ### 启动
 
-```bat
-run.bat
+```powershell
+.\run.ps1
 ```
 
 或：
 
 ```bat
-uv run python -m nicegui_ui.app
+uv run --project bootup python -m nicegui_ui.app
 ```
 
-浏览器访问：**http://127.0.0.1:8738**
+浏览器访问：**https://127.0.0.1:8738**
 
 界面为 **NiceGUI**（`nicegui_ui/`）；原 Gradio `webui/` 已移除。
 

@@ -340,10 +340,6 @@ def __init__(self, conn: ConnectGoogle) -> None
 
 ### Public methods
 
-#### `cfg_has_google_sources(cfg: GetTomlValues) -> bool` (static)
-
-True when a `field_rules`-referenced alias has a `[[sources]]` URL starting with `https://docs.google.com/spreadsheets/`.
-
 #### `run(self, cfg: GetTomlValues, *, verify_ok: bool) -> GoogleSessionBundle`
 
 Single entry point. Called:
@@ -358,7 +354,7 @@ AutoConnect(conn).run(cfg, verify_ok):
   conn.disconnect()                                    # always drop stale _tables
   if not verify_ok or not conn.is_authorized():
       return disconnected_bundle
-  if not AutoConnect.cfg_has_google_sources(cfg):
+  if cfg.use_independent_db:
       return disconnected_bundle
   conn.connect(cfg)                                    # load all TOML-required worksheets
   op = SheetOperation(conn)
@@ -473,7 +469,7 @@ AutoConnect.apply_bundle(session, bundle)
 render_google_tab.refresh()
 ```
 
-`AutoConnect.cfg_has_google_sources(cfg)`: at least one `field_rules` entry references a `source_file` whose `[[sources]]` value starts with `https://docs.google.com/spreadsheets/`. Local xlsx-only templates skip `connect()`.
+`cfg.use_independent_db`（TOML 顶层键，默认 `true`）：为 `true` 时跳过 `connect()`（独立 SQLite 库模式）；为 `false` 时（模板即库）在已授权且校验通过时自动连接 Google Sheets。
 
 Caller responsibility: TOML `[[sources]]` URLs are edited on「输入配置」tab. **Do not** read `*.datasource.json`.
 

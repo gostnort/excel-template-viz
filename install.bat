@@ -32,9 +32,9 @@ if errorlevel 1 (
     )
 )
 
-py -3.10 scripts\bootstrap_install.py %BOOTSTRAP_ARGS% 2>nul
+py -3.10 bootup\bootstrap_install.py %BOOTSTRAP_ARGS% 2>nul
 if errorlevel 1 (
-    python scripts\bootstrap_install.py %BOOTSTRAP_ARGS%
+    python bootup\bootstrap_install.py %BOOTSTRAP_ARGS%
     if errorlevel 1 (
         echo ERROR: bootstrap_install.py failed
         pause
@@ -43,8 +43,8 @@ if errorlevel 1 (
 )
 
 echo.
-echo To start the application, run: run.bat
+echo To start the application, run: .\run.ps1
 echo Gemma 4 model (~3.66GB) downloads on first LLM/OCR use, or prefetch:
-echo   uv run python -c "from llm_gemma4.hf_download import download_litert; print(download_litert())"
+echo   uv run --project bootup python -c "from llm_gemma4.hf_download import download_litert; print(download_litert())"
 echo.
 pause
