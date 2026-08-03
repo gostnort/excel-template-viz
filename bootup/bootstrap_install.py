@@ -20,10 +20,48 @@ UV_INSTALL_HINT = (
 )
 
 
+def _stream_run(
+    cmd: list[str],
+    *,
+    cwd: Path | None = None,
+) -> int:
+    """
+    函数名: _stream_run
+    作用: 用 Popen 逐行读取 stdout/stderr，实时打印到控制台；同时统计安装数量以显示进度。
+           适用于 uv sync 等需要可见进度的命令。非 uv sync 的命令仍走普通 _run（静默）。
+    输入:
+        cmd (list[str]): 命令参数列表
+        cwd (Path | None): 工作目录，默认 bootup
+    输出:
+        int: 进程退出码
+    """
+    print(f">>> {' '.join(cmd)}", flush=True)
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(cwd or BOOTUP),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    installed_count = 0
+    for line in proc.stdout:
+        print(line, end="", flush=True)
+        # uv sync 在每行安装后会打印类似 "Installed X packages" 或包含新包名的行；
+        # 简单计数器：每看到以 "+" 开头且非注释的行，视为一个包的报告。
+        if line.startswith("+") and not line.startswith("#"):
+            installed_count += 1
+    rc = proc.wait()
+    print(f">>> Done (exit code {rc}, ~{installed_count} packages reported)", flush=True)
+    return rc
+
+
 def _run(cmd: list[str], *, cwd: Path | None = None) -> int:
     """
     函数名: _run
-    作用: 打印并执行子进程命令
+    作用: 打印并执行子进程命令（静默，仅打印命令行）。
+           适用于不需要实时进度输出的命令（如 import smoke test）。
     输入:
         cmd (list[str]): 命令参数列表
         cwd (Path | None): 工作目录，默认 bootup（含 pyproject.toml）
@@ -183,7 +221,8 @@ def _ensure_venv(uv: str, python: str | None) -> int:
 def _sync(uv: str, *, accelerator: str, ocr: bool, frozen: bool) -> int:
     """
     函数名: _sync
-    作用: 在 bootup 目录 uv sync 安装 core+llm，按需互斥安装 ocr 或 ocr-gpu
+    作用: 在 bootup 目录 uv sync 安装 core+llm，按需互斥安装 ocr 或 ocr-gpu。
+           使用 Popen + 逐行读取实时输出进度（不再是静默的 subprocess.call）。
     输入:
         uv (str): uv 路径
         accelerator (str): cpu|gpu
@@ -200,7 +239,7 @@ def _sync(uv: str, *, accelerator: str, ocr: bool, frozen: bool) -> int:
             cmd.extend(["--extra", "ocr-gpu"])
         else:
             cmd.extend(["--extra", "ocr"])
-    return _run(cmd)
+    return _stream_run(cmd)
 
 
 def _post_ocr(accelerator: str) -> int:
