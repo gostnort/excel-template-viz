@@ -1,4 +1,7 @@
-"""根据 WizardState 生成合规 TOML：以「当前模板」为底，向导只覆盖已学到的键。"""
+"""根据 WorkflowState 生成合规 TOML：以「当前模板」为底，向导只覆盖已学到的键。
+
+Phase A: 从 wizard/toml_patcher.py 迁移，WorkflowState 来自 llm_gemma4.workflow.state。
+"""
 
 from __future__ import annotations
 
@@ -19,7 +22,7 @@ from app.core_toml import (
     load_toml,
     offset_cell,
 )
-from llm_gemma4.wizard.state import FieldState, WizardState
+from llm_gemma4.workflow.state import FieldState, WorkflowState
 
 
 def _layout_area_is_set(area: str | list[str] | None) -> bool:
@@ -27,7 +30,7 @@ def _layout_area_is_set(area: str | list[str] | None) -> bool:
     函数名: _layout_area_is_set
     作用: 判断向导是否已确认 input_area（标量或列表）
     输入:
-        area (str | list[str] | None): WizardState.input_area
+        area (str | list[str] | None): WorkflowState.input_area
     输出:
         bool: 有非空区域则为 True
     """
@@ -94,13 +97,13 @@ def _xlsx_sheet_names(template_path: Path) -> tuple[list[str], str]:
         wb.close()
 
 
-def _ensure_work_sheet(base: dict[str, Any], state: WizardState) -> dict[str, Any]:
+def _ensure_work_sheet(base: dict[str, Any], state: WorkflowState) -> dict[str, Any]:
     """
     函数名: _ensure_work_sheet
     作用: 若底稿 work_sheet 不在本模板 xlsx 中，则改为 CreateDefaultFromTemplate 解析到的真实表名
     输入:
         base (dict[str, Any]): 待写入的配置底稿
-        state (WizardState): 含 template_path
+        state (WorkflowState): 含 template_path
     输出:
         dict[str, Any]: 校正后的 base（原地修改并返回）
     """
@@ -130,12 +133,12 @@ def _ensure_work_sheet(base: dict[str, Any], state: WizardState) -> dict[str, An
     return base
 
 
-def _base_config_for_template(state: WizardState) -> dict[str, Any]:
+def _base_config_for_template(state: WorkflowState) -> dict[str, Any]:
     """
     函数名: _base_config_for_template
     作用: 取当前模板的配置底稿——已有 sidecar TOML，否则 CreateDefaultFromTemplate(该 xlsx)
     输入:
-        state (WizardState): 须含 template_id / template_path
+        state (WorkflowState): 须含 template_id / template_path
     输出:
         dict[str, Any]: 可序列化配置字典（本模板专属，禁止全局硬编码回退）
     """
@@ -215,15 +218,15 @@ def _overlay_wizard_fields(
 
 def _rebuild_fields_for_input_area(
     base: dict[str, Any],
-    state: WizardState,
+    state: WorkflowState,
     area: str | list[str],
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """
     函数名: _rebuild_fields_for_input_area
-    作用: 按用户确认的 input_area 重建 [[fields]]，只保留值格落在并集内的标签（与 verify_toml 自洽）
+    作用: 按用户确认的 input_area 重建 [[fields]]，只保留值格落在并集内的标签（与 verify 自洽）
     输入:
         base (dict): 当前配置底稿
-        state (WizardState): 含 template_path
+        state (WorkflowState): 含 template_path
         area (str | list[str]): 用户输入的 input_area（字符串或并集列表）
     输出:
         tuple[list[dict], list[str]]: (保留的 fields, 因越界丢弃的 Input_label)
@@ -312,7 +315,7 @@ def _rebuild_fields_for_input_area(
 
 
 def _sync_state_labels_after_layout(
-    state: WizardState,
+    state: WorkflowState,
     kept_fields: list[dict[str, Any]],
     dropped: list[str],
 ) -> None:
@@ -320,7 +323,7 @@ def _sync_state_labels_after_layout(
     函数名: _sync_state_labels_after_layout
     作用: 布局重建后同步 WizardState 的 template_labels / fields（去掉越界标签）
     输入:
-        state (WizardState): 向导状态
+        state (WorkflowState): 向导状态
         kept_fields (list[dict]): 重建后保留的 fields
         dropped (list[str]): 丢弃的 Input_label
     输出: 无
@@ -337,12 +340,12 @@ def _sync_state_labels_after_layout(
             del state.fields[label]
 
 
-def generate_toml(state: WizardState) -> str:
+def generate_toml(state: WorkflowState) -> str:
     """
     函数名: generate_toml
     作用: 以当前模板底稿合并向导已学状态，生成 TOML 1.0 文本（无全局硬编码骨架）
     输入:
-        state (WizardState): 向导状态（须能解析到本模板底稿）
+        state (WorkflowState): 向导状态（须能解析到本模板底稿）
     输出:
         str: TOML 文本
     """
@@ -413,12 +416,12 @@ def generate_toml(state: WizardState) -> str:
     return TomlGenerator().ConfigToToml(base)
 
 
-def persist_wizard_toml(state: WizardState, template_id: str = "") -> Path:
+def persist_wizard_toml(state: WorkflowState, template_id: str = "") -> Path:
     """
     函数名: persist_wizard_toml
     作用: 将合并后的向导 TOML 写入 templates/{id}/{id}.toml
     输入:
-        state (WizardState): 向导状态
+        state (WorkflowState): 向导状态
         template_id (str): 模板 ID；空则回退 state.template_id
     输出:
         Path: 写入的 TOML 路径
@@ -435,12 +438,12 @@ def persist_wizard_toml(state: WizardState, template_id: str = "") -> Path:
     return path
 
 
-def layout_hints_for_template(state: WizardState) -> dict[str, Any]:
+def layout_hints_for_template(state: WorkflowState) -> dict[str, Any]:
     """
     函数名: layout_hints_for_template
     作用: 为步骤 2 表单提供本模板 input_section 提示（保留列表形态；sidecar 优先，否则 xlsx 推导）
     输入:
-        state (WizardState): 当前向导状态
+        state (WorkflowState): 当前向导状态
     输出:
         dict[str, Any]: input_area / move_to / offset（可为 str 或 list）
     """

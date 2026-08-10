@@ -56,7 +56,7 @@ open_session + SessionOptions            gemma4_e4b_workflow：主对话 + 字�
 | `SessionOptions.thinking` | 会话级 Thinking（失败重试时**新开** thinking session，不在同 session 内切换） |
 | `SessionOptions.max_tokens` | 子 agent 输出预算；thinking 重试读 profile `thinking_budget` |
 
-向导内的 JSON 解析、`re.search` 回验、7 步状态机、主对话摘要注入 — **一律归** `llm_gemma4/wizard/`（见 workflow 文档），**不**在底座新增 `ActionParser` / `BrowserSession` / 完整 `ContextStore`。
+向导内的 JSON 解析、`re.search` 回验、动态工作流状态机、主对话摘要注入 — **一律归** `llm_gemma4/toml_config/` 与 `llm_gemma4/workflow/`（见 [`gemma4_dynamic_workflow.md`](gemma4_dynamic_workflow.md)），**不**在底座新增 `ActionParser` / `BrowserSession` / 完整 `ContextStore`。
 
 ---
 
@@ -269,7 +269,7 @@ hf download litert-community/gemma-4-E4B-it-litert-lm ^
 
 全量 `ContextStore` Layer 0–4 + `Compressor` + 浏览器 `PageState` **已废弃**。
 
-向导主对话如需跨步提醒，在 `llm_gemma4/wizard/context.py` 维护**极简摘要**，每轮 `send_turn` 前拼入 user 消息前缀（不重放完整历史——`Conversation` KV cache 已持有轮次）：
+向导主对话如需跨步提醒，在 `llm_gemma4/toml_config/context.py` 维护**极简摘要**，每轮 `send_turn` 前拼入 user 消息前缀（不重放完整历史——`Conversation` KV cache 已持有轮次）：
 
 | 片段 | 内容 |
 |------|------|

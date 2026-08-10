@@ -479,7 +479,7 @@ tomlkit>=0.13
 | **激活校验**（UI 调用） | `verify_toml()` | UI 只调这一个；斜向扫描 work_sheet，报告找不到 / 并集内重复 / 值格越界的 `Input_label`，以及 `duplicate_id_sheets` / `db_id` / **非空 regex 的 `re.compile` 失败**；场景2 同形校验；**读出下拉选项**写入报告 `select_options`；登记公式格 |
 | 解析本地主键 | `resolve_db_id()` | 由已加载配置推断生效的 `db_id`（`Input_label`）；无 id 字段时返回 `None` |
 | 坐标解析 | `offset_cell`、场景2 平移、`_scan_worksheet_labels_diagonal` 等 | 校验与填表共用；扫描上限 **100×100**；`input_area` 按并集（及嵌套段）判定 |
-| 下拉选项读取 | `verify_toml` / 辅助函数 | 按 `list_range`（或 DataValidation）读非空单元格文本；**规划/激活阶段就必须完成**，供 WebUI 建 `select` |
+| 下拉选项读取 | `verify_toml` / 辅助函数 | 按 `list_range`（或 DataValidation，含 openpyxl 不直接支持的 `x14:dataValidations` 扩展区）读非空单元格文本；**规划/激活阶段就必须完成**，供 WebUI 建 `select` |
 | 公式格 | `ExcelWriter` + `verify_toml` | 写回**跳过** `cell_role=formula`；只读展示可用 `data_only` 缓存值（有限制，见「公式格」） |
 | regex 落盘 | `_toml_string` / `_needs_literal_string` | `regex` 默认单引号字面量；值含 `'` 时改双引号并转义反斜杠 |
 
@@ -647,12 +647,29 @@ id = false
 
 1. **向导 / 生成补全（可选自动）**：扫描 `work_sheet.data_validations`；对 `type = list` 且 `sqref` 与某字段 instance 0 值格相交者，预填 `ui_widget = "select"`、`list_range = <formula1 规范化>`。
 2. **`verify_toml`（必须）**：
-   - 对每个 `ui_widget = "select"` 的字段：若 `options` 非空则用之；否则解析 `list_range`，读取该矩形内**非空**单元格，按出现顺序去空白后得到选项列表。
+   - 优先按字段上的 `ui_widget = "select"` / `options` / `list_range` 读取选项；同时**自动检测值格是否命中工作表上的 DataValidation**（含旧版 `ws.data_validations` 与 openpyxl 不直接解析的 `x14:dataValidations` 扩展区）。
+   - 命中 `list` 类型验证时，解析其 `formula1`：支持内联列表 `"a,b,c"`、同表区域（如 `$E$12:$E$23`）以及**跨表区域**（如 `Data!$B$1:$B$8`）。
    - 写入报告 **`select_options[Input_label] = [...]`**（仅内存，不写回 TOML）。
    - `list_range` 无法解析或全空 → `invalid_list_range` / `errors`（是否硬失败由实现定；建议选项全空时告警仍让坐标 `ok` 可分开讨论，但 WebUI 必须能拿到列表——全空则控件无选项）。
 3. **WebUI**：构建 Input 区时**只消费** `select_options`（及字段上的 `ui_widget`），渲染下拉；用户选择后写入的是选项**字符串值**本身。
 4. **写回**：只写选中值到值格；**不修改**工作表上的 DataValidation 规则。
 5. **次轴展开**：选项源区域**不**随 `(i,j)` 平移；L2 / S2 / Z2 可共用同一 `list_range`（字段定义在 instance 0 的 L，j≥1 只平移值格）。
+
+### x14 DataValidation 扩展区（Excel 2007+ 扩展）
+
+部分 Excel 文件（如 `Lost&FoundRecord.xlsx`）把下拉列表保存在工作表 XML 的 `extLst/ext/x14:dataValidations` 中，而不是旧版 `ws.dataValidations.dataValidation` 节点里。openpyxl 目前会丢弃该扩展并发出 `Data Validation extension is not supported and will be removed` 警告。
+
+`core_toml.verify_toml` 对此做了兼容：
+
+- 在原有 `ws.dataValidations` 扫描未命中时，通过 `zipfile` 打开 xlsx，读取对应工作表的 XML，按 `workbook.xml.rels` 映射定位到正确的 `xl/worksheets/sheet{N}.xml`。
+- 解析 `x14:dataValidations/x14:dataValidation`，按 `type="list"` 与 `xm:sqref` 判断是否覆盖目标值格。
+- 解析 `x14:formula1/xm:f`：
+  - 内联列表 `"a,b,c"` → 直接拆分。
+  - 同表区域 → 用当前工作表读取。
+  - **跨表区域**（如 `Data!$B$1:$B$8`）→ 通过工作簿名解析到目标工作表后读取。
+- 结果同样写入报告 `select_options`，WebUI 据此渲染 `ui.select`，无需用户手动写 `list_range`。
+
+> 若 x14 公式引用范围包含标题行（如 `Data!$B$1:$B$8`），标题文本会作为首选项返回；这是模板数据决定的，引擎不做额外过滤。
 
 ### 示例
 

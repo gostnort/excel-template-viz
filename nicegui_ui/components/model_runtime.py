@@ -194,8 +194,8 @@ async def set_gemma_preload(enabled: bool, client: Client | None = None) -> bool
                 else:
                     ui.notify("Gemma4 预加载失败", type="negative")
         return ok
-    from nicegui_ui.components.wizard_ui import is_wizard_active, stop_wizard
-    if is_wizard_active():
+    from nicegui_ui.components.workflow_ui import is_workflow_active, stop_wizard
+    if is_workflow_active():
         await stop_wizard("Gemma4 已卸载，配置向导已结束")
     from llm_gemma4.__main__ import EndGemma
     await run.io_bound(EndGemma)

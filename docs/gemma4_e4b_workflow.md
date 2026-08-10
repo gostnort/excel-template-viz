@@ -1,5 +1,7 @@
 # Gemma 4 E4B · TOML Configuration Wizard (Application Spec)
 
+> **DEPRECATED** — superseded by [gemma4_dynamic_workflow.md](gemma4_dynamic_workflow.md). Fixed 8-step FSM removed.
+
 > Status: **v8.3** (Step 2 dialog: multi `input_area` + multi-select `move_to`; aligns UI with [`toml_config_design.md`](toml_config_design.md) list forms)  
 > Date: 2026-07-31  
 > Platform: [`embed_gemma4.md`](embed_gemma4.md) (`open_session` / `generate` / `StartGemma`)  

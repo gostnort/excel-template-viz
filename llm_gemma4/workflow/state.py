@@ -1,4 +1,4 @@
-"""向导内存状态结构（不落盘）。"""
+"""Workflow 状态结构：从 WizardState 迁移，新增中断 / 进度相关字段。"""
 
 from __future__ import annotations
 
@@ -23,32 +23,61 @@ class FieldState:
 
 
 @dataclass
-class WizardState:
+class WorkflowState:
+    # --- 从 wizard/state.py WizardState 复制的字段 ---
     current_step: int = 1
     template_id: str = ""
     template_path: Path | None = None
     data_sources: list[dict[str, str]] = field(default_factory=list)
     ghost_text_sample: str = ""
-    ghost_json_sample: dict | None = None
     sample_kind: str = ""
     determiner: str | list[str] = ""
     indexed_segments: dict[int, str] = field(default_factory=dict)
     preprocess_done: bool = False
     field_tasks_planned: bool = False
     planned_labels: list[str] = field(default_factory=list)
-    normalized_sample: str = ""
-    flat_kv: dict[str, str] = field(default_factory=dict)
     user_draft: dict[str, str] = field(default_factory=dict)
     google_sheet_headers: list[str] = field(default_factory=list)
     google_sheet_sample: list[list[Any]] = field(default_factory=list)
     template_labels: list[str] = field(default_factory=list)
     fields: dict[str, FieldState] = field(default_factory=dict)
-    # input_section：空 / offset<=0 表示尚未由用户步骤写入，落盘时保留模板底稿
     input_area: str | list[str] = ""
     move_to: str | list[str] = ""
     offset: int = 0
     db_id: str = ""
     is_finished: bool = False
-    trial_ok: bool = False
-    trial_mismatches: list[dict[str, str]] = field(default_factory=list)
     written_toml_path: str = ""
+    # --- workflow 新增字段（Phase B 使用）---
+    design_doc: str = ""
+    user_inputs: dict[str, Any] = field(default_factory=dict)
+    progress: dict[str, str] = field(default_factory=dict)
+    history: list[dict[str, Any]] = field(default_factory=list)
+    route_key: str = ""
+    pending_interrupt: dict[str, Any] | None = None
+
+
+@dataclass
+class InterruptPayload:
+    kind: str  # ask_sources | ask_layout | ask_sample | ask_db_id
+    expected_input: str
+    auto_chain: bool = False
+    meta: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ExecutorResult:
+    ok: bool
+    messages: list[str]
+    state_patch: dict[str, Any]
+    interrupt: InterruptPayload | None = None
+    route_key: str = ""
+
+
+@dataclass
+class Decision:
+    next_action: str
+    action_id: str
+    reason: str = ""
+    expected_input: str = ""
+    context_update: dict[str, Any] = field(default_factory=dict)
+    route_key: str = ""

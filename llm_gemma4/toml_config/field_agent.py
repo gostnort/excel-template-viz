@@ -1,4 +1,8 @@
-"""字段子 agent：pass1 普通推理，pass2 thinking 重试。"""
+"""字段子代理：pass1 普通推理，pass2 thinking 重试。
+
+Phase A: 从 wizard/field_agent.py 迁移，更新导入路径（wizard → toml_config）。
+thinking=True 仅允许 field_{label}_pass2 使用。
+"""
 
 from __future__ import annotations
 
@@ -9,8 +13,12 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from llm_gemma4.backends.base import LlmBackend, SessionOptions
-from llm_gemma4.wizard.parse_field_json import ParseFieldError, parse_field_json
-from llm_gemma4.wizard.prompts import STEP3_SYSTEM_PROMPT, STEP4_SYSTEM_PROMPT, STEP5_SYSTEM_PROMPT
+from llm_gemma4.toml_config.parse_field_json import ParseFieldError, parse_field_json
+from llm_gemma4.toml_config.prompts import (
+    STEP3_SYSTEM_PROMPT,
+    STEP4_SYSTEM_PROMPT,
+    STEP5_SYSTEM_PROMPT,
+)
 
 
 FieldTask = Literal["ghost", "sheet", "regex"]
@@ -24,7 +32,6 @@ class FieldAgentResult:
     used_thinking: bool = False
 
 
-
 def _session_send(
     backend: LlmBackend,
     session_id: str,
@@ -36,6 +43,21 @@ def _session_send(
     on_chat: Callable[[str, str], None] | None = None,
     chat_tag: str = "",
 ) -> str:
+    """
+    函数名: _session_send
+    作用: 发送单轮对话并记录日志，支持 thinking 模式
+    输入:
+        backend (LlmBackend): LLM 后端实例
+        session_id (str): 会话标识（唯一）
+        system_message (str): 系统提示词
+        user_content (str): 用户消息正文
+        thinking (bool): 是否启用 thinking
+        max_tokens (int): 最大输出 token 数
+        on_chat (Callable | None): 对话日志回调 (role, text)
+        chat_tag (str): 聊天标签（用于前缀）
+    输出:
+        str: 模型回复文本
+    """
     opts = SessionOptions(
         system_message=system_message,
         thinking=thinking,
@@ -89,7 +111,7 @@ def _apply_ghost_payload(
 ) -> tuple[str, int, bool]:
     """
     函数名: _apply_ghost_payload
-    作用: 从子 agent JSON 提取 ghost 匹配结果，并用 draft/segment 硬校验 match_type
+    作用: 从子代理 JSON 提取 ghost 匹配结果，并用 draft/segment 硬校验 match_type
     输入:
         field_payload (dict): 模型 JSON（含 match_type / index）
         draft (str): 用户草稿值
@@ -115,7 +137,7 @@ def _apply_sheet_payload(
 ) -> tuple[str, str, bool]:
     """
     函数名: _apply_sheet_payload
-    作用: 从子 agent JSON 提取 Sheet 列匹配，并用 label/列名硬校验 exact/fuzzy
+    作用: 从子代理 JSON 提取 Sheet 列匹配，并用 label/列名硬校验 exact/fuzzy
     输入:
         field_payload (dict): 模型 JSON（含 match_type / column_name|field）
         label (str): 模板 Input_label
@@ -159,7 +181,7 @@ def run_field_agent(
 ) -> FieldAgentResult:
     """
     函数名: run_field_agent
-    作用: 对单字段执行子 agent 推理；JSON 或 regex 回验失败时 pass2 thinking 重试
+    作用: 对单字段执行子代理推理；JSON 或 regex 回验失败时 pass2 thinking 重试
     输入:
         backend (LlmBackend): 底座实例
         task (FieldTask): ghost / sheet / regex

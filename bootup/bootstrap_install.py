@@ -13,11 +13,25 @@ BOOTUP = Path(__file__).resolve().parent
 ROOT = BOOTUP.parent
 PROFILE_PATH = BOOTUP / ".install_profile"
 VENV_DIR = BOOTUP / ".venv"
-UV_INSTALL_HINT = (
-    "Install uv first, then re-run:\n"
-    '  powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"\n'
-    "  https://docs.astral.sh/uv/getting-started/installation/"
-)
+def _uv_install_hint() -> str:
+    """
+    函数名: _uv_install_hint
+    作用: 按当前平台返回 uv 安装提示
+    输入: 无
+    输出:
+        str: 多行安装说明
+    """
+    if sys.platform == "win32":
+        return (
+            "Install uv first, then re-run:\n"
+            '  powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"\n'
+            "  https://docs.astral.sh/uv/getting-started/installation/"
+        )
+    return (
+        "Install uv first, then re-run:\n"
+        "  curl -LsSf https://astral.sh/uv/install.sh | sh\n"
+        "  https://docs.astral.sh/uv/getting-started/installation/"
+    )
 
 
 def _stream_run(
@@ -35,6 +49,7 @@ def _stream_run(
     输出:
         int: 进程退出码
     """
+    import re as _re_mod
     print(f">>> {' '.join(cmd)}", flush=True)
     proc = subprocess.Popen(
         cmd,
@@ -48,15 +63,16 @@ def _stream_run(
     installed_count = 0
     for line in proc.stdout:
         print(line, end="", flush=True)
-        # uv sync 在每行安装后会打印类似 "Installed X packages" 或包含新包名的行；
-        # 简单计数器：每看到以 "+" 开头且非注释的行，视为一个包的报告。
-        if line.startswith("+") and not line.startswith("#"):
-            installed_count += 1
+        # uv sync output mode:
+        #   - "Installed X packages" / "Installed X packages [X/Y]" -> increment by X
+        #   - Windows uv prints each installed package on a line starting with "+"
+        m = _re_mod.search(r"Installed\s+(\d+)\s+packages", line)
+        if m:
+            n = int(m.group(1))
+            installed_count += n
     rc = proc.wait()
-    print(f">>> Done (exit code {rc}, ~{installed_count} packages reported)", flush=True)
+    print(f">>> Done (exit code {rc}, {installed_count} packages installed)", flush=True)
     return rc
-
-
 def _run(cmd: list[str], *, cwd: Path | None = None) -> int:
     """
     函数名: _run
@@ -324,7 +340,7 @@ def main(argv: list[str] | None = None) -> int:
     uv = _uv_bin()
     if not uv:
         print("ERROR: uv not found on PATH.", flush=True)
-        print(UV_INSTALL_HINT, flush=True)
+        print(_uv_install_hint(), flush=True)
         return 1
     print(f"Using uv: {uv}", flush=True)
     if not args.no_venv:

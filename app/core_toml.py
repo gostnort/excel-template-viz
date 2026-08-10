@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import xml.etree.ElementTree as ET
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,6 +28,12 @@ OPTIONAL_FIELD_KEYS = ("field", "source_file", "source_sheet", "regex")
 VALID_DIRECTIONS = {"up", "down", "left", "right"}
 VERIFY_SCAN_ROWS = 100
 VERIFY_SCAN_COLS = 100
+# x14 DataValidation 命名空间
+_X14_NS = {
+    "main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+    "x14": "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main",
+    "xm": "http://schemas.microsoft.com/office/excel/2006/main",
+}
 # 单矩形：(min_row, min_col, max_row, max_col)，均为 1-based
 AreaRect = tuple[int, int, int, int]
 # 扁平 area / 场景2 嵌套 [[major...],[minor...]]
@@ -1347,6 +1355,137 @@ def _read_list_range_options(ws: Any, list_range: str) -> list[str] | None:
     return options
 
 
+def _read_list_range_options_from_ref(
+    wb: Any, formula: str, default_ws: Any
+) -> list[str] | None:
+    """
+    函数名: _read_list_range_options_from_ref
+    作用: 解析可能含跨表引用的 DataValidation 公式，并读取选项列表
+    输入:
+        wb (Any) - openpyxl 工作簿
+        formula (str) - 如 '"a,b,c"'、'Data!$B$1:$B$8'、'$E$2:$E$23'
+        default_ws (Any) - 未指定工作表时默认使用的工作表
+    输出:
+        list[str] | None - 选项列表；解析失败返回 None
+    """
+    text = str(formula or "").strip()
+    inline = _parse_inline_options(text)
+    if inline is not None:
+        return inline
+    if "!" in text:
+        sheet_part, range_part = text.split("!", 1)
+        sheet = sheet_part.strip().strip("'\"")
+    else:
+        sheet = getattr(default_ws, "title", None)
+        range_part = text
+    if not sheet:
+        return None
+    range_text = str(range_part or "").replace("$", "")
+    if not range_text:
+        return None
+    try:
+        target_ws = wb[sheet]
+    except Exception:
+        return None
+    return _read_list_range_options(target_ws, range_text)
+
+
+def _worksheet_xml_path(wb: Any, workbook_path: Path, sheet_title: str) -> str | None:
+    """
+    函数名: _worksheet_xml_path
+    作用: 通过 workbook.xml 与 workbook.xml.rels 把 sheet 名称映射到 xlsx 内 XML 路径
+    输入:
+        wb (Any) - openpyxl 工作簿（用于 sheet_title 匹配）
+        workbook_path (Path) - 工作簿文件路径
+        sheet_title (str) - 工作表名称
+    输出:
+        str | None - 如 'xl/worksheets/sheet1.xml'；失败返回 None
+    """
+    rels_ns = "http://schemas.openxmlformats.org/package/2006/relationships"
+    r_ns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    worksheet_rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
+    try:
+        with zipfile.ZipFile(workbook_path, "r") as zf:
+            rels_data = zf.read("xl/_rels/workbook.xml.rels")
+            rels_root = ET.fromstring(rels_data)
+            rid_to_target: dict[str, str] = {}
+            for rel in rels_root.findall(f"{{{rels_ns}}}Relationship"):
+                if rel.get("Type") == worksheet_rel:
+                    rid = rel.get("Id")
+                    target = rel.get("Target")
+                    if rid and target:
+                        rid_to_target[rid] = "xl/" + target.replace("\\", "/")
+            wb_data = zf.read("xl/workbook.xml")
+            wb_root = ET.fromstring(wb_data)
+            sheets = wb_root.find("main:sheets", _X14_NS)
+            if sheets is None:
+                return None
+            for sheet in sheets.findall("main:sheet", _X14_NS):
+                if sheet.get("name") == sheet_title:
+                    rid = sheet.get(f"{{{r_ns}}}id")
+                    return rid_to_target.get(rid)
+    except Exception:
+        return None
+    return None
+
+
+def _detect_cell_dropdown_x14(
+    ws: Any,
+    row: int,
+    col: int,
+    wb: Any,
+    workbook_path: Path,
+) -> list[str] | None:
+    """
+    函数名: _detect_cell_dropdown_x14
+    作用: 从 xlsx 的 x14:dataValidations 扩展区读取 list 类型下拉选项
+    输入:
+        ws (Any) - openpyxl 工作表
+        row (int) - 1-based 行
+        col (int) - 1-based 列
+        wb (Any) - openpyxl 工作簿
+        workbook_path (Path) - 工作簿文件路径
+    输出:
+        list[str] | None - 下拉选项；未命中返回 None
+    """
+    sheet_title = getattr(ws, "title", None)
+    if not wb or not workbook_path or not sheet_title:
+        return None
+    sheet_xml_path = _worksheet_xml_path(wb, workbook_path, sheet_title)
+    if not sheet_xml_path:
+        return None
+    try:
+        with zipfile.ZipFile(workbook_path, "r") as zf:
+            data = zf.read(sheet_xml_path)
+    except Exception:
+        return None
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError:
+        return None
+    ext = root.find("main:extLst/main:ext", _X14_NS)
+    if ext is None:
+        return None
+    dvs = ext.find("x14:dataValidations", _X14_NS)
+    if dvs is None:
+        return None
+    for dv in dvs.findall("x14:dataValidation", _X14_NS):
+        if dv.get("type") != "list":
+            continue
+        sqref_el = dv.find("xm:sqref", _X14_NS)
+        if sqref_el is None or not sqref_el.text:
+            continue
+        if not _cell_in_sqref(row, col, sqref_el.text):
+            continue
+        formula_el = dv.find("x14:formula1/xm:f", _X14_NS)
+        if formula_el is None or not formula_el.text:
+            continue
+        opts = _read_list_range_options_from_ref(wb, formula_el.text, ws)
+        if opts:
+            return opts
+    return None
+
+
 def _cell_in_sqref(row: int, col: int, sqref: str) -> bool:
     """
     函数名: _cell_in_sqref
@@ -1389,7 +1528,13 @@ def _parse_inline_options(formula1: str) -> list[str] | None:
     return None
 
 
-def _detect_cell_dropdown(ws: Any, row: int, col: int) -> list[str] | None:
+def _detect_cell_dropdown(
+    ws: Any,
+    row: int,
+    col: int,
+    wb: Any = None,
+    workbook_path: Path | None = None,
+) -> list[str] | None:
     """
     函数名: _detect_cell_dropdown
     作用: 运行时检测单元格是否命中工作表上的 list 类型 DataValidation，并返回选项列表
@@ -1397,28 +1542,30 @@ def _detect_cell_dropdown(ws: Any, row: int, col: int) -> list[str] | None:
         ws (Any) - openpyxl 工作表
         row (int) - 1-based 行
         col (int) - 1-based 列
+        wb (Any) - openpyxl 工作簿；用于解析跨表下拉源
+        workbook_path (Path | None) - 工作簿路径；用于解析 x14 扩展区
     输出:
         list[str] | None - 下拉选项；未命中或无法解析返回 None
     """
     validations = getattr(ws, "data_validations", None)
-    if not validations:
-        return None
-    for dv in getattr(validations, "dataValidation", []) or []:
-        if getattr(dv, "type", None) != "list":
-            continue
-        sqref = getattr(dv, "sqref", None)
-        if not sqref or not _cell_in_sqref(row, col, sqref):
-            continue
-        formula1 = getattr(dv, "formula1", None)
-        if not formula1:
-            continue
-        inline = _parse_inline_options(formula1)
-        if inline is not None:
-            return inline
-        opts = _read_list_range_options(ws, str(formula1))
-        if opts:
-            return opts
-    return None
+    if validations:
+        for dv in getattr(validations, "dataValidation", []) or []:
+            if getattr(dv, "type", None) != "list":
+                continue
+            sqref = getattr(dv, "sqref", None)
+            if not sqref or not _cell_in_sqref(row, col, sqref):
+                continue
+            formula1 = getattr(dv, "formula1", None)
+            if not formula1:
+                continue
+            inline = _parse_inline_options(formula1)
+            if inline is not None:
+                return inline
+            opts = _read_list_range_options(ws, str(formula1))
+            if opts:
+                return opts
+    # 回退到 x14 扩展区（openpyxl 不支持直接解析）
+    return _detect_cell_dropdown_x14(ws, row, col, wb, workbook_path)
 
 
 def _validate_field_regexes(cfg: GetTomlValues) -> list[str]:
@@ -1591,7 +1738,11 @@ def verify_toml(template_path: Path, cfg: GetTomlValues) -> dict[str, Any]:
             if not coord:
                 continue
             opts = _detect_cell_dropdown(
-                ws, coord["value_row"], coord["value_col"]
+                ws,
+                coord["value_row"],
+                coord["value_col"],
+                wb,
+                template_path,
             )
             if opts:
                 select_options[rule.Input_label] = opts

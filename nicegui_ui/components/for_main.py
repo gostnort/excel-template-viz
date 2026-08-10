@@ -175,18 +175,44 @@ class ForMain:
 
     @staticmethod
     def refresh_session_from_source(session, *, notify: bool = True) -> None:
-        """轻量级刷新：仅在模板即库模式下重载数据，避免清空独立库未导出的录入"""
+        """
+        函数名: refresh_session_from_source
+        作用: 刷新会话：重跑 verify_toml 更新校验报告，重建 ExcelWriter，模板即库模式下重载 instance 数据
+        输入:
+            session: 当前会话对象
+            notify (bool): 是否弹出提示通知；默认 True
+        输出: 无
+        """
         from nicegui import ui
-
-        if session.use_independent_db:
-            if notify:
-                ui.notify("独立库模式下刷新：保留当前内存列表", type="info")
-            return
-        if not session.writer or not session.template_path:
+        if not session.cfg or not session.template_path:
             if notify:
                 ui.notify("当前没有可刷新的模板", type="warning")
             return
         try:
+            # 重新执行 verify_toml，获取最新下拉选项/公式格/坐标
+            report = verify_toml(session.template_path, session.cfg)
+            session.verify_report = report
+            session.located = report.get("located", {}) or {}
+            # 用新的 located/formula_cells 重建 writer
+            session.writer = ExcelWriter(
+                session.cfg,
+                session.located,
+                formula_cells=report.get("formula_cells") or {},
+            )
+            session.input_capacity = session.writer.max_instance_count(
+                session.template_path
+            )
+            session.primary_span = int(
+                getattr(session.writer, "primary_span", 0) or 0
+            )
+            # 独立库模式：保留内存列表，只同步配置变化
+            if session.use_independent_db:
+                if notify:
+                    ui.notify(
+                        "独立库模式：配置已刷新，保留当前内存列表", type="info"
+                    )
+                return
+            # 模板即库模式：重载 instance 数据
             instances, masks = session.writer.read_instances(
                 session.template_path, limit=session.db_loaded_limit, reverse=True
             )
@@ -202,7 +228,16 @@ class ForMain:
             )
             session.draft.update(val)
             session.formula_mask = mask
-            _refresh_formula_draft(session)
+            # 按最新公式格重算 draft；UI 未就绪时回退到核心重算函数
+            try:
+                from nicegui_ui.pages.tab_input import _refresh_formula_draft
+                _refresh_formula_draft(session)
+            except Exception:
+                recompute_formula_draft_fields(
+                    session.draft,
+                    report.get("formula_cells") or {},
+                    session.located,
+                )
             session.delete_mode = False
             session.selected_instance_idx = None
             session.selected_instance_indices.clear()

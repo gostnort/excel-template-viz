@@ -1,15 +1,18 @@
-"""TOML 智能向导控制器（无 UI；由 wizard_ui 协调进程内向导）。"""
+"""TOML 工作流控制器（无 UI；由 workflow_ui 协调进程内工作流）。"""
 
 from __future__ import annotations
 
+import asyncio
+import time
+from pathlib import Path
 from typing import Any
 
 from nicegui import run, ui
 
 from nicegui_ui.components.model_runtime import ensure_gemma_loaded
 from llm_gemma4.__main__ import EndGemma, _get_backend
-from llm_gemma4.wizard.orchestrator import WizardOrchestrator
-from nicegui_ui.components.general import SessionRegistry
+from llm_gemma4.toml_config.workflow_orchestrator import WorkflowOrchestrator
+from nicegui_ui.components.general import Auth, SessionRegistry
 
 
 _controller_singleton: TomlWizardController | None = None
@@ -19,7 +22,7 @@ _controller_singleton: TomlWizardController | None = None
 def get_toml_wizard() -> TomlWizardController:
     """
     函数名: get_toml_wizard
-    作用: 返回模块级向导控制器单例
+    作用: 返回模块级工作流控制器单例
     输入: 无
     输出:
         TomlWizardController: 控制器实例
@@ -30,24 +33,46 @@ def get_toml_wizard() -> TomlWizardController:
     return _controller_singleton
 
 
+def get_workflow_controller() -> TomlWizardController:
+    """
+    函数名: get_workflow_controller
+    作用: get_toml_wizard 的 Phase D 别名
+    输入: 无
+    输出:
+        TomlWizardController: 控制器实例
+    """
+    return get_toml_wizard()
+
+
 
 class TomlWizardController:
     """
     类名: TomlWizardController
-    作用: 管理 WizardOrchestrator 生命周期与步骤调度，UI 由 wizard_ui 进程内引导
+    作用: 管理 WorkflowOrchestrator 生命周期与 tick 调度，UI 由 wizard_ui 进程内引导
     """
 
     def __init__(self) -> None:
-        self.orchestrator: WizardOrchestrator | None = None
+        self.orchestrator: WorkflowOrchestrator | None = None
         self.log_widget = None
         self.chat_widget = None
         self._log_history: list[str] = []
         self._chat_history: list[str] = []
         self._busy = False
         self._starting = False
+        self._stopping = False
         self.started = False
-        self.ui_step: int = 0
         self._client = None
+
+    @property
+    def is_stopping(self) -> bool:
+        """
+        函数名: is_stopping
+        作用: 是否正在请求停止（等待当前 tick 结束）
+        输入: 无
+        输出:
+            bool: 停止流程进行中为 True
+        """
+        return self._stopping
 
     @property
     def chat_text(self) -> str:
@@ -224,7 +249,7 @@ class TomlWizardController:
             if self.chat_widget is not None:
                 self._sync_chat_widget()
             else:
-                from nicegui_ui.components.wizard_ui import _schedule_sidebar_refresh
+                from nicegui_ui.components.workflow_ui import _schedule_sidebar_refresh
                 _schedule_sidebar_refresh(client)
 
     def bind_log(self, log_widget) -> None:
@@ -279,7 +304,7 @@ class TomlWizardController:
         if session.ui_provider:
             return session.ui_provider.get_labels()
         if session.template_path:
-            from llm_gemma4.wizard.template_labels import list_template_labels
+            from llm_gemma4.toml_config.template_labels import list_template_labels
             return list_template_labels(session.template_path)
         return []
 
@@ -329,11 +354,20 @@ class TomlWizardController:
             self._starting = False
         backend = _get_backend()
         health = backend.health_check()
+        principal = Auth.resolve_principal()
+        thread_id = f"{principal.principal_id}:workflow"
         # 新建向导会话时清空上次对话/日志残留
         self.clear_histories()
-        self.orchestrator = WizardOrchestrator(
+        self.orchestrator = WorkflowOrchestrator(
             backend, on_progress=self._log, on_chat=self._chat,
             on_match_notify=self._match_notify,
+            thread_id=thread_id,
+        )
+        labels = self.template_labels()
+        self.orchestrator.init_workflow(
+            session.template_id,
+            Path(session.template_path),
+            labels,
         )
         self._log("向导已启动，Engine profile=" + health.litert_backend)
         if not health.ok:
@@ -341,21 +375,22 @@ class TomlWizardController:
         self.started = True
         return True
 
-    async def run_step(self, step: int, payload: dict[str, Any]):
+    async def run_turn(self, payload: dict[str, Any] | None = None):
         """
-        函数名: run_step
-        作用: 在 worker 线程执行 orchestrator.advance
+        函数名: run_turn
+        作用: 在 worker 线程执行 orchestrator.tick
         输入:
-            step (int): 步骤 1–8
-            payload (dict): 步骤数据
+            payload (dict | None): 步骤/恢复数据
         输出:
-            WizardOrchestrator | None: 成功时返回 orchestrator
+            WorkflowOrchestrator | None: 成功时返回 orchestrator
         """
-        if self._busy or self.orchestrator is None:
+        if self._stopping or self._busy or self.orchestrator is None:
             return None
         self._busy = True
         try:
-            await run.io_bound(self.orchestrator.advance, step, payload)
+            await run.io_bound(self.orchestrator.tick, payload or {})
+            if self._stopping:
+                return None
             return self.orchestrator
         except Exception as exc:
             self._log(f"错误: {exc}")
@@ -363,10 +398,29 @@ class TomlWizardController:
         finally:
             self._busy = False
 
-    def stop(self) -> None:
+    def _persist_workflow_toml(self) -> None:
         """
-        函数名: stop
-        作用: 关闭 orchestrator 并释放 Gemma 模型
+        函数名: _persist_workflow_toml
+        作用: 停止前将 orchestrator 内已匹配字段写入 TOML，避免中断退出丢进度
+        输入: 无
+        输出: 无
+        """
+        if self.orchestrator is None:
+            return
+        st = self.orchestrator.state
+        tid = str(st.template_id or "").strip()
+        if not tid:
+            return
+        try:
+            from llm_gemma4.toml_config.toml_patcher import persist_wizard_toml
+            persist_wizard_toml(st, tid)
+        except Exception as exc:
+            self._log(f"停止前 TOML 保存失败: {exc}")
+
+    def _release_gemma(self) -> None:
+        """
+        函数名: _release_gemma
+        作用: 关闭 orchestrator 并释放 Gemma 模型（假定无进行中的 tick）
         输入: 无
         输出: 无
         """
@@ -379,9 +433,41 @@ class TomlWizardController:
         self.clear_histories()
         EndGemma()
         self.started = False
-        self.ui_step = 0
         from nicegui_ui.components.model_runtime import sync_model_runtime_ui
         sync_model_runtime_ui()
+
+    async def stop_async(self, timeout: float = 300.0) -> None:
+        """
+        函数名: stop_async
+        作用: 等待当前 tick 结束后再释放 Gemma，避免 worker 与 EndGemma 竞态
+        输入:
+            timeout (float): 等待 tick 结束的最长秒数
+        输出: 无
+        """
+        if not self.started and self.orchestrator is None and not self._busy:
+            return
+        self._stopping = True
+        deadline = time.monotonic() + timeout
+        while self._busy or self._starting:
+            if time.monotonic() >= deadline:
+                self._log("停止超时：仍有任务执行中，将强制释放 Gemma")
+                break
+            await asyncio.sleep(0.05)
+        self._persist_workflow_toml()
+        self._release_gemma()
+        self._stopping = False
+
+    def stop(self) -> None:
+        """
+        函数名: stop
+        作用: 同步停止入口（优先使用 stop_async）；无事件循环时直接释放
+        输入: 无
+        输出: 无
+        """
+        self._stopping = True
+        self._persist_workflow_toml()
+        self._release_gemma()
+        self._stopping = False
 
     def has_google_sheet_source(self) -> bool:
         """

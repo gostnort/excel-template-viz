@@ -32,6 +32,15 @@ from .core_toml import (
 
 logger = logging.getLogger(__name__)
 
+# ── Print-rendering constants (300 DPI 打印方案) ────────────────
+PRINT_TARGET_DPI: float = 300.0          # 目标输出 DPI（印刷品质）
+SCREEN_REF_DPI: float = 96.0             # 屏幕参考 DPI，与 _column_pixel_width width*7 模型对齐
+ROW_HEIGHT_FACTOR: float = 1.33          # 行高像素缩放因子，与 _row_pixel_height 一致
+MAX_PRINT_PIXEL: int = 6000              # 单边像素上限，防 OOM
+MAX_PRINT_SCALE: float = 12.0            # scale 上限
+DEFAULT_COL_WIDTH_CHARS: float = 8.43    # 列宽缺省字符数
+DEFAULT_ROW_HEIGHT_PT: float = 15.0      # 行高缺省 pt（OOXML）
+
 
 def _cell_empty(value: Any) -> bool:
     """单元格无有效文本内容时视为空。"""
@@ -229,6 +238,76 @@ def _area_display_label(sheet_name: str, area: str, cells: list[list[str]]) -> s
     if preview:
         return f"{base} ({preview})"
     return base
+
+
+
+def _column_width_inches(ws: Any, col_idx: int) -> float:
+    """
+    Excel 列宽（字符单位）→ 物理英寸。
+
+    输入:
+        ws: openpyxl Worksheet
+        col_idx (int): 1-based 列号
+    输出:
+        float: 英寸，缺省按 8.43 字符 × 7 px/字符 ÷ SCREEN_REF_DPI 计算
+    """
+    letter = get_column_letter(col_idx)
+    dim = ws.column_dimensions.get(letter)
+    width = dim.width if dim is not None and dim.width is not None else DEFAULT_COL_WIDTH_CHARS
+    # physical_width ≈ width_chars × px_per_char / SCREEN_REF_DPI
+    return width * 7.0 / SCREEN_REF_DPI
+
+
+def _row_height_inches(ws: Any, row_idx: int) -> float:
+    """
+    Excel 行高（pt）→ 物理英寸。
+
+    OOXML 点定义：1 in = 72 pt。
+
+    输入:
+        ws: openpyxl Worksheet
+        row_idx (int): 1-based 行号
+    输出:
+        float: 英寸，缺省按 15.0 pt ÷ 72 计算
+    """
+    dim = ws.row_dimensions.get(row_idx)
+    height = dim.height if dim is not None and dim.height is not None else DEFAULT_ROW_HEIGHT_PT
+    return height / 72.0
+
+
+def _area_physical_inches(ws: Any, area: str) -> tuple[float, float]:
+    """
+    对 A1 区域累加列宽、行高得到总物理尺寸。
+
+    输入:
+        ws: openpyxl Worksheet
+        area (str): A1 区域，如 "A1:C5"
+    输出:
+        tuple[float, float]: (phys_width_in, phys_height_in)
+    """
+    min_col, min_row, max_col, max_row = range_boundaries(area)
+    phys_w = sum(_column_width_inches(ws, c) for c in range(min_col, max_col + 1))
+    phys_h = sum(_row_height_inches(ws, r) for r in range(min_row, max_row + 1))
+    return phys_w, phys_h
+
+
+def _area_pixel_size_at_scale(ws: Any, area: str, scale: float) -> tuple[int, int]:
+    """
+    在给定 scale 下计算区域像素总宽高（与 render_print_area_image 一致）。
+
+    输入:
+        ws: openpyxl Worksheet
+        area (str): A1 区域
+        scale (float): 像素缩放因子
+    输出:
+        tuple[int, int]: (pixel_w, pixel_h)
+    """
+    min_col, min_row, max_col, max_row = range_boundaries(area)
+    col_widths = [_column_pixel_width(ws, c, scale) for c in range(min_col, max_col + 1)]
+    row_heights = [_row_pixel_height(ws, r, scale) for r in range(min_row, max_row + 1)]
+    img_w = sum(col_widths) + 2
+    img_h = sum(row_heights) + 2
+    return img_w, img_h
 
 
 def _column_pixel_width(ws: Any, col_idx: int, scale: float) -> int:
@@ -1183,6 +1262,60 @@ class ExcelWriter:
         finally:
             wb.close()
 
+    def resolve_print_render_params(
+        self,
+        excel_path: Path,
+        sheet_name: str,
+        area: str,
+        target_dpi: float = PRINT_TARGET_DPI,
+    ) -> tuple[float, float, float]:
+        """
+        为 target_dpi 打印计算 scale 与物理英寸尺寸。
+
+        输入:
+            excel_path (Path): xlsx
+            sheet_name (str): 工作表名
+            area (str): A1 区域，如 "A1:C5"
+            target_dpi (float): 目标 DPI，默认 300
+        输出:
+            tuple[float, float, float]: (scale, phys_width_in, phys_height_in)
+        """
+        wb = load_workbook(excel_path, data_only=True)
+        try:
+            ws = wb[sheet_name]
+            # Step 1: physical inches
+            phys_w, phys_h = _area_physical_inches(ws, area)
+            if phys_w <= 0 or phys_h <= 0:
+                # fallback: use default estimates based on area size
+                min_col, min_row, max_col, max_row = range_boundaries(area)
+                phys_w = (max_col - min_col + 1) * DEFAULT_COL_WIDTH_CHARS * 7.0 / SCREEN_REF_DPI
+                phys_h = (max_row - min_row + 1) * DEFAULT_ROW_HEIGHT_PT / 72.0
+
+            # Step 2: pixel size at scale=1.0 (same model as render_print_area_image)
+            px_w, px_h = _area_pixel_size_at_scale(ws, area, scale=1.0)
+
+            # Step 3: compute scale to reach target DPI in both dimensions
+            target_w = phys_w * target_dpi
+            target_h = phys_h * target_dpi
+            scale = max(target_w / px_w, target_h / px_h) if (px_w > 0 and px_h > 0) else PRINT_TARGET_DPI / SCREEN_REF_DPI
+
+            # Step 4: clamp by pixel cap
+            scaled_px_w = px_w * scale
+            scaled_px_h = px_h * scale
+            if max(scaled_px_w, scaled_px_h) > MAX_PRINT_PIXEL:
+                scale = min(scale, MAX_PRINT_PIXEL / max(px_w, px_h))
+                logger.warning(
+                    "Print area too large; downscaled: phys=(%.2f, %.2f)in -> pixels (%d x %d)",
+                    phys_w, phys_h, scaled_px_w, scaled_px_h,
+                )
+
+            # Step 5: clamp by scale cap
+            scale = min(scale, MAX_PRINT_SCALE)
+
+            return (scale, phys_w, phys_h)
+        finally:
+            wb.close()
+
     def render_print_area_image(
         self,
         excel_path: Path,
@@ -1245,11 +1378,19 @@ class ExcelWriter:
         sheet_name: str,
         area: str,
         scale: float = 2.5,
+        target_dpi: float | None = None,
     ) -> bytes:
-        """render_print_area_image 的 PNG 字节流（内存，不落盘）。"""
+        """
+        render_print_area_image 的 PNG 字节流（内存，不落盘）。
+
+        可选 target_dpi：写入 PNG pHYs chunk 元数据。
+        浏览器打印仍依赖 CSS 物理尺寸定位；DPI 仅辅助。"""
         image = self.render_print_area_image(excel_path, sheet_name, area, scale=scale)
         buffer = BytesIO()
-        image.save(buffer, format="PNG")
+        save_kw: dict[str, Any] = {"format": "PNG"}
+        if target_dpi is not None:
+            save_kw["dpi"] = (target_dpi, target_dpi)
+        image.save(buffer, **save_kw)
         return buffer.getvalue()
 
 

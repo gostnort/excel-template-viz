@@ -795,6 +795,11 @@ body .q-dialog__inner > div {
 }
 
 /* 打印预览：仅输出图像区域 */
+/* 屏显：对话框内预览可见 */
+.excel-print-image-screen {
+  max-width: 100%;
+  height: auto;
+}
 @media print {
   body * { visibility: hidden; }
   .excel-print-sheet, .excel-print-sheet * { visibility: visible; }
@@ -806,6 +811,14 @@ body .q-dialog__inner > div {
     border: none;
     box-shadow: none;
   }
-  .excel-print-image { max-width: 100%; height: auto; }
+  /* 打印时按物理尺寸输出，避免 max-width 导致模糊 */
+  .excel-print-image {
+    width: var(--print-w, auto);
+    height: var(--print-h, auto);
+    max-width: none;
+    max-height: none;
+    object-fit: fill;
+  }
+  /* 非打印元素隐藏 */
   .no-print { display: none; }
 }

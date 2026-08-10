@@ -60,26 +60,41 @@ def _silence_native_logs(lm_module) -> None:
 
 
 
-def _probe_npu_exists() -> bool:
+def _openvino_npu_device_names() -> list[str]:
     """
-    函数名: _probe_npu_exists
-    作用: 最轻量 Intel 加速设备探测（不构造 litert_lm Backend）
+    函数名: _openvino_npu_device_names
+    作用: 通过 OpenVINO 枚举 NPU 设备名（Windows / Linux 通用，需已装驱动与 openvino）
     输入: 无
     输出:
-        bool: OpenVINO 报告有可用加速设备时为 True
+        list[str]: 可用 NPU 设备标识列表，无 openvino 或无 NPU 时为空
     """
     try:
         import openvino as ov
-        return bool(ov.Core().available_devices())
+        devices = ov.Core().available_devices()
+        return [d for d in devices if str(d).upper().startswith("NPU")]
     except ImportError:
-        return False
+        return []
     except Exception:
-        return False
+        return []
+
+
+def _probe_npu_exists() -> bool:
+    """
+    函数名: _probe_npu_exists
+    作用: 轻量探测是否存在 Intel NPU（不构造 litert_lm Engine）
+    输入: 无
+    输出:
+        bool: OpenVINO 报告有 NPU 设备时为 True
+    """
+    return bool(_openvino_npu_device_names())
 
 
 
 def probe_npu_backend() -> "lm.Backend | None":
     """Cheap probe: constructing NPU() itself performs the OpenVINO/device check."""
+    if not _probe_npu_exists():
+        _log.info("NPU backend skipped: no OpenVINO NPU device")
+        return None
     import litert_lm as lm
     _silence_native_logs(lm)
     try:
@@ -146,5 +161,7 @@ def planned_backend_hint(profile: str) -> str:
     if forced is not None:
         return forced
     if _probe_npu_exists():
-        return "npu"
+        names = _openvino_npu_device_names()
+        suffix = f" ({', '.join(names)})" if names else ""
+        return f"npu{suffix}"
     return "gpu (unconfirmed, falls back to cpu)"

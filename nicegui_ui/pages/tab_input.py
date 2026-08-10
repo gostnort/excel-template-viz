@@ -1,6 +1,7 @@
 import base64
 from pathlib import Path
 from datetime import datetime
+import base64
 from typing import Any
 
 from nicegui import ui
@@ -143,15 +144,39 @@ def _find_print_area_entry(
     return None
 
 
-def _open_print_preview(png_bytes: bytes, download_name: str) -> None:
-    """内存 PNG → 预览对话框；浏览器 window.print 或 PNG 下载（不落盘）。"""
+def _open_print_preview(
+    png_bytes: bytes,
+    download_name: str,
+    phys_width_in: float = 8.0,
+    phys_height_in: float = 11.0,
+) -> None:
+    """
+    内存 PNG → 预览对话框；浏览器 window.print() 或 PNG 下载（不落盘）。
+
+    输入:
+        png_bytes (bytes): PNG 字节流
+        download_name (str): 下载文件名
+        phys_width_in (float): 物理宽度（英寸），打印时用于 CSS 定位
+        phys_height_in (float): 物理高度（英寸），打印时用于 CSS 定位
+
+    浏览器打印依赖 CSS `var(--print-w/h)` 英寸定位，避免 max-width:100% 导致模糊。
+    """
     data_url = "data:image/png;base64," + base64.b64encode(png_bytes).decode("ascii")
-    with ui.dialog() as dialog, ui.card().classes("excel-print-sheet w-full max-w-5xl"):
+    with ui.dialog() as dialog, ui.card().classes(
+        "excel-print-sheet w-full max-w-5xl"
+    ):
         ui.label("打印预览").classes("text-h6 no-print")
-        ui.image(data_url).classes("w-full excel-print-image")
+        img = ui.image(data_url).classes(
+            "w-full excel-print-image excel-print-image-screen"
+        ).style(
+            f"--print-w: {phys_width_in}in; --print-h: {phys_height_in}in;"
+        )
         with ui.row().classes("w-full justify-end gap-2 mt-2 no-print"):
             AppBtn("关闭", on_click=dialog.close)
-            AppBtn("下载 PNG", on_click=lambda: ui.download(png_bytes, download_name))
+            AppBtn(
+                "下载 PNG",
+                on_click=lambda: ui.download(png_bytes, download_name),
+            )
             AppBtn(
                 "打印",
                 variant="excel",
@@ -696,10 +721,10 @@ def render_input_tab():
             if not str(raw).strip():
                 return
             _sync_ghost_paste(session, str(raw))
-            from nicegui_ui.components.wizard_ui import is_wizard_active
+            from nicegui_ui.components.workflow_ui import is_workflow_active
 
-            # 配置向导步骤 2：仅缓存样本，不触发自动拆分填入字段
-            if is_wizard_active():
+            # 工作流进行中：仅缓存样本，不触发自动拆分填入字段
+            if is_workflow_active():
                 return
             try:
                 incoming = ui_provider.record_from_textbox(str(raw))
@@ -788,6 +813,9 @@ def render_input_tab():
 
                     ForMain.refresh_session_from_source(session)
                     render_input_tab.refresh()
+                    from nicegui_ui.pages.tab_db import render_db_tab
+
+                    render_db_tab.refresh()
 
                 AppBtn("刷新数据", variant="excel", on_click=on_refresh)
                 if getattr(session, "delete_mode", False):
@@ -1202,8 +1230,27 @@ def handle_save_as(session):
     except Exception as e:
         ui.notify(f"保存失败: {str(e)}", type="negative")
 
+def _sanitize_filename(name: str) -> str:
+    """Sanitize a filename for Windows and browser compatibility."""
+    for ch in [":", chr(92), "/", "*", "?", chr(34)]:
+        name = name.replace(ch, "_")
+    return name.strip()
+
+
 
 def handle_print(session, selected_label, export_path: Path | None = None) -> None:
+    """
+    处理打印请求：栅格化 print_sheet 上的 print_area，通过浏览器 window.print() 输出。
+
+    不启动 Excel、不创建临时 xlsx。打印逻辑与 docs/toml_config_design.md §print_sheet
+    一致，但实现方式由「激活工作表」改为「栅格化 print_area」。
+
+    输入:
+        session: 当前会话
+        selected_label (str): 用户选中的打印区标签
+        export_path (Path | None): 可选的已导出文件路径
+    """
+    # Step 1: resolve export path
     path = Path(export_path) if export_path else None
     if path is None and session.last_export_path:
         path = Path(session.last_export_path)
@@ -1211,13 +1258,50 @@ def handle_print(session, selected_label, export_path: Path | None = None) -> No
         ui.notify("请先成功执行【保存】", type="warning")
         return
 
-    import os
+    # Step 2: engine readiness
+    writer = getattr(session, "writer", None)
+    if writer is None:
+        ui.notify("引擎未就绪，无法打印", type="negative")
+        return
 
-    if os.name == "nt":
-        try:
-            os.startfile(str(path), "print")
-            ui.notify("已发送至本地打印机", type="positive")
-        except Exception as e:
-            ui.notify(f"打印失败: {str(e)}", type="negative")
-    else:
-        ui.notify("自动打印仅支持 Windows 系统", type="warning")
+    # Step 3: resolve print areas from the loaded workbook
+    areas = _resolve_print_areas(session, path)
+    if not areas:
+        ui.notify("未找到打印区域配置（print_sheet）", type="warning")
+        return
+
+    # Step 4: validate selected label
+    if selected_label == "（无打印区）":
+        ui.notify("请选择有效打印区域", type="warning")
+        return
+
+    # Step 5: find the matched print area entry
+    entry = _find_print_area_entry(areas, selected_label)
+    if entry is None:
+        ui.notify("未找到匹配的打印区域，请重试", type="negative")
+        return
+
+    sheet_name = str(entry["sheet"])
+    area = str(entry["area"])
+
+    # Step 6: compute scale + physical dimensions for 300 DPI rendering
+    try:
+        scale, phys_w, phys_h = writer.resolve_print_render_params(
+            path, sheet_name, area, target_dpi=300.0,
+        )
+        png_bytes = writer.render_print_area_png_bytes(
+            path, sheet_name, area, scale=scale, target_dpi=300.0,
+        )
+    except Exception as exc:
+        ui.notify(f"渲染打印区域失败: {exc}", type="negative")
+        return
+
+    # Step 7: sanitize download name and open preview
+    download_name = _sanitize_filename(
+        f"{path.stem}_{sheet_name}_{area}.png"
+    )
+
+    # Step 8: open print preview in browser
+    _open_print_preview(png_bytes, download_name, phys_w, phys_h)
+
+    ui.notify("已打开打印预览", type="positive")

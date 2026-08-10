@@ -171,7 +171,7 @@ def render_shell():
 
             @ui.refreshable
             def render_wizard_sidebar_section():
-                from nicegui_ui.components.wizard_ui import render_wizard_sidebar_chat
+                from nicegui_ui.components.workflow_ui import render_wizard_sidebar_chat
 
                 render_wizard_sidebar_chat()
 
@@ -196,9 +196,9 @@ def render_shell():
 
                     async def on_click(e, tid=t_id):
                         from nicegui_ui.components.for_main import ForMain
-                        from nicegui_ui.components.wizard_ui import is_wizard_active, stop_wizard
+                        from nicegui_ui.components.workflow_ui import is_workflow_active, stop_wizard
 
-                        if is_wizard_active():
+                        if is_workflow_active():
                             await stop_wizard("模板已切换，向导已结束")
                         path = registry.TemplateIDs.get(tid)
                         if path:
@@ -251,13 +251,13 @@ def render_shell():
 
         @ui.refreshable
         def render_wizard_chrome():
-            from nicegui_ui.components.wizard_ui import render_wizard_fab
+            from nicegui_ui.components.workflow_ui import render_wizard_fab
 
             render_wizard_fab()
 
         render_wizard_chrome()
 
-        from nicegui_ui.components.wizard_ui import register_shell
+        from nicegui_ui.components.workflow_ui import register_shell
 
         register_shell(
             switch_tab=switch_tab,

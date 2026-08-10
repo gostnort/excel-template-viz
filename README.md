@@ -22,8 +22,17 @@
 
 ### 一键安装（推荐）
 
+Windows:
+
 ```bat
 install.bat
+```
+
+Linux / macOS:
+
+```bash
+chmod +x install.sh run.sh
+./install.sh
 ```
 
 等价于 `python bootup/bootstrap_install.py`，流程：
@@ -64,8 +73,16 @@ uv run --project bootup python -m nicegui_ui.app
 
 ### 启动
 
+Windows:
+
 ```powershell
 .\run.ps1
+```
+
+Linux / macOS:
+
+```bash
+./run.sh
 ```
 
 或：
