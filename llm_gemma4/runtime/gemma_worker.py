@@ -107,3 +107,29 @@ async def await_gemma_thread(fn: Callable[..., T], /, *args: Any, **kwargs: Any)
     """
     future = run_on_gemma_thread(fn, *args, **kwargs)
     return await asyncio.wrap_future(future)
+
+
+
+def shutdown_gemma_worker(timeout: float | None = 30.0) -> None:
+    """
+    函数名: shutdown_gemma_worker
+    作用: 在 EndGemma 等工作线程任务完成后，发送停止信号并 join 工作线程
+    输入:
+        timeout (float | None): join 最长等待秒数；None 表示一直等待
+    输出: 无
+    """
+    global _queue, _thread
+    with _lock:
+        if _thread is None or not _thread.is_alive():
+            _queue = None
+            _thread = None
+            return
+        q = _queue
+        th = _thread
+    if q is not None:
+        q.put(_STOP)
+    if th is not None:
+        th.join(timeout=timeout)
+    with _lock:
+        _queue = None
+        _thread = None

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -13,6 +15,9 @@ from nicegui.client import Client
 _refresh_runtime: Callable[[], None] | None = None
 _gemma_loading = False
 _vl_loading = False
+_models_released = False
+_release_lock = threading.Lock()
+_shutdown_hooks_registered = False
 
 
 
@@ -26,6 +31,7 @@ def register_runtime_refresh(refresh: Callable[[], None]) -> None:
     """
     global _refresh_runtime
     _refresh_runtime = refresh
+    _register_shutdown_hooks()
 
 
 
@@ -271,13 +277,72 @@ async def set_vl_preload(enabled: bool, client: Client | None = None) -> bool:
 
 
 
-def shutdown_application() -> None:
+def release_all_models_sync() -> None:
     """
-    函数名: shutdown_application
-    作用: 关闭 NiceGUI 服务进程
+    函数名: release_all_models_sync
+    作用: 进程退出前同步释放 Gemma / Paddle-VL 占用的显存与内存（可重复调用）
     输入: 无
     输出: 无
     """
+    global _models_released
+    with _release_lock:
+        if _models_released:
+            return
+        _models_released = True
+    # 中文注释: 先结束配置向导，避免 tick 与 EndGemma 竞态
+    try:
+        from nicegui_ui.components.workflow_ui import is_workflow_active
+        from nicegui_ui.components.toml_wizard import get_toml_wizard
+        wizard = get_toml_wizard()
+        if is_workflow_active() or wizard.started or wizard.orchestrator is not None:
+            wizard.stop()
+        elif is_gemma_loaded():
+            from llm_gemma4.__main__ import EndGemma
+            from llm_gemma4.runtime.gemma_worker import run_on_gemma_thread_blocking
+            run_on_gemma_thread_blocking(EndGemma)
+    except Exception:
+        pass
+    # 中文注释: 卸载 Paddle-VL（若已预加载）
+    try:
+        if is_vl_loaded():
+            from paddle_ocr.engines.paddle_vl.backend import ResetVlBackend
+            ResetVlBackend()
+    except Exception:
+        pass
+    # 中文注释: EndGemma 完成后停止 Gemma 工作线程
+    try:
+        from llm_gemma4.runtime.gemma_worker import shutdown_gemma_worker
+        shutdown_gemma_worker()
+    except Exception:
+        pass
+
+
+
+def _register_shutdown_hooks() -> None:
+    """
+    函数名: _register_shutdown_hooks
+    作用: 注册 NiceGUI on_shutdown 与 atexit 兜底，确保退出时释放模型显存
+    输入: 无
+    输出: 无
+    """
+    global _shutdown_hooks_registered
+    with _release_lock:
+        if _shutdown_hooks_registered:
+            return
+        _shutdown_hooks_registered = True
+    app.on_shutdown(release_all_models_sync)
+    atexit.register(release_all_models_sync)
+
+
+
+def shutdown_application() -> None:
+    """
+    函数名: shutdown_application
+    作用: 释放模型资源后关闭 NiceGUI 服务进程
+    输入: 无
+    输出: 无
+    """
+    release_all_models_sync()
     app.shutdown()
 
 
@@ -325,3 +390,6 @@ def render_runtime_controls(*, show_shutdown: bool = True) -> None:
         vl_switch.on("update:model-value", _on_vl)
         if show_shutdown:
             AppBtn("关闭程序", on_click=shutdown_application, extra_classes="app-btn-shutdown")
+
+
+_register_shutdown_hooks()
