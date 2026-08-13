@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import Any
 
@@ -45,12 +46,14 @@ def _resolve_client(client: Client | None) -> Client | None:
 
 
 def _schedule_runtime_refresh(client: Client | None) -> None:
-    resolved = _resolve_client(client)
-    if resolved is None:
+    _ = client
+    async def _run() -> None:
+        await asyncio.sleep(0.05)
         _refresh_runtime_safe()
-        return
-    with resolved:
-        ui.timer(0.05, _refresh_runtime_safe, once=True)
+    try:
+        asyncio.get_running_loop().create_task(_run())
+    except RuntimeError:
+        _refresh_runtime_safe()
 
 
 
@@ -159,7 +162,8 @@ async def ensure_gemma_loaded(*, notify: bool = True, client: Client | None = No
             progress = ui.notification("正在加载 Gemma4…", spinner=True, type="ongoing")
     try:
         from llm_gemma4.__main__ import StartGemma
-        await run.io_bound(StartGemma)
+        # LiteRT GPU 须在主事件循环线程预热，io_bound 线程池会触发原生崩溃
+        StartGemma()
         return is_gemma_loaded()
     except Exception:
         return False

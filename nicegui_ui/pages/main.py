@@ -203,6 +203,8 @@ def render_shell():
                         path = registry.TemplateIDs.get(tid)
                         if path:
                             ForMain.load_template(tid, path)
+                            from nicegui_ui.pages.tab_input import clear_ghost_cache
+                            clear_ghost_cache(session)
                             render_template_name.refresh()
                             render_sidebar_list.refresh()
                             from nicegui_ui.pages.tab_input import render_input_tab

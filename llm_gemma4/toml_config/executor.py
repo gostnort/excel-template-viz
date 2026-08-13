@@ -5,21 +5,20 @@ Phase A: 从 wizard/orchestrator.py 逐步骤 lift，每个 action 独立调用�
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from typing import Any
 
 from llm_gemma4.backends.base import LlmBackend
 from llm_gemma4.toml_config.field_agent import (
+    _resolve_ghost_index,
+    _segment_matches_draft,
     run_field_agent,
 )
 from llm_gemma4.toml_config.intake_plan import already_captured, intake_key_for_action
-from llm_gemma4.toml_config.parse_field_json import ParseFieldError, parse_field_json
-from llm_gemma4.toml_config.prompts import (
-    PLAN_GHOST_TASKS_PROMPT,
-)
 from llm_gemma4.toml_config.sample_preprocess import build_indexed_segments
 from llm_gemma4.toml_config.toml_patcher import persist_wizard_toml
-from llm_gemma4.workflow.parallel import map_send
+from llm_gemma4.workflow.parallel import map_run_sequential
 from llm_gemma4.workflow.state import (
     Decision,
     ExecutorResult,
@@ -44,6 +43,35 @@ def _progress_patch(state: WorkflowState, *keys: str, status: str = "done") -> d
     for key in keys:
         progress[key] = status
     return {"progress": progress}
+
+
+def _resolve_draft_index(
+    indexed: dict[int, str],
+    draft_val: str,
+    preferred_idx: int = -1,
+    *,
+    label: str = "",
+) -> tuple[int, str]:
+    """
+    函数名: _resolve_draft_index
+    作用: 在 index 字典中定位 draft 值段；Gemma 误选标签 index 时回退到值段
+    输入:
+        indexed (dict[int, str]): 预处理段字典
+        draft_val (str): 用户草稿值
+        preferred_idx (int): Gemma 返回的候选 index
+        label (str): Input_label（用于 label→value 邻接纠正）
+    输出:
+        tuple[int, str]: (index, segment_text)
+    """
+    resolved = _resolve_ghost_index(
+        preferred_idx,
+        label=label,
+        draft=draft_val,
+        indexed_segments=indexed,
+    )
+    if resolved >= 0:
+        return resolved, str(indexed.get(resolved, "") or "")
+    return -1, ""
 
 
 def _should_skip_interrupt(state: WorkflowState, action_id: str) -> bool:
@@ -322,19 +350,14 @@ def _action_capture_sample(
     ghost_text_sample = str(state.ghost_text_sample or "")
     draft = state.user_draft or {}
     labels = list(state.template_labels or [])
-    has_google = any(
-        ds.get("type") == "google_sheet" or ds.get("source1")
-        for ds in (state.data_sources or [])
-    )
-    has_draft = any(str(v or "").strip() for v in draft.values())
-    if not ghost_text_sample.strip() and not has_google and not has_draft:
+    if not ghost_text_sample.strip():
         return ExecutorResult(
             ok=False,
-            messages=["capture_sample interrupted: ghost sample or Google source required"],
+            messages=["capture_sample interrupted: ghost sample required"],
             state_patch={},
             interrupt=InterruptPayload(
                 kind="ask_sample",
-                expected_input="ghost_text_sample and user_draft",
+                expected_input="请在「输入」页粘贴 Ghost 样本并填写字段草稿后点「下一步」",
             ),
             route_key="capture_sample",
         )
@@ -506,43 +529,12 @@ def _action_plan_ghost_tasks(
             route_key="plan_ghost_tasks",
         )
 
-    # 有 indexed_segments：主对话确认 FieldTask 列表
-    indexed_lines = "\n".join(
-        f"{idx}: {value}" for idx, value in sorted(state.indexed_segments.items())
+    # 有 indexed_segments：按非空 draft 规划 FieldTasks（不经过 wizard_main，避免误答「请粘贴样本」）
+    planned = list(draft_labels)
+    _log(
+        f"[field_match] plan from drafts ({len(planned)}): "
+        + (", ".join(planned) if planned else "(none)")
     )
-    draft_for_prompt = {
-        label: str(state.user_draft.get(label, ""))
-        for label in state.template_labels
-    }
-    plan_prompt = (
-        f"{PLAN_GHOST_TASKS_PROMPT}\n\n"
-        f"Indexed segments:\n{indexed_lines}\n"
-        f"Template labels: {state.template_labels}\n"
-        f"User draft (optional): {draft_for_prompt}\n\n"
-        "List which labels need ghost index matching as FieldTasks."
-    )
-    main_turn = ctx.get("main_turn")
-    if not callable(main_turn):
-        planned = list(draft_labels)
-    else:
-        plan_reply = main_turn(plan_prompt)
-        # fallback 用非空 draft 标签，避免模型把空字段塞进 FieldTasks
-        parsed = parse_field_json(plan_reply)
-        if isinstance(parsed, ParseFieldError):
-            planned = list(draft_labels)
-        else:
-            labels_raw = parsed.get("labels")
-            if not isinstance(labels_raw, list) or not labels_raw:
-                planned = list(draft_labels)
-            else:
-                known = set(draft_labels)
-                planned = [str(x) for x in labels_raw if str(x) in known]
-                if not planned and draft_labels:
-                    planned = list(draft_labels)
-
-    # 空 draft 仅作过滤，不跳过 wizard_main
-    draft_set = set(draft_labels)
-    planned = [label for label in planned if label in draft_set]
 
     state.planned_labels = planned
     state.field_tasks_planned = True
@@ -586,6 +578,9 @@ def _action_match_ghost_fields(
             except Exception:
                 pass
 
+    def _chat(role: str, text: str) -> None:
+        _log(f"[{role}] {text}")
+
     indexed = state.indexed_segments
     if not indexed:
         _log("[field_match] indexed_segments empty; abort match")
@@ -618,7 +613,7 @@ def _action_match_ghost_fields(
             thinking_budget=budget,
             indexed_segments=indexed,
             draft_value=draft_val,
-            on_chat=_log,
+            on_chat=_chat,
         )
         if not res.ok:
             fs.error = res.error or "ghost match failed"
@@ -632,10 +627,14 @@ def _action_match_ghost_fields(
             _log(f"[field_match] matching [{label}] ({done_count}/{total}) -> none index=-1")
         elif res.payload:
             raw_idx = int(res.payload.get("index", -1))
-            seg_text = str(indexed.get(raw_idx, "")) if raw_idx >= 0 else ""
+            raw_idx, seg_text = _resolve_draft_index(
+                indexed, draft_val, raw_idx, label=label,
+            )
+            field_payload = dict(res.payload)
+            field_payload["index"] = raw_idx
             from llm_gemma4.toml_config.field_agent import _apply_ghost_payload
             mt, idx, needs = _apply_ghost_payload(
-                res.payload, draft=draft_val, segment=seg_text,
+                field_payload, draft=draft_val, segment=seg_text,
             )
             fs.match_type = mt
             fs.index = idx
@@ -654,7 +653,7 @@ def _action_match_ghost_fields(
             )
 
     if total > 0:
-        map_send(_ghost_worker, labels, cap=2)
+        map_run_sequential(_ghost_worker, labels)
 
     # 汇总错误
     failed = [label for label, fs in state.fields.items() if fs.error]
@@ -699,6 +698,9 @@ def _action_match_sheet_columns(
             except Exception:
                 pass
 
+    def _chat(role: str, text: str) -> None:
+        _log(f"[{role}] {text}")
+
     has_sheet = any(
         ds.get("type") == "google_sheet" or ds.get("source1")
         for ds in state.data_sources
@@ -741,7 +743,7 @@ def _action_match_sheet_columns(
         res = run_field_agent(
             backend, "sheet", label,
             google_headers=headers, google_rows=rows,
-            thinking_budget=budget, on_chat=_log,
+            thinking_budget=budget, on_chat=_chat,
         )
         fs = state.fields[label] if label in state.fields else None
         if not fs:
@@ -767,7 +769,7 @@ def _action_match_sheet_columns(
             done_count += 1
 
     if total > 0:
-        map_send(_sheet_worker, labels_to_match, cap=2)
+        map_run_sequential(_sheet_worker, labels_to_match)
 
     failed = [label for label, fs in state.fields.items() if fs.error and label not in set(state.template_labels)]
     # 在已知标签范围内汇总
@@ -817,6 +819,9 @@ def _action_infer_regex(
             except Exception:
                 pass
 
+    def _chat(role: str, text: str) -> None:
+        _log(f"[{role}] {text}")
+
     regex_labels = [
         label for label in state.template_labels
         if state.fields[label].needs_regex
@@ -833,11 +838,36 @@ def _action_infer_regex(
         nonlocal done_count
         fs = state.fields[label]
         draft_val = str(state.user_draft.get(label, "") or "").strip()
-        # haystack = 该字段命中 index 的段文本；无 index 时回退整段样本
-        segment = ""
-        if fs.index >= 0 and indexed:
-            segment = str(indexed.get(fs.index, "") or "")
+        # haystack = 该字段命中 index 的段文本；draft 不在段内时按值重定位 index
+        resolved_idx, segment = _resolve_draft_index(
+            indexed, draft_val, fs.index, label=label,
+        )
+        if resolved_idx >= 0:
+            fs.index = resolved_idx
         haystack = segment.strip() or sample
+        # 段文本与 draft 全等时无需 regex
+        if draft_val and segment.strip() == draft_val:
+            fs.needs_regex = False
+            fs.match_type = "exact"
+            fs.regex = ""
+            fs.error = ""
+            _log(f"[regex_infer] [{label}] skip — exact value at index={fs.index}")
+            with lock:
+                done_count += 1
+            return
+        # haystack 不含 draft 时跳过 LLM，避免 label-only 段死循环
+        if draft_val and haystack and not _segment_matches_draft(haystack, draft_val):
+            fs.needs_regex = False
+            fs.error = f"segment at index={fs.index} lacks draft value"
+            _log(f"[regex_infer] [{label}] skip — haystack lacks draft")
+            with lock:
+                done_count += 1
+            return
+        if not fs.needs_regex:
+            _log(f"[regex_infer] [{label}] skip — needs_regex=False")
+            with lock:
+                done_count += 1
+            return
 
         res = run_field_agent(
             backend, "regex", label,
@@ -845,22 +875,24 @@ def _action_infer_regex(
             raw_text_for_regex=haystack,
             draft_value=draft_val,
             thinking_budget=budget,
-            on_chat=_log,
+            on_chat=_chat,
         )
         if res.ok and res.payload:
             fs.regex = str(res.payload.get("regex", ""))
             fs.used_thinking = res.used_thinking
             fs.error = ""
+            fs.needs_regex = False
             _log(f"[regex_infer] [{label}] Thinking retry ok")
         elif not res.ok:
             fs.error = res.error
             fs.used_thinking = res.used_thinking
+            fs.needs_regex = False
             _log(f"[regex_infer] [{label}] failed: {res.error}")
         with lock:
             done_count += 1
 
     if total > 0:
-        map_send(_regex_worker, regex_labels, cap=2)
+        map_run_sequential(_regex_worker, regex_labels)
 
     failed = [label for label, fs in state.fields.items() if fs.error and label not in set(state.template_labels)]
     known_failed = [l for l in failed if l in (state.planned_labels or state.template_labels)]

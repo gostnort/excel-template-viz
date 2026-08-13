@@ -19,6 +19,7 @@ from llm_gemma4.toml_config.decision import decide
 from llm_gemma4.toml_config.design_doc import build_design_doc
 from llm_gemma4.toml_config.executor import execute
 from llm_gemma4.toml_config.intake_plan import already_captured, build_intake_plan, init_progress
+from llm_gemma4.toml_config.intake_seed import sidecar_data_sources
 from llm_gemma4.toml_config.prompts import DETERMINER_PROMPT, MAIN_SYSTEM_PROMPT
 from llm_gemma4.workflow.checkpoint import MemoryCheckpoint
 from llm_gemma4.workflow.state import FieldState, InterruptPayload, WorkflowState
@@ -112,7 +113,10 @@ def _merge_payload_into_state(state: WorkflowState, payload: dict[str, Any]) -> 
     if tpath:
         state.template_path = Path(str(tpath))
     if "data_sources" in payload:
-        state.data_sources = list(payload.get("data_sources") or [])
+        incoming = list(payload.get("data_sources") or [])
+        # 空列表不覆盖 init_workflow / sidecar 已预填的 [[sources]]
+        if incoming or not state.data_sources:
+            state.data_sources = incoming
     if "input_area" in payload:
         state.input_area = payload.get("input_area") or ""
     if "move_to" in payload:
@@ -215,6 +219,17 @@ class WorkflowOrchestrator:
         self.state.template_labels = list(labels)
         self.state.design_doc = build_design_doc(template_id, template_path, labels)
         self.state.progress = init_progress(labels)
+        # 信任 sidecar [[sources]]：已有 Google URL 时预填，避免仅 OAuth 才视为已采集
+        seeded = sidecar_data_sources(template_id)
+        if seeded and not self.state.data_sources:
+            self.state.data_sources = seeded
+            progress = dict(self.state.progress or {})
+            has_google = any(
+                ds.get("type") == "google_sheet" or ds.get("source1")
+                for ds in seeded
+            )
+            progress["data_sources"] = "done" if has_google else "skip"
+            self.state.progress = progress
 
     def is_interrupted(self) -> bool:
         """

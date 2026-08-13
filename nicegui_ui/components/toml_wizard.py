@@ -79,6 +79,25 @@ class TomlWizardController:
         return "\n\n".join(self._chat_history)
 
     @property
+    def sidebar_feed_text(self) -> str:
+        """
+        函数名: sidebar_feed_text
+        作用: 合并运行日志与 Gemma 对话，供 sidebar textarea 展示
+        输入: 无
+        输出:
+            str: 多行侧栏活动文本
+        """
+        parts: list[str] = []
+        if self._log_history:
+            parts.append("【运行日志】")
+            parts.extend(self._log_history)
+        if self._chat_history:
+            if parts:
+                parts.append("")
+            parts.extend(self._chat_history)
+        return "\n\n".join(parts)
+
+    @property
     def is_busy(self) -> bool:
         """
         函数名: is_busy
@@ -93,6 +112,28 @@ class TomlWizardController:
         self._log_history.append(msg)
         if self.log_widget is not None:
             self.log_widget.push(msg)
+        self._push_sidebar_update()
+
+    def _push_sidebar_update(self) -> None:
+        """
+        函数名: _push_sidebar_update
+        作用: 将运行日志与对话历史同步到 sidebar 或触发 refresh 重建绑定
+        输入: 无
+        输出: 无
+        """
+        from nicegui_ui.components.workflow_ui import _schedule_sidebar_refresh, is_workflow_active
+        client = self._client
+        if not is_workflow_active():
+            _schedule_sidebar_refresh(client)
+            return
+        if client is None:
+            _schedule_sidebar_refresh(client)
+            return
+        with client:
+            if self.chat_widget is not None:
+                self._sync_chat_widget()
+            else:
+                _schedule_sidebar_refresh(client)
 
     def _scroll_chat_to_end(self) -> None:
         """
@@ -192,21 +233,30 @@ class TomlWizardController:
             delay (float): 延迟秒数
         输出: 无
         """
+        async def _run() -> None:
+            await asyncio.sleep(delay)
+            self._scroll_chat_to_end()
         try:
-            ui.timer(delay, self._scroll_chat_to_end, once=True)
+            asyncio.get_running_loop().create_task(_run())
         except RuntimeError:
             self._scroll_chat_to_end()
 
     def _sync_chat_widget(self) -> None:
         """
         函数名: _sync_chat_widget
-        作用: 把对话历史写回 textarea 并延迟滚到底
+        作用: 把运行日志与对话历史写回 sidebar textarea 并延迟滚到底
         输入: 无
         输出: 无
         """
-        if self.chat_widget is not None:
-            self.chat_widget.value = self.chat_text
+        if self.chat_widget is None:
+            return
+        try:
+            self.chat_widget.value = self.sidebar_feed_text
             self._schedule_chat_scroll(0.05)
+        except Exception:
+            self.chat_widget = None
+            from nicegui_ui.components.workflow_ui import _schedule_sidebar_refresh
+            _schedule_sidebar_refresh(self._client)
 
     def _match_notify(self, msg: str) -> None:
         """
@@ -232,8 +282,14 @@ class TomlWizardController:
                         )
                 except Exception:
                     pass
-            with client:
-                ui.timer(0.01, _show, once=True)
+            async def _delayed_show() -> None:
+                await asyncio.sleep(0.01)
+                _show()
+            try:
+                asyncio.get_running_loop().create_task(_delayed_show())
+            except RuntimeError:
+                with client:
+                    _show()
         except Exception:
             pass
 
@@ -241,16 +297,7 @@ class TomlWizardController:
         label = "用户" if role == "user" else "Gemma"
         block = f"【{label}】\n{text.strip()}"
         self._chat_history.append(block)
-        client = self._client
-        if client is None:
-            self._sync_chat_widget()
-            return
-        with client:
-            if self.chat_widget is not None:
-                self._sync_chat_widget()
-            else:
-                from nicegui_ui.components.workflow_ui import _schedule_sidebar_refresh
-                _schedule_sidebar_refresh(client)
+        self._push_sidebar_update()
 
     def bind_log(self, log_widget) -> None:
         """
@@ -273,7 +320,7 @@ class TomlWizardController:
         输出: 无
         """
         self.chat_widget = chat_widget
-        chat_widget.value = self.chat_text
+        chat_widget.value = self.sidebar_feed_text
         # 浏览器侧 MutationObserver：并发匹配时比 timer 备份更稳
         self._install_chat_scroll_binding()
         self._schedule_chat_scroll(0.15)
@@ -315,16 +362,12 @@ class TomlWizardController:
         输入: 无
         输出: 无
         """
+        self.chat_widget = None
         self._log_history.clear()
         self._chat_history.clear()
         if self.log_widget is not None:
             try:
                 self.log_widget.clear()
-            except Exception:
-                pass
-        if self.chat_widget is not None:
-            try:
-                self.chat_widget.value = ""
             except Exception:
                 pass
 
@@ -342,6 +385,7 @@ class TomlWizardController:
             return False
         if self.started and self.orchestrator is not None:
             return True
+        self.chat_widget = None
         self._starting = True
         self._client = client
         try:
@@ -388,7 +432,8 @@ class TomlWizardController:
             return None
         self._busy = True
         try:
-            await run.io_bound(self.orchestrator.tick, payload or {})
+            # LiteRT GPU 须在 StartGemma 同线程调用；io_bound 线程池会触发原生崩溃
+            self.orchestrator.tick(payload or {})
             if self._stopping:
                 return None
             return self.orchestrator

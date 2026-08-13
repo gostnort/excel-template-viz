@@ -208,6 +208,93 @@ def _call_decision_session(backend: LlmBackend, prompt: str, retry_hint: str = "
         session.close()
 
 
+def _fallback_compute_decision(state: WorkflowState) -> Decision | None:
+    """
+    函数名: _fallback_compute_decision
+    作用: Gemma 路由失准时按 intake 顺序强制下一 compute 步（尤其 field_match 链）
+    输入:
+        state (WorkflowState): 当前状态
+    输出:
+        Decision | None: 可执行的 compute 决策；无需 fallback 时为 None
+    """
+    if (
+        already_captured(state, "ghost_sample")
+        and already_captured(state, "field_drafts")
+        and not already_captured(state, "ghost_preprocess")
+    ):
+        return Decision(
+            next_action="compute",
+            action_id="preprocess_sample",
+            reason="fallback: ghost preprocess pending",
+            route_key="preprocess_sample",
+        )
+    if state.preprocess_done and not state.field_tasks_planned:
+        return Decision(
+            next_action="compute",
+            action_id="plan_ghost_tasks",
+            reason="fallback: plan ghost tasks pending",
+            route_key="plan_ghost_tasks",
+        )
+    if state.field_tasks_planned and not already_captured(state, "field_match"):
+        return Decision(
+            next_action="compute",
+            action_id="match_ghost_fields",
+            reason="fallback: ghost field match pending",
+            route_key="match_ghost_fields",
+        )
+    if (
+        already_captured(state, "field_match")
+        and not already_captured(state, "sheet_match")
+    ):
+        return Decision(
+            next_action="compute",
+            action_id="match_sheet_columns",
+            reason="fallback: sheet match pending",
+            route_key="match_sheet_columns",
+        )
+    if (
+        already_captured(state, "sheet_match")
+        and not already_captured(state, "regex_infer")
+    ):
+        return Decision(
+            next_action="compute",
+            action_id="infer_regex",
+            reason="fallback: regex infer pending",
+            route_key="infer_regex",
+        )
+    return None
+
+
+def _fallback_finalize_decision(state: WorkflowState) -> Decision | None:
+    """
+    函数名: _fallback_finalize_decision
+    作用: compute 链结束后强制 finalize_toml，避免 Gemma 重复 ask 早期 intake
+    输入:
+        state (WorkflowState): 当前状态
+    输出:
+        Decision | None: finalize 决策；尚未到 finalize 阶段时为 None
+    """
+    if already_captured(state, "db_id"):
+        return Decision(
+            next_action="finalize",
+            action_id="finalize_toml",
+            reason="fallback: db_id confirmed, finalize",
+            route_key="finalize_toml",
+        )
+    if not already_captured(state, "regex_infer"):
+        return None
+    if not already_captured(state, "field_match"):
+        return None
+    if not already_captured(state, "ghost_preprocess"):
+        return None
+    return Decision(
+        next_action="ask_user",
+        action_id="finalize_toml",
+        reason="fallback: compute chain complete, db_id pending",
+        route_key="finalize_toml",
+    )
+
+
 def decide(
     state: WorkflowState,
     user_input: dict[str, Any] | None,
@@ -241,6 +328,13 @@ def decide(
                 index,
             )
         return decision, index
+    # compute / finalize 链 fallback：避免 Gemma 重复 ask 或跳过 match_ghost_fields
+    forced = _fallback_compute_decision(state)
+    if forced is not None:
+        return forced, stub_index
+    forced_finalize = _fallback_finalize_decision(state)
+    if forced_finalize is not None:
+        return forced_finalize, stub_index
     # Gemma 路由
     prompt = _build_decision_prompt(state, user_input, intake)
     try:

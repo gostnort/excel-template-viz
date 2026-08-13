@@ -41,3 +41,21 @@ def map_send(
             results[idx] = result
 
     return results
+
+
+def map_run_sequential(
+    fn: Callable[[str], T],
+    items: list[str],
+) -> list[T]:
+    """
+    函数名: map_run_sequential
+    作用: 在调用线程上顺序执行 fn，避免 LiteRT 跨线程推理挂死
+    输入:
+        fn (Callable): 每个 item 的处理器
+        items (list[str]): 输入项列表
+    输出:
+        list[T]: 与 items 同序的结果列表
+    """
+    if not items:
+        return []
+    return [fn(item) for item in items]

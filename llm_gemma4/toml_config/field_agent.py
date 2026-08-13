@@ -76,6 +76,107 @@ def _session_send(
         session.close()
 
 
+def _normalize_key(text: str) -> str:
+    """
+    函数名: _normalize_key
+    作用: 去除空白与全角空格，便于标签比较
+    输入:
+        text (str): 原始文本
+    输出:
+        str: 规范化后的文本
+    """
+    return (text or "").replace(" ", "").replace("\u3000", "")
+
+
+def _segment_matches_draft(segment: str, draft: str) -> bool:
+    """
+    函数名: _segment_matches_draft
+    作用: 判断段文本是否与用户 draft 值匹配（全等或包含）
+    输入:
+        segment (str): indexed 段文本
+        draft (str): 用户草稿值
+    输出:
+        bool: 匹配时为 True
+    """
+    seg_s = (segment or "").strip()
+    draft_s = (draft or "").strip()
+    if not draft_s:
+        return False
+    if seg_s == draft_s:
+        return True
+    return draft_s in seg_s or seg_s in draft_s
+
+
+def _segment_matches_label(segment: str, label: str) -> bool:
+    """
+    函数名: _segment_matches_label
+    作用: 判断段文本是否像字段标签（非数据值）
+    输入:
+        segment (str): indexed 段文本
+        label (str): Input_label
+    输出:
+        bool: 像标签时为 True
+    """
+    seg_s = (segment or "").strip()
+    label_s = (label or "").strip()
+    if not label_s or not seg_s:
+        return False
+    if _normalize_key(seg_s) == _normalize_key(label_s):
+        return True
+    return label_s in seg_s or seg_s in label_s
+
+
+def _resolve_ghost_index(
+    raw_index: int,
+    *,
+    label: str,
+    draft: str,
+    indexed_segments: dict[int, str],
+) -> int:
+    """
+    函数名: _resolve_ghost_index
+    作用: 将模型误选的 label 索引纠正为 brace-JSON 邻接 value 索引
+    输入:
+        raw_index (int): 模型返回的 index
+        label (str): Input_label
+        draft (str): 用户草稿值
+        indexed_segments (dict[int, str]): 预处理段字典
+    输出:
+        int: 纠正后的 index
+    """
+    if raw_index < 0 or not (draft or "").strip() or not indexed_segments:
+        return raw_index
+    segment = str(indexed_segments.get(raw_index, "") or "")
+    draft_s = (draft or "").strip()
+    # 已指向数据值则保留
+    if _segment_matches_draft(segment, draft_s):
+        return raw_index
+    # brace-JSON KV：常见误选为标签，真实值在下一 token
+    if _segment_matches_label(segment, label):
+        next_seg = str(indexed_segments.get(raw_index + 1, "") or "")
+        if _segment_matches_draft(next_seg, draft_s):
+            return raw_index + 1
+    # 回退：在 indexed 中搜索唯一 draft 命中
+    exact_hits: list[int] = []
+    fuzzy_hits: list[int] = []
+    for idx in sorted(indexed_segments.keys()):
+        seg = str(indexed_segments.get(idx, "") or "")
+        seg_s = seg.strip()
+        if not seg_s:
+            continue
+        if seg_s == draft_s:
+            exact_hits.append(idx)
+        elif _segment_matches_draft(seg, draft_s):
+            fuzzy_hits.append(idx)
+    if len(exact_hits) == 1:
+        return exact_hits[0]
+    if exact_hits:
+        return exact_hits[0]
+    if len(fuzzy_hits) == 1:
+        return fuzzy_hits[0]
+    return raw_index
+
+
 def _normalize_ghost_match_type(match_type: str, draft: str, segment: str) -> str:
     """
     函数名: _normalize_ghost_match_type

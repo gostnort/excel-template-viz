@@ -332,8 +332,12 @@ def build_indexed_segments(
     reply = one_shot(normalized[:4000])
     determiners, cleaned = parse_determiner_reply(reply)
     if not determiners:
-        determiners = [" ", ",", "\t", "\n"]
-    det = normalize_determiner(determiners)
+        determiners = ["\t"] if "\t" in normalized else [" ", ",", "\t", "\n"]
+    # 样本含制表符时只用 tab，避免空格拆碎公司名等字段
+    if "\t" in normalized:
+        det = "\t"
+    else:
+        det = normalize_determiner(determiners)
     parts = split_by_determiner(normalized, det)
     indexed = parts_to_indexed_dict(parts)
     return IndexedBuildResult(

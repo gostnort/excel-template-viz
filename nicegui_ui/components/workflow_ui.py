@@ -43,6 +43,12 @@ _INTERRUPT_TABS: dict[str, str] = {
     "ask_db_id": "输入配置",
 }
 _AUTO_CHAIN_MAX = 24
+_INTERRUPT_FAB_LABELS: dict[str, str] = {
+    "ask_sources": "下一步",
+    "ask_layout": "下一步",
+    "ask_sample": "下一步",
+    "ask_db_id": "下一步",
+}
 
 
 def register_shell(
@@ -88,30 +94,50 @@ def _resolve_client(client: Client | None = None) -> Client | None:
         return None
 
 
+def _schedule_deferred(seconds: float, callback: Callable[[], None]) -> None:
+    """
+    函数名: _schedule_deferred
+    作用: 用 asyncio 延迟回调，避免 ui.timer 挂在会被 refresh 销毁的 slot 上
+    输入:
+        seconds (float): 延迟秒数
+        callback (Callable[[], None]): 到期后执行的同步回调
+    输出: 无
+    """
+    async def _run() -> None:
+        await asyncio.sleep(seconds)
+        callback()
+    try:
+        asyncio.get_running_loop().create_task(_run())
+    except RuntimeError:
+        callback()
+
+
 def _schedule_chrome_refresh(client: Client | None = None) -> None:
-    resolved = _resolve_client(client)
-    if resolved is None:
-        _refresh_chrome_safe()
-        return
-    with resolved:
-        ui.timer(0.05, _refresh_chrome_safe, once=True)
+    _ = client
+    _schedule_deferred(0.05, _refresh_chrome_safe)
 
 
 def _schedule_sidebar_refresh(client: Client | None = None) -> None:
     if _refresh_sidebar is None:
         return
-    resolved = _resolve_client(client)
-    if resolved is None:
-        _refresh_sidebar()
-        return
-    with resolved:
-        ui.timer(0.05, _refresh_sidebar, once=True)
+    _ = client
+    _schedule_deferred(0.05, _refresh_sidebar)
+
+
+def _user_storage() -> dict[str, Any] | None:
+  # 读取 app.storage.user 前先探测会话是否已初始化（hasattr 会触发断言）
+    try:
+        return app.storage.user
+    except (AssertionError, RuntimeError):
+        return None
 
 
 def _set_workflow_active(active: bool) -> None:
-    if hasattr(app.storage, "user"):
-        app.storage.user["workflow_active"] = active
-        app.storage.user["wizard_active"] = active
+    store = _user_storage()
+    if store is None:
+        return
+    store["workflow_active"] = active
+    store["wizard_active"] = active
 
 
 def is_workflow_active() -> bool:
@@ -122,9 +148,9 @@ def is_workflow_active() -> bool:
     输出:
         bool: 工作流进行中为 True
     """
-    if not hasattr(app.storage, "user"):
+    store = _user_storage()
+    if store is None:
         return False
-    store = app.storage.user
     return bool(store.get("workflow_active") or store.get("wizard_active"))
 
 
@@ -186,20 +212,18 @@ def _close_dialog() -> None:
 def _resolve_ghost_sample(session) -> str:
     """
     函数名: _resolve_ghost_sample
-    作用: 合并 session 缓存与 Ghost 控件当前值
+    作用: 优先读取 Ghost 控件当前值；控件未挂载时回退 session 缓存
     输入:
         session: SessionRegistry 当前会话
     输出:
         str: 样本文本
     """
-    stored = (session.last_ghost_paste or "").strip()
-    if stored:
-        return stored
-    from nicegui_ui.pages.tab_input import read_ghost_sample
-    live = read_ghost_sample()
-    if live:
+    from nicegui_ui.pages.tab_input import is_ghost_input_bound, read_ghost_sample
+    if is_ghost_input_bound():
+        live = read_ghost_sample()
         session.last_ghost_paste = live
-    return live
+        return live
+    return (session.last_ghost_paste or "").strip()
 
 
 def _orchestrator_has_google(ctrl) -> bool:
@@ -210,11 +234,25 @@ def _orchestrator_has_google(ctrl) -> bool:
 
 
 def _initial_tick_payload(ctrl) -> dict[str, Any]:
-    return {
+    sources = ctrl.build_data_sources()
+    orch = ctrl.orchestrator
+    if not sources and orch is not None:
+        if orch.state.data_sources:
+            sources = list(orch.state.data_sources)
+        else:
+            from llm_gemma4.toml_config.intake_seed import sidecar_data_sources
+            tid = str(orch.state.template_id or "")
+            if tid:
+                sources = sidecar_data_sources(tid)
+                if sources:
+                    orch.state.data_sources = sources
+    payload: dict[str, Any] = {
         **ctrl.session_payload_base(),
-        "data_sources": ctrl.build_data_sources(),
         "template_labels": ctrl.template_labels(),
     }
+    if sources:
+        payload["data_sources"] = sources
+    return payload
 
 
 def _fab_label(ctrl) -> str:
@@ -224,6 +262,9 @@ def _fab_label(ctrl) -> str:
     if orch is not None and orch.state.is_finished and not orch.is_interrupted():
         return "已完成"
     if orch is not None and orch.is_interrupted():
+        kind = _pending_interrupt_kind(ctrl)
+        if kind in _INTERRUPT_FAB_LABELS:
+            return _INTERRUPT_FAB_LABELS[kind]
         pending = orch.pending_interrupt
         if pending is not None and pending.expected_input:
             text = str(pending.expected_input).strip()
@@ -703,11 +744,9 @@ def _render_db_id_dialog_body(ctrl) -> None:
 
 def _schedule_interrupt_dialog(kind: str, client: Client | None = None) -> None:
     resolved = _resolve_client(client)
-    if resolved is None:
-        _show_interrupt_dialog(kind)
-        return
-    with resolved:
-        ui.timer(0.15, lambda k=kind, c=resolved: _show_interrupt_dialog(k, client=c), once=True)
+    def _open() -> None:
+        _show_interrupt_dialog(kind, client=resolved)
+    _schedule_deferred(0.15, _open)
 
 
 async def on_fab_click() -> None:
@@ -776,6 +815,8 @@ async def stop_wizard(reason: str | None = None) -> None:
     client = _resolve_client(None)
     _close_dialog()
     _set_workflow_active(False)
+    from nicegui_ui.pages.tab_input import clear_ghost_cache
+    clear_ghost_cache(SessionRegistry.for_current())
     await get_toml_wizard().stop_async()
     _schedule_chrome_refresh(client)
     _schedule_sidebar_refresh(client)
@@ -799,6 +840,8 @@ async def start_wizard() -> None:
     if not session.template_id or not session.template_path:
         ui.notify("请先选择模板", type="warning")
         return
+    from nicegui_ui.pages.tab_input import clear_ghost_cache
+    clear_ghost_cache(session)
     ctrl = get_toml_wizard()
     if ctrl.is_busy:
         return
@@ -819,7 +862,7 @@ async def start_wizard() -> None:
     if not is_gemma_loaded():
         with client:
             progress = ui.notification("正在加载 Gemma4…", spinner=True, type="ongoing")
-    _refresh_chrome_safe()
+    _set_workflow_active(True)
     try:
         ok = await ctrl.start(client=client)
     finally:
@@ -828,10 +871,10 @@ async def start_wizard() -> None:
                 from nicegui_ui.components.model_runtime import _dismiss_notification
                 _dismiss_notification(progress)
     if not ok:
+        _set_workflow_active(False)
         with client:
             ui.notify("Gemma 模型加载失败，请检查 llm_gemma4 环境", type="negative")
         return
-    _set_workflow_active(True)
     _schedule_chrome_refresh(client)
     _schedule_sidebar_refresh(client)
     with client:
@@ -846,7 +889,7 @@ async def start_wizard() -> None:
 def render_wizard_sidebar_chat() -> None:
     """
     函数名: render_wizard_sidebar_chat
-    作用: 工作流进行中在 sidebar 展示 Gemma 对话
+    作用: 工作流进行中在 sidebar 展示运行日志与 Gemma 对话
     输入: 无
     输出: 无
     """
@@ -855,11 +898,8 @@ def render_wizard_sidebar_chat() -> None:
     ctrl = get_toml_wizard()
     with ui.element("div").classes("wizard-sidebar-chat"):
         ui.label("Gemma 对话").classes("wizard-sidebar-chat-title")
-        if ctrl.orchestrator is not None:
-            summary = render_progress_summary(ctrl.orchestrator.state)
-            ui.label(summary).classes("text-xs text-grey-8 whitespace-pre-wrap mb-2")
         chat_area = (
-            ui.textarea(value=ctrl.chat_text)
+            ui.textarea(value=ctrl.sidebar_feed_text)
             .classes("wizard-sidebar-chat-log w-full")
             .props("readonly outlined dense")
             .style("min-width:0;max-width:100%;")

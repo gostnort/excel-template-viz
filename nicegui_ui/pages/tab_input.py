@@ -69,6 +69,17 @@ def _is_formula_blocked(session, lbl: str) -> bool:
     return lbl in formula_cells
 
 
+def is_ghost_input_bound() -> bool:
+    """
+    函数名: is_ghost_input_bound
+    作用: 判断 Ghost 文本框是否已挂载到当前页面
+    输入: 无
+    输出:
+        bool: 已挂载时为 True
+    """
+    return _ghost_input is not None
+
+
 def read_ghost_sample() -> str:
     """
     函数名: read_ghost_sample
@@ -80,6 +91,22 @@ def read_ghost_sample() -> str:
     if _ghost_input is None:
         return ""
     return str(_ghost_input.value or "").strip()
+
+
+def clear_ghost_cache(session) -> None:
+    """
+    函数名: clear_ghost_cache
+    作用: 清空 Ghost 粘贴缓存与文本框，避免模板/向导切换时沿用旧样本
+    输入:
+        session: 当前会话
+    输出: 无
+    """
+    session.last_ghost_paste = ""
+    if _ghost_input is not None:
+        try:
+            _ghost_input.value = ""
+        except Exception:
+            pass
 
 
 def read_field_drafts(labels: list[str] | None = None) -> dict[str, str]:
@@ -112,9 +139,7 @@ def read_field_drafts(labels: list[str] | None = None) -> dict[str, str]:
 
 
 def _sync_ghost_paste(session, raw: str) -> None:
-    text = str(raw or "").strip()
-    if text:
-        session.last_ghost_paste = text
+    session.last_ghost_paste = str(raw or "").strip()
 
 
 def ensure_exports_dir(template_id: str) -> Path:
@@ -718,9 +743,9 @@ def render_input_tab():
         # 幽灵输入框
         def on_ghost_blur(event) -> None:
             raw = event.sender.value or ""
+            _sync_ghost_paste(session, str(raw))
             if not str(raw).strip():
                 return
-            _sync_ghost_paste(session, str(raw))
             from nicegui_ui.components.workflow_ui import is_workflow_active
 
             # 工作流进行中：仅缓存样本，不触发自动拆分填入字段
