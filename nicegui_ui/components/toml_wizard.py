@@ -7,10 +7,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from nicegui import run, ui
+from nicegui import ui
 
 from nicegui_ui.components.model_runtime import ensure_gemma_loaded
 from llm_gemma4.__main__ import EndGemma, _get_backend
+from llm_gemma4.runtime.gemma_worker import await_gemma_thread, run_on_gemma_thread_blocking
 from llm_gemma4.toml_config.workflow_orchestrator import WorkflowOrchestrator
 from nicegui_ui.components.general import Auth, SessionRegistry
 
@@ -432,8 +433,9 @@ class TomlWizardController:
             return None
         self._busy = True
         try:
-            # LiteRT GPU 须在 StartGemma 同线程调用；io_bound 线程池会触发原生崩溃
-            self.orchestrator.tick(payload or {})
+            # LiteRT 须在专用 Gemma 工作线程调用，与 StartGemma/EndGemma 同线程
+            orch = self.orchestrator
+            await await_gemma_thread(orch.tick, payload or {})
             if self._stopping:
                 return None
             return self.orchestrator
@@ -469,15 +471,20 @@ class TomlWizardController:
         输入: 无
         输出: 无
         """
-        if self.orchestrator:
-            self.orchestrator.close()
-            self.orchestrator = None
+        orch = self.orchestrator
+        def _release_on_worker() -> None:
+            if orch is not None:
+                orch.close()
+            EndGemma()
+        run_on_gemma_thread_blocking(_release_on_worker)
+        self.orchestrator = None
         self.log_widget = None
         self.chat_widget = None
         self._client = None
         self.clear_histories()
-        EndGemma()
         self.started = False
+        from nicegui_ui.components.model_runtime import sync_model_runtime_ui
+        sync_model_runtime_ui()
         from nicegui_ui.components.model_runtime import sync_model_runtime_ui
         sync_model_runtime_ui()
 

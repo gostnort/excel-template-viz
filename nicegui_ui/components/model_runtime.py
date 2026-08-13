@@ -162,8 +162,9 @@ async def ensure_gemma_loaded(*, notify: bool = True, client: Client | None = No
             progress = ui.notification("正在加载 Gemma4…", spinner=True, type="ongoing")
     try:
         from llm_gemma4.__main__ import StartGemma
-        # LiteRT GPU 须在主事件循环线程预热，io_bound 线程池会触发原生崩溃
-        StartGemma()
+        from llm_gemma4.runtime.gemma_worker import await_gemma_thread
+        # LiteRT 须在专用 Gemma 工作线程预热，避免阻塞 UI 事件循环
+        await await_gemma_thread(StartGemma)
         return is_gemma_loaded()
     except Exception:
         return False
@@ -202,7 +203,8 @@ async def set_gemma_preload(enabled: bool, client: Client | None = None) -> bool
     if is_workflow_active():
         await stop_wizard("Gemma4 已卸载，配置向导已结束")
     from llm_gemma4.__main__ import EndGemma
-    await run.io_bound(EndGemma)
+    from llm_gemma4.runtime.gemma_worker import await_gemma_thread
+    await await_gemma_thread(EndGemma)
     _schedule_runtime_refresh(resolved)
     if resolved is not None:
         with resolved:
