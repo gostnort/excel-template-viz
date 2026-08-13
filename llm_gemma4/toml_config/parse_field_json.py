@@ -39,12 +39,15 @@ def parse_field_json(text: str) -> Any:
         try:
             return json.loads(json_str, strict=False)
         except (json.JSONDecodeError, ValueError):
-            # 尝试宽松解析：提取第一个 { ... } 块
+            # 尝试宽松解析：提取第一个完整 { ... } 块
             inner_start = _find_json_brace(text, start)
             if inner_start < 0:
                 raise ParseFieldError("无法从回复中提取 JSON", text[:500])
+            end = _find_json_brace_end(text, inner_start)
+            if end < 0:
+                raise ParseFieldError("无法从回复中提取 JSON", text[:500])
             try:
-                return json.loads(text[inner_start:inner_start + 1024], strict=False)
+                return json.loads(text[inner_start:end], strict=False)
             except (json.JSONDecodeError, ValueError):
                 raise ParseFieldError(
                     f"JSON 解析失败: {text[start:start+200]!r}", text[:500]
@@ -79,7 +82,13 @@ def _find_json_start(text: str) -> int:
 
 
 def _find_json_brace(text: str, start: int) -> int:
-    """从 start 位置找到第一个匹配的花括号。"""
+    """从 start 位置找到第一个 { 的起始索引。"""
+    brace = text.find('{', start)
+    return brace
+
+
+def _find_json_brace_end(text: str, start: int) -> int:
+    """从 start 位置找到匹配 } 之后的结束索引（不含）。"""
     brace = text.find('{', start)
     if brace < 0:
         return -1
@@ -91,5 +100,5 @@ def _find_json_brace(text: str, start: int) -> int:
         elif ch == '}':
             depth -= 1
             if depth == 0:
-                return i
+                return i + 1
     return -1

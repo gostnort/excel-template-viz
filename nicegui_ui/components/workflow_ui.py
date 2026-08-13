@@ -9,7 +9,6 @@ from typing import Any, Callable
 from nicegui import app, ui
 from nicegui.client import Client
 
-from llm_gemma4.toml_config.intake_plan import build_intake_plan
 from llm_gemma4.workflow.state import WorkflowState
 from nicegui_ui.components.buttons import AppBtn
 from nicegui_ui.components.general import SessionRegistry
@@ -62,7 +61,7 @@ def register_shell(
     作用: 由 main.render_shell 注入 Tab 切换与 FAB 刷新回调
     输入:
         switch_tab: 切换顶栏 Tab 并刷新面板
-        refresh_chrome: 刷新右下角工作流 FAB
+        refresh_chrome: 刷新左下角工作流 FAB
         refresh_sidebar: 刷新 sidebar 内 Gemma 对话区
     输出: 无
     """
@@ -465,6 +464,8 @@ async def _after_layout_resume(ctrl, client: Client | None) -> bool:
     _refresh_toml_tab()
     report = session.verify_report or {}
     if report.get("ok"):
+        from nicegui_ui.pages.tab_input import clear_field_drafts
+        clear_field_drafts(session, ctrl.template_labels(), refresh_ui=True)
         _switch_tab("输入")
         resolved = _resolve_client(client)
         if resolved is not None:
@@ -549,7 +550,7 @@ def _show_interrupt_dialog(kind: str, *, client: Client | None = None) -> None:
             if kind == "ask_sources":
                 ui.label(
                     "请在当前「Google 连接」页配置 OAuth 与 Sheet（可选）。"
-                    "若不需要 Google 数据源可点「跳过 Google」或右下角继续。"
+                    "若不需要 Google 数据源可点「跳过 Google」或左下角继续。"
                 ).classes("text-sm")
                 async def _skip_google() -> None:
                     ctrl_local = get_toml_wizard()
@@ -575,7 +576,7 @@ def _show_interrupt_dialog(kind: str, *, client: Client | None = None) -> None:
             elif kind == "ask_sample":
                 ui.label(
                     "请在「输入」页填写/粘贴测试数据（Ghost 样本或字段草稿），"
-                    "完成后点右下角继续。"
+                    "完成后点左下角继续。"
                 ).classes("text-sm")
             elif kind == "ask_db_id":
                 _render_db_id_dialog_body(ctrl)
@@ -723,11 +724,8 @@ def _render_db_id_dialog_body(ctrl) -> None:
     ).classes("text-sm mb-2")
     labels = ctrl.template_labels()
     options = [_DB_ID_NONE] + list(labels)
-    prev = ""
-    if ctrl.orchestrator is not None:
-        prev = str(ctrl.orchestrator.state.db_id or "").strip()
-    default = prev if prev in labels else _DB_ID_NONE
-    _step7_db_id = "" if default == _DB_ID_NONE else default
+    default = _DB_ID_NONE
+    _step7_db_id = ""
     _step7_select = ui.select(
         options,
         label="db_id（None = 不指定）",
@@ -840,13 +838,21 @@ async def start_wizard() -> None:
     if not session.template_id or not session.template_path:
         ui.notify("请先选择模板", type="warning")
         return
-    from nicegui_ui.pages.tab_input import clear_ghost_cache
+    from nicegui_ui.pages.tab_input import clear_field_drafts, clear_ghost_cache
     clear_ghost_cache(session)
     ctrl = get_toml_wizard()
+    draft_labels = ctrl.template_labels() if ctrl.started else None
+    if not draft_labels and session.ui_provider:
+        try:
+            draft_labels = list(session.ui_provider.get_labels())
+        except Exception:
+            draft_labels = None
+    clear_field_drafts(session, draft_labels, refresh_ui=True)
     if ctrl.is_busy:
         return
     client = ui.context.client
     if is_workflow_active() and ctrl.started:
+        clear_field_drafts(session, ctrl.template_labels(), refresh_ui=True)
         ctrl.clear_histories()
         if ctrl.orchestrator is not None:
             ctrl.orchestrator.reset_state()
@@ -867,9 +873,8 @@ async def start_wizard() -> None:
         ok = await ctrl.start(client=client)
     finally:
         if progress is not None:
-            with client:
-                from nicegui_ui.components.model_runtime import _dismiss_notification
-                _dismiss_notification(progress)
+            from nicegui_ui.components.model_runtime import _dismiss_notification
+            _dismiss_notification(progress)
     if not ok:
         _set_workflow_active(False)
         with client:
@@ -910,21 +915,16 @@ def render_wizard_sidebar_chat() -> None:
 def render_wizard_fab() -> None:
     """
     函数名: render_wizard_fab
-    作用: 渲染 Shell 右下角工作流 FAB（仅 workflow_active 时）
+    作用: 渲染 Shell 左下角工作流 FAB（仅 workflow_active 时）
     输入: 无
     输出: 无
     """
     if not is_workflow_active():
+        ui.query(".shell").classes(remove="is-workflow-active")
         return
+    ui.query(".shell").classes(add="is-workflow-active")
     ctrl = get_toml_wizard()
     with ui.element("div").classes("wizard-fab-anchor"):
-        if ctrl.orchestrator is not None:
-            intake = build_intake_plan(ctrl.orchestrator.state)
-            pending_key = next((item.key for item in intake if item.status == "pending"), None)
-            with ui.column().classes("workflow-progress-checklist mb-2"):
-                for item in intake:
-                    mark = "●" if item.key == pending_key else "○"
-                    ui.label(f"{mark} [{item.status}] {item.key}").classes("text-xs")
         async def _exit():
             await stop_wizard("已退出配置向导")
         AppBtn("退出向导", variant="default", on_click=_exit)

@@ -411,7 +411,13 @@ def generate_toml(state: WorkflowState) -> str:
     elif state.fields:
         base_fields = list(base.get("fields") or [])
         base["fields"] = _overlay_wizard_fields(base_fields, state.fields)
-    if state.db_id:
+    if state.user_inputs.get("db_id_confirmed"):
+        db_val = str(state.db_id or "").strip()
+        if db_val and db_val not in ("", "None"):
+            base["db_id"] = db_val
+        else:
+            base.pop("db_id", None)
+    elif state.db_id:
         base["db_id"] = state.db_id
     return TomlGenerator().ConfigToToml(base)
 

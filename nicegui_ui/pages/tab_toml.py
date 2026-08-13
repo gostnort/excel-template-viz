@@ -133,20 +133,23 @@ def trigger_toml_save(session):
                 session.template_path
             )
             session.primary_span = int(getattr(session.writer, "primary_span", 0) or 0)
+            from nicegui_ui.components.workflow_ui import is_workflow_active
+            wizard_active = is_workflow_active()
             if session.use_independent_db:
                 session.session_rows.clear()
                 session.current_instance_index = 0
                 if hasattr(session, "field_images"):
                     session.field_images.clear()
-                val, mask = (
-                    session.writer.read_values(session.template_path, 0)
-                    if session.template_path
-                    else ({}, {})
-                )
-                session.template_defaults = val
-                session.draft.clear()
-                session.draft.update(val)
-                session.formula_mask = mask
+                if not wizard_active:
+                    val, mask = (
+                        session.writer.read_values(session.template_path, 0)
+                        if session.template_path
+                        else ({}, {})
+                    )
+                    session.template_defaults = val
+                    session.draft.clear()
+                    session.draft.update(val)
+                    session.formula_mask = mask
             else:
                 if hasattr(session, "field_images"):
                     session.field_images.clear()
@@ -158,16 +161,17 @@ def trigger_toml_save(session):
                 session.session_rows = instances
                 session.session_masks = masks
                 session.current_instance_index = len(instances)
-                session.draft.clear()
-                val, mask = (
-                    session.writer.read_values(
-                        session.template_path, session.current_instance_index
+                if not wizard_active:
+                    session.draft.clear()
+                    val, mask = (
+                        session.writer.read_values(
+                            session.template_path, session.current_instance_index
+                        )
+                        if session.template_path
+                        else ({}, {})
                     )
-                    if session.template_path
-                    else ({}, {})
-                )
-                session.draft.update(val)
-                session.formula_mask = mask
+                    session.draft.update(val)
+                    session.formula_mask = mask
             session.selected_instance_idx = None
             session.selected_instance_indices.clear()
 

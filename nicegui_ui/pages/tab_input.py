@@ -104,7 +104,36 @@ def clear_ghost_cache(session) -> None:
     session.last_ghost_paste = ""
     if _ghost_input is not None:
         try:
+            if hasattr(_ghost_input, "_is_safe_to_interact") and not _ghost_input._is_safe_to_interact():
+                return
             _ghost_input.value = ""
+        except (RuntimeError, Exception):
+            pass
+
+
+def clear_field_drafts(session, labels: list[str] | None = None, *, refresh_ui: bool = False) -> None:
+    """
+    函数名: clear_field_drafts
+    作用: 清空向导字段草稿（session.draft）；可选 refresh 输入 Tab 重建控件
+    输入:
+        session: 当前会话
+        labels (list[str] | None): 要清空的 Input_label；None 时用 ui_provider 标签
+        refresh_ui (bool): True 时 refresh 输入 Tab，避免写已销毁的控件引用
+    输出: 无
+    """
+    wanted = labels
+    if wanted is None and getattr(session, "ui_provider", None) is not None:
+        try:
+            wanted = list(session.ui_provider.get_labels())
+        except Exception:
+            wanted = None
+    if not wanted:
+        wanted = list(_field_inputs.keys())
+    for label in wanted or []:
+        session.draft.pop(label, None)
+    if refresh_ui:
+        try:
+            render_input_tab.refresh()
         except Exception:
             pass
 
@@ -119,10 +148,15 @@ def read_field_drafts(labels: list[str] | None = None) -> dict[str, str]:
         dict[str, str]: Input_label → 文本（含空串）
     """
     session = SessionRegistry.for_current()
-    merged: dict[str, str] = {
-        str(key): str(value) if value is not None else ""
-        for key, value in dict(session.draft or {}).items()
-    }
+    from nicegui_ui.components.workflow_ui import is_workflow_active
+    # 向导进行中：只认用户当场输入的控件值，不合并模板行/历史 session.draft
+    if is_workflow_active():
+        merged: dict[str, str] = {}
+    else:
+        merged = {
+            str(key): str(value) if value is not None else ""
+            for key, value in dict(session.draft or {}).items()
+        }
     wanted = set(labels) if labels is not None else None
     for label, inp in list(_field_inputs.items()):
         if wanted is not None and label not in wanted:

@@ -126,6 +126,35 @@ def _segment_matches_label(segment: str, label: str) -> bool:
     return label_s in seg_s or seg_s in label_s
 
 
+def _draft_haystack_compatible(haystack: str, draft: str) -> bool:
+    """
+    函数名: _draft_haystack_compatible
+    作用: 判断 haystack 与用户 draft 是否同量级可比对（排除模板行残留污染）
+    输入:
+        haystack (str): regex 段文本或样本片段
+        draft (str): 用户草稿值
+    输出:
+        bool: 可安全做 regex 推断时为 True
+    """
+    seg_s = (haystack or "").strip()
+    draft_s = (draft or "").strip()
+    if not draft_s or not seg_s:
+        return False
+    if seg_s == draft_s:
+        return True
+    if draft_s in seg_s:
+        return True
+    if seg_s in draft_s:
+        # 短数值嵌在长 datetime 污染串中（如 7.5 in 2024-...007.5）→ 不兼容
+        if len(seg_s) <= len(draft_s) * 0.5:
+            if re.fullmatch(r"[\d.\-+]+", seg_s) and re.search(r"\d{4}-\d{2}-\d{2}", draft_s):
+                return False
+            if len(seg_s) < 4 and len(draft_s) > len(seg_s) * 2:
+                return False
+        return True
+    return False
+
+
 def _resolve_ghost_index(
     raw_index: int,
     *,

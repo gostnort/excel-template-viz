@@ -73,8 +73,13 @@ def _dismiss_notification(handle: Any) -> None:
     if handle is None:
         return
     try:
+        if getattr(handle, "deleted", False) or getattr(handle, "is_deleted", False):
+            return
         if hasattr(handle, "dismiss"):
             handle.dismiss()
+    except RuntimeError as exc:
+        if "deleted" in str(exc).lower():
+            return
     except Exception:
         pass
 
@@ -170,11 +175,7 @@ async def ensure_gemma_loaded(*, notify: bool = True, client: Client | None = No
         return False
     finally:
         _gemma_loading = False
-        if resolved is not None:
-            with resolved:
-                _dismiss_notification(progress)
-        else:
-            _dismiss_notification(progress)
+        _dismiss_notification(progress)
         _schedule_runtime_refresh(resolved)
 
 

@@ -11,6 +11,7 @@ from typing import Any
 
 from llm_gemma4.backends.base import LlmBackend
 from llm_gemma4.toml_config.field_agent import (
+    _draft_haystack_compatible,
     _resolve_ghost_index,
     _segment_matches_draft,
     run_field_agent,
@@ -855,8 +856,8 @@ def _action_infer_regex(
             with lock:
                 done_count += 1
             return
-        # haystack 不含 draft 时跳过 LLM，避免 label-only 段死循环
-        if draft_val and haystack and not _segment_matches_draft(haystack, draft_val):
+        # haystack 不含 draft 或格式不兼容时跳过 LLM，避免 label-only 段死循环
+        if draft_val and haystack and not _draft_haystack_compatible(haystack, draft_val):
             fs.needs_regex = False
             fs.error = f"segment at index={fs.index} lacks draft value"
             _log(f"[regex_infer] [{label}] skip — haystack lacks draft")
@@ -938,19 +939,16 @@ def _action_finalize_toml(
                 pass
 
     if not state.user_inputs.get("db_id_confirmed"):
-        raw_pending = str(state.db_id or "").strip()
-        if not raw_pending:
-            return ExecutorResult(
-                ok=False,
-                messages=["finalize_toml interrupted: db_id selection required"],
-                state_patch={},
-                interrupt=InterruptPayload(
-                    kind="ask_db_id",
-                    expected_input="db_id",
-                ),
-                route_key="finalize_toml",
-            )
-        state.user_inputs["db_id_confirmed"] = True
+        return ExecutorResult(
+            ok=False,
+            messages=["finalize_toml interrupted: db_id selection required"],
+            state_patch={},
+            interrupt=InterruptPayload(
+                kind="ask_db_id",
+                expected_input="db_id",
+            ),
+            route_key="finalize_toml",
+        )
     raw_id = str(state.db_id or "").strip()
     db_id = "" if raw_id in ("", "None") else raw_id
     for fs in state.fields.values():
