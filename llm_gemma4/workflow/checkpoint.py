@@ -83,17 +83,30 @@ class MemoryCheckpoint:
         输出:
             dict[str, Any]: 合并后的状态
         """
-        if user_value is not None and len(user_value) > 0:
-            # 用户输入：合并到 state 中
-            state.update({
-                "user_inputs": {
-                    k: v for k, v in user_value.items()
-                    if isinstance(v, (str, int, float, bool)) or isinstance(v, list) and all(
-                        isinstance(x, (str, int, float, bool)) for x in v
-                    )
-                }
-            })
-        # 清除中断记录
+        if user_value:
+            # 中文注释: 布局/样本/主键等字段合并进快照顶层，而不是覆盖整个 user_inputs
+            merge_keys = (
+                "input_area",
+                "move_to",
+                "offset",
+                "ghost_text_sample",
+                "user_draft",
+                "data_sources",
+                "db_id",
+                "template_labels",
+            )
+            for key in merge_keys:
+                if key in user_value:
+                    state[key] = user_value[key]
+            inputs = dict(state.get("user_inputs") or {})
+            if user_value.get("data_sources_skipped"):
+                inputs["data_sources_skipped"] = True
+            if "user_draft" in user_value:
+                inputs["field_drafts_captured"] = True
+            if "db_id" in user_value:
+                inputs["db_id_confirmed"] = True
+            if inputs:
+                state["user_inputs"] = inputs
         self._store.pop(thread_id, None)
         return state
 

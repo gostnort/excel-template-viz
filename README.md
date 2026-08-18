@@ -148,7 +148,7 @@ uv run python -m llm_gemma4 "用一句话介绍你自己"
 | `cuda` | 强制 GPU（含 NVIDIA 独显） | `Backend.GPU()` |
 | `openvino` | 保留名；本运行时走 GPU 档 | `Backend.GPU()` |
 
-TOML 配置向导（应用层编排）规格见 `docs/gemma4_e4b_workflow.md`；NiceGUI「TOML」页当前提供校验与全文编辑，向导智能悬浮窗正在 `toml-guide` 分支开发中。
+TOML 配置向导（应用层编排）规格见 `docs/gemma4_dynamic_workflow.md`；NiceGUI「TOML」页提供校验、全文编辑与 Graph 事件驱动的配置工作流。
 
 ### 可选：PaddleOCR（`paddle_ocr/`）
 
@@ -194,5 +194,5 @@ TOML 配置向导（应用层编排）规格见 `docs/gemma4_e4b_workflow.md`；
 - `docs/nicegui_ui/nicegui_ui_plan.md` — NiceGUI 迁移与交互规格
 - `docs/embed_gemma4.md` — Gemma 4 LiteRT 运行时
 - `docs/embed_paddle_ocr.md` — PaddleOCR 平台与内存分级精修
-- `docs/gemma4_e4b_workflow.md` — TOML 智能向导 7 步工作流与全局悬浮窗规格
+- `docs/gemma4_dynamic_workflow.md` — TOML 配置工作流（Graph 事件驱动、中断对话框、FAB）
 - `docs/db_store.md` — 附图落库与 `input_label` 关联

@@ -26,6 +26,7 @@ from llm_gemma4.workflow.state import (
     FieldState,
     InterruptPayload,
     WorkflowState,
+    ensure_field_states,
 )
 
 
@@ -44,6 +45,24 @@ def _progress_patch(state: WorkflowState, *keys: str, status: str = "done") -> d
     for key in keys:
         progress[key] = status
     return {"progress": progress}
+
+
+def _persist_message(state: WorkflowState, prefix: str) -> str:
+    """
+    函数名: _persist_message
+    作用: dry-run 时标明未写 sidecar，否则报告落盘路径
+    输入:
+        state (WorkflowState): 含 write_toml / written_toml_path
+        prefix (str): 日志前缀，如 [db_id]
+    输出:
+        str: 一行进度日志
+    """
+    if state.user_inputs.get("write_toml") is False:
+        return f"{prefix} TOML preview (dry-run, not written)"
+    path = str(state.written_toml_path or "").strip()
+    if path:
+        return f"{prefix} TOML persisted: {path}"
+    return f"{prefix} TOML persisted"
 
 
 def _resolve_draft_index(
@@ -195,7 +214,7 @@ def _action_record_sources(
     # 尽早校正 sidecar：无效 work_sheet（如 Input_sheet 不在 xlsx）在此写回真实表名
     try:
         persist_wizard_toml(state, tid)
-        _log(f"[data_sources] TOML persisted: templates/{tid}/{tid}.toml")
+        _log(_persist_message(state, "[data_sources]"))
     except Exception as exc:
         _log(f"[data_sources] TOML persist failed: {exc}")
 
@@ -362,10 +381,7 @@ def _action_capture_sample(
             ),
             route_key="capture_sample",
         )
-    for label in labels:
-        if label not in state.fields:
-            state.fields[label] = FieldState(input_label=label)
-
+    ensure_field_states(state, labels)
     # 重置预处理状态，准备重新处理
     state.indexed_segments = {}
     state.determiner = ""
@@ -452,7 +468,7 @@ def _action_preprocess_sample(
     # 预处理后立即落盘，确保 brace_json 空 determiner / plain list 写入 TOML
     try:
         persist_wizard_toml(state, str(state.template_id or "") if state.template_id else "")
-        _log("[ghost_preprocess] TOML persisted")
+        _log(_persist_message(state, "[ghost_preprocess]"))
     except Exception as exc:
         _log(f"[ghost_preprocess] TOML persist failed: {exc}")
 
@@ -607,6 +623,7 @@ def _action_match_ghost_fields(
     def _ghost_worker(label: str) -> None:
         nonlocal done_count
         draft_val = str(state.user_draft.get(label, "") or "").strip()
+        ensure_field_states(state, [label])
         fs = state.fields[label]
         # 每个字段都走子代理；exact/fuzzy 由模型 + _apply_ghost_payload 硬校验
         res = run_field_agent(
@@ -961,7 +978,7 @@ def _action_finalize_toml(
 
     try:
         persist_wizard_toml(state, str(state.template_id or "") if state.template_id else "")
-        _log("[db_id] TOML persisted")
+        _log(_persist_message(state, "[db_id]"))
     except Exception as exc:
         _log(f"[db_id] TOML persist failed: {exc}")
 

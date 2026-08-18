@@ -2,7 +2,7 @@
 
 > 状态：**v7.0**（推理驱动 + 结构化判定；**不含**向导编排、UI、业务 prompt）  
 > 日期：2026-07-26  
-> 应用层：[`gemma4_e4b_workflow.md`](gemma4_e4b_workflow.md)（TOML 向导）；[`embed_paddle_ocr.md`](embed_paddle_ocr.md)（OCR 语义门禁）  
+> 应用层：[`gemma4_dynamic_workflow.md`](gemma4_dynamic_workflow.md)（TOML 向导）；[`embed_paddle_ocr.md`](embed_paddle_ocr.md)（OCR 语义门禁）  
 > 模型：**Gemma 4 E4B（约 4B）** · [litert-community/gemma-4-E4B-it-litert-lm](https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm) · `gemma-4-E4B-it.litertlm`
 
 ---
@@ -12,10 +12,10 @@
 | 文档 | 回答的问题 |
 |------|------------|
 | **本文件** | 模型怎么加载、三条推理路径（无状态 / 主 Session / 字段子 Session）各自怎么用、`run_judgment` 怎么收成 `JudgmentResult` |
-| [`gemma4_e4b_workflow.md`](gemma4_e4b_workflow.md) | 向导何时调主对话、何时派子 agent、TOML 怎么 patch、UI 显示什么 |
+| [`gemma4_dynamic_workflow.md`](gemma4_dynamic_workflow.md) | 向导何时调主对话、何时派子 agent、TOML 怎么 patch、UI 显示什么 |
 | [`embed_paddle_ocr.md`](embed_paddle_ocr.md) | fast OCR 草稿何时算语义有问题、何时调 PaddleVL |
 
-**不在本文件**：向导 7 步业务、NiceGUI 线框、`verify_toml`、Google Sheet 产品规则、OCR 单元语义、PaddleVL。
+**不在本文件**：向导编排业务、NiceGUI 线框、`verify_toml`、Google Sheet 产品规则、OCR 单元语义、PaddleVL。
 
 **不在本期平台**：`chat` 模式、云端 API、Playwright / 浏览器自动化、无校验自主 Agent、训练/微调、独立 LLM HTTP 服务。
 
@@ -27,7 +27,7 @@ llm_gemma4/（本规格）                    应用层
 generate / run_judgment                  paddle_ocr：HasOcrSemanticProblem
 ConversationOnce / Pic2Str               paddle_ocr：GemmaVisionCorrect
 StartGemma / EndGemma
-open_session + SessionOptions            gemma4_e4b_workflow：主对话 + 字段子 agent
+open_session + SessionOptions            gemma4_dynamic_workflow：主对话 + 字段子 agent
 ```
 
 | 层 | 职责 | 禁止 |
@@ -121,11 +121,8 @@ llm_gemma4/
     litert/
       backend.py        # LiteRtBackend
       session.py        # LiteRtSession
-  wizard/               # 应用层；语义见 gemma4_e4b_workflow.md
-    orchestrator.py
-    prompts.py
-    toml_patcher.py
-    context.py          # 主对话外挂摘要（task_anchor、fields_done）；非底座
+  workflow/             # Graph dispatch；语义见 gemma4_dynamic_workflow.md
+  toml_config/          # decide / executor / field_agent / toml_patcher
 
 models/gemma4/
   gemma-4-E4B-it.litertlm
@@ -142,8 +139,8 @@ models/gemma4/
 | 路径 | 调用方 | 接口 | Conversation | thinking |
 |------|--------|------|--------------|----------|
 | **无状态单次** | OCR `run_judgment`、一次性问答 | `generate(...)` | 临时，发完即关 | 否 |
-| **主对话** | TOML 向导编排 | `open_session("wizard_main", options=...)` | 跨 7 步持久 | 否（拆任务/汇总用普通模式） |
-| **字段子 agent** | 向导步骤 3/4/5 | `open_session("field_{label}_{attempt}", options=...)` | 单字段短生命周期 | 第 1 轮否；失败重试**新 session** 开 thinking |
+| **主对话** | TOML 向导编排 | `open_session("wizard_main", options=...)` | 跨工作流持久 | 否（拆任务/汇总用普通模式） |
+| **字段子 agent** | 字段匹配 / Sheet / regex | `open_session("field_{label}_{attempt}", options=...)` | 单字段短生命周期 | 第 1 轮否；失败重试**新 session** 开 thinking |
 
 三条路径 **共用** 同一 `Engine` 单例；`Conversation` 实例彼此隔离。OCR **不得**复用向导 session，**不得**向向导上下文写入 fast JSON 全量。
 
@@ -306,12 +303,12 @@ hf download litert-community/gemma-4-E4B-it-litert-lm ^
 4. 字段子 agent：普通 session 与 thinking session 为**不同** `session_id`，互不污染
 5. 向导与 OCR 并发调用时仍共用单 `Engine`，无重复加载权重
 
-向导产品验收见 [`gemma4_e4b_workflow.md`](gemma4_e4b_workflow.md) §7。OCR 验收见 [`embed_paddle_ocr.md`](embed_paddle_ocr.md) §7。
+向导产品验收见 [`gemma4_dynamic_workflow.md`](gemma4_dynamic_workflow.md) §13。OCR 验收见 [`embed_paddle_ocr.md`](embed_paddle_ocr.md) §7。
 
 ---
 
 ## 7. 相关文档
 
-- [`gemma4_e4b_workflow.md`](gemma4_e4b_workflow.md) — TOML 配置向导（主对话 + 子 agent）
+- [`gemma4_dynamic_workflow.md`](gemma4_dynamic_workflow.md) — TOML 配置向导（Graph 事件驱动、主对话 + 子 agent）
 - [`embed_paddle_ocr.md`](embed_paddle_ocr.md) — OCR 语义门禁
 - [`toml_config_design.md`](toml_config_design.md) — 字段语义（业务）

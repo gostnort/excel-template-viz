@@ -11,7 +11,7 @@
 1. Zero imports from `llm_gemma4.wizard`
 2. **Delete** entire directory `llm_gemma4/wizard/` (11 modules)
 3. Publish `docs/gemma4_dynamic_workflow.md` as authority
-4. Deprecate `docs/gemma4_e4b_workflow.md`
+4. Delete `docs/gemma4_e4b_workflow.md`
 5. Confirm `llm_gemma4/wizard/` does not exist on disk
 
 ---
@@ -130,15 +130,11 @@ Must document:
 7. Input tab ghost guard
 8. TOML invariants (index, determiner, multi input_area)
 9. Multi-agent topology
-10. Anti-patterns list (from e4b §6, updated for dynamic flow)
+10. Anti-patterns list (updated for dynamic flow)
 
-### Update `docs/gemma4_e4b_workflow.md`
+### Delete `docs/gemma4_e4b_workflow.md`
 
-Add at top:
-
-```markdown
-> **DEPRECATED** — superseded by [gemma4_dynamic_workflow.md](gemma4_dynamic_workflow.md). Fixed 8-step FSM removed.
-```
+Do not keep a stub. Retarget remaining pointers to [`docs/gemma4_dynamic_workflow.md`](../../docs/gemma4_dynamic_workflow.md).
 
 ### Update plan pointers
 
@@ -224,7 +220,6 @@ llm_gemma4/
 Copy technical content from:
 - `plans/dynamic-wizard-runtime/phase-a.md` §5
 - `plans/dynamic-wizard-runtime/phase-b.md` §6–7
-- `docs/gemma4_e4b_workflow.md` §1.7–1.8, §4, §6 (update wording for dynamic flow)
 
 ---
 
@@ -233,6 +228,6 @@ Copy technical content from:
 - [ ] `rg llm_gemma4.wizard` → 0 matches
 - [ ] `llm_gemma4/wizard/` deleted
 - [ ] `docs/gemma4_dynamic_workflow.md` created
-- [ ] `gemma4_e4b_workflow.md` deprecated banner
+- [ ] `docs/gemma4_e4b_workflow.md` deleted; pointers retargeted to `gemma4_dynamic_workflow.md`
 - [ ] `tab_input.py` uses `is_workflow_active`
 - [ ] Manual E2E 1–10 pass

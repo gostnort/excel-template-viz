@@ -1,13 +1,18 @@
-"""Workflow orchestrator: ties executor actions + checkpoint together for interrupt-driven tick loop.
+"""Workflow orchestrator: Graph dispatch (start/resume/stop) + decide/execute nodes.
+
+NiceGUI compatibility facade: keeps WorkflowState + interrupt kinds (ask_sources /
+ask_layout / ask_sample / ask_db_id). CLI uses TomlGuideSpec + DialogOrchestrator
+instead; this module must keep toml_wizard imports working.
 
 Phase B: Gemma-driven decide() replaces hard-coded stub (stub available via WORKFLOW_DECIDE_STUB=1).
-NiceGUI LLM work runs on io_bound worker thread; UI main thread does not block.
+NiceGUI LLM work runs on the Gemma worker thread; UI main thread does not block.
 """
 
 from __future__ import annotations
 
 import os
 import threading
+import uuid
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
@@ -17,12 +22,26 @@ from llm_gemma4.backends.base import LlmBackend, SessionOptions
 from llm_gemma4.toml_config.context import build_main_turn_prefix
 from llm_gemma4.toml_config.decision import decide
 from llm_gemma4.toml_config.design_doc import build_design_doc
-from llm_gemma4.toml_config.executor import execute
-from llm_gemma4.toml_config.intake_plan import already_captured, build_intake_plan, init_progress
+from llm_gemma4.toml_config.executor import ACTION_HANDLERS, execute
+from llm_gemma4.toml_config.intake_plan import build_intake_plan, init_progress
 from llm_gemma4.toml_config.intake_seed import sidecar_data_sources
+from llm_gemma4.toml_config.payload import merge_payload_into_state, merge_state_patch
 from llm_gemma4.toml_config.prompts import DETERMINER_PROMPT, MAIN_SYSTEM_PROMPT
 from llm_gemma4.workflow.checkpoint import MemoryCheckpoint
-from llm_gemma4.workflow.state import FieldState, InterruptPayload, WorkflowState
+from llm_gemma4.workflow.events import (
+    EVENT_RESUME,
+    EVENT_START,
+    EVENT_STOP,
+    WorkflowEvent,
+)
+from llm_gemma4.workflow.graph import CompiledWorkflow, WorkflowGraph
+from llm_gemma4.workflow.state import (
+    Decision,
+    ExecutorResult,
+    FieldState,
+    InterruptPayload,
+    WorkflowState,
+)
 
 
 def _stub_mode() -> bool:
@@ -76,103 +95,10 @@ def _state_from_snapshot(snap: dict[str, Any]) -> WorkflowState:
     return state
 
 
-def _sanitize_template_labels(raw: list[Any]) -> list[str]:
-    """
-    函数名: _sanitize_template_labels
-    作用: 去重并过滤空白的 template_labels
-    输入:
-        raw (list): UI 传入的标签列表
-    输出:
-        list[str]: 清洗后的标签
-    """
-    seen: set[str] = set()
-    labels: list[str] = []
-    for item in raw:
-        label = str(item or "").strip()
-        if not label or label in seen:
-            continue
-        seen.add(label)
-        labels.append(label)
-    return labels
-
-
-def _merge_payload_into_state(state: WorkflowState, payload: dict[str, Any]) -> None:
-    """
-    函数名: _merge_payload_into_state
-    作用: 将 UI tick payload 合并进 WorkflowState
-    输入:
-        state (WorkflowState): 当前状态
-        payload (dict): UI 传入字段
-    输出: 无
-    """
-    if not payload:
-        return
-    if payload.get("template_id"):
-        state.template_id = str(payload.get("template_id") or state.template_id)
-    tpath = payload.get("template_path")
-    if tpath:
-        state.template_path = Path(str(tpath))
-    if "data_sources" in payload:
-        incoming = list(payload.get("data_sources") or [])
-        # 空列表不覆盖 init_workflow / sidecar 已预填的 [[sources]]
-        if incoming or not state.data_sources:
-            state.data_sources = incoming
-    if "input_area" in payload:
-        state.input_area = payload.get("input_area") or ""
-    if "move_to" in payload:
-        state.move_to = payload.get("move_to") or ""
-    if "offset" in payload:
-        try:
-            state.offset = int(payload.get("offset") or 1)
-        except (TypeError, ValueError):
-            state.offset = 1
-    if "ghost_text_sample" in payload:
-        state.ghost_text_sample = str(payload.get("ghost_text_sample") or "")
-    if "user_draft" in payload:
-        draft = payload.get("user_draft") or {}
-        state.user_draft = {str(k): str(v) for k, v in draft.items() if str(v or "").strip()}
-        state.user_inputs["field_drafts_captured"] = True
-    if "template_labels" in payload:
-        labels = _sanitize_template_labels(list(payload.get("template_labels") or []))
-        state.template_labels = labels
-        for label in labels:
-            if label not in state.fields:
-                from llm_gemma4.workflow.state import FieldState
-                state.fields[label] = FieldState(input_label=label)
-    if "google_sheet_headers" in payload:
-        state.google_sheet_headers = list(payload.get("google_sheet_headers") or [])
-    if "google_sheet_sample" in payload:
-        state.google_sheet_sample = list(payload.get("google_sheet_sample") or [])
-    if "db_id" in payload:
-        raw_id = str(payload.get("db_id") or "").strip()
-        state.db_id = "" if raw_id in ("", "None") else raw_id
-        state.user_inputs["db_id_confirmed"] = True
-    if payload.get("data_sources_skipped"):
-        state.user_inputs["data_sources_skipped"] = True
-
-
-def _merge_patch(state: WorkflowState, patch: dict[str, Any]) -> None:
-    """
-    函数名: _merge_patch
-    作用: 将 executor state_patch 写回 dataclass（fields 原地变更不覆盖）
-    输入:
-        state (WorkflowState): 当前状态
-        patch (dict): executor 返回补丁
-    输出: 无
-    """
-    if not patch:
-        return
-    for key, value in patch.items():
-        if key == "fields":
-            continue
-        if hasattr(state, key):
-            setattr(state, key, value)
-
-
 class WorkflowOrchestrator:
     """
     类名: WorkflowOrchestrator
-    作用: tick 驱动 Gemma decide + executor；支持中断/恢复与持久 wizard_main 会话
+    作用: Graph dispatch 驱动 Gemma decide + executor 节点；支持中断/恢复与持久 wizard_main 会话
     输入: LlmBackend 与 UI 回调
     输出: 无
     """
@@ -198,6 +124,13 @@ class WorkflowOrchestrator:
         self._main_opened = False
         self._thinking_budget_cached: int | None = None
         self._ui_lock = threading.Lock()
+        self.last_event: WorkflowEvent | None = None
+        self._last_intake_pending: list[str] = []
+        graph = WorkflowGraph()
+        for name, handler in ACTION_HANDLERS.items():
+            graph.add_node(name, handler)
+        graph.set_router(self._route)
+        self._compiled: CompiledWorkflow = graph.compile(self._checkpoint)
 
     def init_workflow(
         self,
@@ -230,6 +163,17 @@ class WorkflowOrchestrator:
             )
             progress["data_sources"] = "done" if has_google else "skip"
             self.state.progress = progress
+
+    @property
+    def thread_id(self) -> str:
+        """
+        函数名: thread_id
+        作用: Graph 检查点使用的线程标识
+        输入: 无
+        输出:
+            str: thread_id
+        """
+        return self._thread_id
 
     def is_interrupted(self) -> bool:
         """
@@ -336,7 +280,6 @@ class WorkflowOrchestrator:
         输出:
             str: 模型回复文本
         """
-        import uuid
         sid = f"wizard_determiner_{uuid.uuid4().hex[:8]}"
         opts = SessionOptions(
             system_message=DETERMINER_PROMPT,
@@ -353,29 +296,15 @@ class WorkflowOrchestrator:
         finally:
             session.close()
 
-    def tick(self, payload: dict[str, Any] | None = None) -> WorkflowState:
+    def _route(self, user_input: dict[str, Any] | None) -> Decision:
         """
-        函数名: tick
-        作用: decide → execute 一轮；遇中断则挂起等待 UI 恢复
+        函数名: _route
+        作用: Graph 动态路由：build_intake_plan + decide()
         输入:
-            payload (dict | None): UI 恢复/步骤数据
+            user_input (dict | None): 本轮 UI 输入（仅 resume/start 首轮非空）
         输出:
-            WorkflowState: 更新后的状态
+            Decision: 下一步动作
         """
-        if self.state.is_finished:
-            return self.state
-        user_input: dict[str, Any] | None = None
-        if self.is_interrupted():
-            snap = self._checkpoint.get_snapshot(self._thread_id)
-            if snap:
-                self.state = _state_from_snapshot(snap)
-            user_input = dict(payload or {})
-            _merge_payload_into_state(self.state, user_input)
-            self._checkpoint.clear(self._thread_id)
-            self.state.pending_interrupt = None
-        elif payload:
-            user_input = dict(payload)
-            _merge_payload_into_state(self.state, user_input)
         intake = build_intake_plan(self.state)
         decision, self._stub_index = decide(
             self.state,
@@ -384,20 +313,65 @@ class WorkflowOrchestrator:
             self._backend,
             stub_index=self._stub_index,
         )
+        self._last_intake_pending = [item.key for item in intake if item.status == "pending"]
+        return decision
+
+    def apply_resume(self, payload: dict[str, Any]) -> None:
+        """
+        函数名: apply_resume
+        作用: 从 checkpoint 恢复快照并合并 UI payload，然后清除中断
+        输入:
+            payload (dict): UI 恢复数据
+        输出: 无
+        """
+        snap = self._checkpoint.get_snapshot(self._thread_id)
+        if snap:
+            self.state = _state_from_snapshot(snap)
+        self._checkpoint.clear(self._thread_id)
+        merge_payload_into_state(self.state, dict(payload or {}))
+        self.state.pending_interrupt = None
+
+    def apply_start_payload(self, payload: dict[str, Any]) -> None:
+        """
+        函数名: apply_start_payload
+        作用: 启动事件携带的初始 payload 合并进 state（不清 checkpoint）
+        输入:
+            payload (dict): 启动数据（template_id / data_sources 等）
+        输出: 无
+        """
+        merge_payload_into_state(self.state, dict(payload or {}))
+
+    def note_decision(self, decision: Decision) -> None:
+        """
+        函数名: note_decision
+        作用: 记录 decide 结果到日志与 history，并合并 context_update
+        输入:
+            decision (Decision): 本轮决策
+        输出: 无
+        """
         reason = decision.reason or decision.action_id
         self._progress(f"[decide] {decision.action_id} ({decision.next_action}): {reason}")
+        pending = getattr(self, "_last_intake_pending", [])
         self.state.history.append({
             "decision": asdict(decision),
-            "intake_pending": [item.key for item in intake if item.status == "pending"],
+            "intake_pending": list(pending),
         })
         if decision.context_update:
-            _merge_payload_into_state(self.state, decision.context_update)
+            merge_payload_into_state(self.state, decision.context_update)
         if decision.next_action == "error":
             self._progress(f"decision error: {decision.reason}")
-            return self.state
-        if self.state.is_finished and decision.action_id != "finalize_toml":
-            return self.state
-        result = execute(
+
+    def run_handler(self, handler: Callable[..., ExecutorResult], decision: Decision) -> ExecutorResult:
+        """
+        函数名: run_handler
+        作用: 通过 execute() 跑已注册节点（保留 skip-interrupt 守卫）
+        输入:
+            handler (Callable): 图节点（execute 按 action_id 再查 ACTION_HANDLERS）
+            decision (Decision): 本轮决策
+        输出:
+            ExecutorResult: 执行结果
+        """
+        return execute(
             decision,
             self.state,
             self._backend,
@@ -408,7 +382,17 @@ class WorkflowOrchestrator:
             determiner_one_shot=self._determiner_one_shot,
             thinking_budget=self._thinking_budget(),
         )
-        _merge_patch(self.state, result.state_patch)
+
+    def note_result(self, decision: Decision, result: ExecutorResult) -> None:
+        """
+        函数名: note_result
+        作用: 合并 executor patch、写进度日志与 history
+        输入:
+            decision (Decision): 本轮决策
+            result (ExecutorResult): 节点执行结果
+        输出: 无
+        """
+        merge_state_patch(self.state, result.state_patch)
         for msg in result.messages:
             self._progress(msg)
         route = result.route_key or decision.route_key
@@ -422,17 +406,69 @@ class WorkflowOrchestrator:
             "route_key": result.route_key,
             "interrupt": asdict(result.interrupt) if result.interrupt else None,
         })
-        if result.interrupt:
-            self._checkpoint.save_interrupt(
-                self._thread_id,
-                _state_snapshot(self.state),
-                asdict(result.interrupt),
-            )
-            self.state.pending_interrupt = asdict(result.interrupt)
-            return self.state
-        if result.ok and _stub_mode():
+        if result.ok and result.interrupt is None and _stub_mode():
             self._stub_index += 1
         self.state.route_key = result.route_key or decision.route_key
+
+    def save_interrupt(self, interrupt: InterruptPayload) -> None:
+        """
+        函数名: save_interrupt
+        作用: 将状态快照与中断 payload 写入 MemoryCheckpoint
+        输入:
+            interrupt (InterruptPayload): 中断描述
+        输出: 无
+        """
+        self._checkpoint.save_interrupt(
+            self._thread_id,
+            _state_snapshot(self.state),
+            asdict(interrupt),
+        )
+        self.state.pending_interrupt = asdict(interrupt)
+
+    def on_stop(self) -> None:
+        """
+        函数名: on_stop
+        作用: Stop 事件回调，关闭持久会话
+        输入: 无
+        输出: 无
+        """
+        self.close()
+
+    def dispatch(self, event: WorkflowEvent) -> WorkflowEvent:
+        """
+        函数名: dispatch
+        作用: 处理 start/resume/stop；内部 Continue 直到 interrupt/finished/error
+        输入:
+            event (WorkflowEvent): 入站事件
+        输出:
+            WorkflowEvent: 出站事件
+        """
+        if event.type == EVENT_STOP:
+            self.on_stop()
+            outbound = WorkflowEvent(type=EVENT_STOP)
+            self.last_event = outbound
+            return outbound
+        outbound = self._compiled.dispatch(event, self)
+        self.last_event = outbound
+        return outbound
+
+    def tick(self, payload: dict[str, Any] | None = None) -> WorkflowState:
+        """
+        函数名: tick
+        作用: 单轮 decide→execute（不内部 Continue）；测试/调试兼容入口
+        输入:
+            payload (dict | None): UI 恢复/步骤数据
+        输出:
+            WorkflowState: 更新后的状态
+        """
+        if self.state.is_finished:
+            return self.state
+        event_type = EVENT_RESUME if self.is_interrupted() else EVENT_START
+        self._compiled.dispatch(
+            WorkflowEvent(type=event_type, payload=dict(payload or {})),
+            self,
+            max_cycles=1,
+        )
         return self.state
 
     def close(self) -> None:

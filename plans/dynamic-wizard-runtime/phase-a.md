@@ -1,5 +1,8 @@
 # Phase A — Runtime + Executor Parity
 
+> **Historical phase doc** — Phase A is **done** on `feature-gemma-toml-3`.  
+> **Current truth:** [STATUS.md](STATUS.md) and [tasks.md](tasks.md). §8 audit below is **stale** (pre-implementation).
+
 > **Repo:** `excel-template-viz`  
 > **Prerequisite:** none (start here)  
 > **Next phase:** [phase-b.md](phase-b.md)  
@@ -551,6 +554,6 @@ Phase A is **done** only when ALL true:
 | `nicegui_ui/components/wizard_ui.py` | dialogs, FAB |
 | `nicegui_ui/components/toml_wizard.py` | controller |
 | `nicegui_ui/pages/tab_input.py` | `read_ghost_sample`, `read_field_drafts`, ghost guard |
-| `docs/gemma4_e4b_workflow.md` | business rules v8.3 |
+| `docs/gemma4_dynamic_workflow.md` | business rules (Graph event workflow) |
 | `docs/embed_gemma4.md` | session/thinking rules |
 | `app/core_split.py` | split_by_determiner |

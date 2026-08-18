@@ -1,5 +1,7 @@
 # Gemma4 Dynamic TOML Workflow — Coding Handoff (all phases)
 
+> **Superseded for tracking:** use [STATUS.md](STATUS.md) + [tasks.md](tasks.md). Phases A–D are largely implemented; `wizard/` deleted.
+
 > **Audience:** small coding LLM implementing this repo  
 > **Repo:** `excel-template-viz`  
 > **Do NOT add:** `langgraph`, `langchain`  
@@ -467,7 +469,7 @@ Full run driven by Gemma `decide()` (or mocked decide in tests); checklist items
 2. Delete directory `llm_gemma4/wizard/` (all 11 files)
 3. Remove `WizardOrchestrator`, `advance(step, payload)` completely
 4. `tab_input.py`: `from nicegui_ui.components.workflow_ui import is_workflow_active`
-5. Write `docs/gemma4_dynamic_workflow.md`; banner on `docs/gemma4_e4b_workflow.md` deprecated
+5. Write `docs/gemma4_dynamic_workflow.md`; delete `docs/gemma4_e4b_workflow.md`
 6. Item 10 checklist: wizard folder must not exist
 
 ---

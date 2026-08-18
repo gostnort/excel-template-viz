@@ -425,13 +425,21 @@ def generate_toml(state: WorkflowState) -> str:
 def persist_wizard_toml(state: WorkflowState, template_id: str = "") -> Path:
     """
     函数名: persist_wizard_toml
-    作用: 将合并后的向导 TOML 写入 templates/{id}/{id}.toml
+    作用: 将合并后的向导 TOML 写入 templates/{id}/{id}.toml；write_toml=False 时只生成预览
     输入:
-        state (WorkflowState): 向导状态
+        state (WorkflowState): 向导状态（user_inputs.write_toml is False 则 dry-run）
         template_id (str): 模板 ID；空则回退 state.template_id
     输出:
         Path: 写入的 TOML 路径
     """
+    if state.user_inputs.get("write_toml") is False:
+        try:
+            text = generate_toml(state)
+        except Exception as exc:
+            text = f"# dry-run: generate_toml skipped ({exc})\n"
+        state.user_inputs["toml_preview"] = text
+        state.written_toml_path = ""
+        return Path("(dry-run)")
     tid = (template_id or state.template_id or "").strip()
     if not tid:
         raise ValueError("missing template_id for TOML persist")

@@ -51,6 +51,7 @@ test/
 test_*.py
 *_test.py
 _tmp*
+plans/
 
 # 导出 xlsx（打开/打印用）
 exports/

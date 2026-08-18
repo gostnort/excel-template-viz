@@ -2,7 +2,8 @@
 
 > **Spec-kit:** templates not in repo; this file is the implementation plan  
 > **Specification:** [specify.md](specify.md)  
-> **Tasks:** [tasks.md](tasks.md)
+> **Tasks:** [tasks.md](tasks.md)  
+> **Live status:** [STATUS.md](STATUS.md) — phases A–D largely implemented on `feature-gemma-toml-3`; orchestration in `llm_gemma4/toml_config/`, not `wizard/`
 
 ---
 
@@ -242,7 +243,7 @@ Phase B: Gemma-driven `decide()`.
 
 - [ ] Grep repo: zero imports from `llm_gemma4.wizard`
 - [ ] Delete `llm_gemma4/wizard/` directory
-- [ ] Add `docs/gemma4_dynamic_workflow.md`; mark `gemma4_e4b_workflow.md` deprecated
+- [ ] Add `docs/gemma4_dynamic_workflow.md`; delete `docs/gemma4_e4b_workflow.md`
 - [ ] Update `tab_input.py` import: `is_workflow_active` from `workflow_ui`
 
 ---

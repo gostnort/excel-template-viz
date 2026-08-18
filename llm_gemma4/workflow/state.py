@@ -1,4 +1,8 @@
-"""Workflow 状态结构：从 WizardState 迁移，新增中断 / 进度相关字段。"""
+"""工作流运行时原语 + TOML 域状态袋。
+
+Decision / InterruptPayload / ExecutorResult 是 Graph 运行时原语，不含业务字段。
+WorkflowState / FieldState 是 toml_config 向导的域状态；通用对话请用 llm_gemma4.dialog。
+"""
 
 from __future__ import annotations
 
@@ -54,6 +58,24 @@ class WorkflowState:
     history: list[dict[str, Any]] = field(default_factory=list)
     route_key: str = ""
     pending_interrupt: dict[str, Any] | None = None
+
+
+def ensure_field_states(state: WorkflowState, labels: list[str] | None = None) -> None:
+    """
+    函数名: ensure_field_states
+    作用: 按标签补齐 FieldState，避免 resume 跳过 capture_sample 后缺字段
+    输入:
+        state (WorkflowState): 当前工作流状态
+        labels (list[str] | None): 指定标签；默认用 template_labels
+    输出: 无
+    """
+    for label in labels if labels is not None else list(state.template_labels or []):
+        name = str(label or "").strip()
+        if not name or name in state.fields:
+            continue
+        state.fields[name] = FieldState(input_label=name)
+
+
 
 
 @dataclass

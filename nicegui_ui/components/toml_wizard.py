@@ -13,6 +13,7 @@ from nicegui_ui.components.model_runtime import ensure_gemma_loaded
 from llm_gemma4.__main__ import EndGemma, _get_backend
 from llm_gemma4.runtime.gemma_worker import await_gemma_thread, run_on_gemma_thread_blocking
 from llm_gemma4.toml_config.workflow_orchestrator import WorkflowOrchestrator
+from llm_gemma4.workflow.events import EVENT_RESUME, EVENT_START, WorkflowEvent
 from nicegui_ui.components.general import Auth, SessionRegistry
 
 
@@ -49,7 +50,7 @@ def get_workflow_controller() -> TomlWizardController:
 class TomlWizardController:
     """
     类名: TomlWizardController
-    作用: 管理 WorkflowOrchestrator 生命周期与 tick 调度，UI 由 wizard_ui 进程内引导
+    作用: 管理 WorkflowOrchestrator 生命周期与 Graph dispatch 调度，UI 由 workflow_ui 进程内引导
     """
 
     def __init__(self) -> None:
@@ -68,7 +69,7 @@ class TomlWizardController:
     def is_stopping(self) -> bool:
         """
         函数名: is_stopping
-        作用: 是否正在请求停止（等待当前 tick 结束）
+        作用: 是否正在请求停止（等待当前 dispatch 结束）
         输入: 无
         输出:
             bool: 停止流程进行中为 True
@@ -420,30 +421,44 @@ class TomlWizardController:
         self.started = True
         return True
 
-    async def run_turn(self, payload: dict[str, Any] | None = None):
+    async def dispatch(self, event: WorkflowEvent) -> WorkflowEvent | None:
         """
-        函数名: run_turn
-        作用: 在 worker 线程执行 orchestrator.tick
+        函数名: dispatch
+        作用: 在 Gemma 工作线程执行 orchestrator.dispatch
         输入:
-            payload (dict | None): 步骤/恢复数据
+            event (WorkflowEvent): start / resume / stop
         输出:
-            WorkflowOrchestrator | None: 成功时返回 orchestrator
+            WorkflowEvent | None: 出站事件；忙碌或已停止时为 None
         """
         if self._stopping or self._busy or self.orchestrator is None:
             return None
         self._busy = True
         try:
-            # LiteRT 须在专用 Gemma 工作线程调用，与 StartGemma/EndGemma 同线程
             orch = self.orchestrator
-            await await_gemma_thread(orch.tick, payload or {})
+            outbound = await await_gemma_thread(orch.dispatch, event)
             if self._stopping:
                 return None
-            return self.orchestrator
+            return outbound
         except Exception as exc:
             self._log(f"错误: {exc}")
             raise
         finally:
             self._busy = False
+
+    async def run_turn(self, payload: dict[str, Any] | None = None) -> WorkflowEvent | None:
+        """
+        函数名: run_turn
+        作用: 兼容入口：按是否中断映射为 Resume 或 Start（图内会 Continue）
+        输入:
+            payload (dict | None): 步骤/恢复数据
+        输出:
+            WorkflowEvent | None: 出站事件
+        """
+        orch = self.orchestrator
+        if orch is None:
+            return None
+        kind = EVENT_RESUME if orch.is_interrupted() else EVENT_START
+        return await self.dispatch(WorkflowEvent(type=kind, payload=dict(payload or {})))
 
     def _persist_workflow_toml(self) -> None:
         """
@@ -467,7 +482,7 @@ class TomlWizardController:
     def _release_gemma(self) -> None:
         """
         函数名: _release_gemma
-        作用: 关闭 orchestrator 并释放 Gemma 模型（假定无进行中的 tick）
+        作用: 关闭 orchestrator 并释放 Gemma 模型（假定无进行中的 dispatch）
         输入: 无
         输出: 无
         """
@@ -491,9 +506,9 @@ class TomlWizardController:
     async def stop_async(self, timeout: float = 300.0) -> None:
         """
         函数名: stop_async
-        作用: 等待当前 tick 结束后再释放 Gemma，避免 worker 与 EndGemma 竞态
+        作用: 等待当前 dispatch 结束后再释放 Gemma，避免 worker 与 EndGemma 竞态
         输入:
-            timeout (float): 等待 tick 结束的最长秒数
+            timeout (float): 等待 dispatch 结束的最长秒数
         输出: 无
         """
         if not self.started and self.orchestrator is None and not self._busy:

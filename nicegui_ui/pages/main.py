@@ -175,8 +175,9 @@ def render_shell():
 
                 render_wizard_sidebar_chat()
 
-            render_wizard_sidebar_section()
-
+            # 向导对话槽：仅 workflow 进行中占满侧栏（空槽不占高度）
+            with ui.element("div").classes("wizard-sidebar-slot"):
+                render_wizard_sidebar_section()
             @ui.refreshable
             def render_sidebar_list():
                 from app.core_registry import SortTemplates
@@ -221,7 +222,9 @@ def render_shell():
                         "click", lambda e, tid=t_id: on_click(e, tid)
                     )
 
-            render_sidebar_list()
+            # 向导进行中由 CSS 隐藏模板列表，避免配置期切换模板
+            with ui.element("div").classes("sidebar-template-list"):
+                render_sidebar_list()
             # 拖拽改宽：放在 refreshable 外，避免对话刷新打断拖动
             ui.element("div").classes("sidebar-resize-rail").props(
                 'id="sidebar-resize-rail" title="拖动调整侧栏宽度"'

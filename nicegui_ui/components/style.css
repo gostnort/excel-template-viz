@@ -166,43 +166,65 @@ html, body {
 .template-item.muted { color: #555; }
 
 .wizard-sidebar-chat {
-  flex-shrink: 0;
+  flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   width: 100%;
-  max-width: 100%;
   overflow: hidden;
-  border-bottom: 1px solid #ccc;
-  padding: 8px 10px;
-  max-height: 40vh;
+  padding: 8px 10px 8px 8px;
   display: flex;
   flex-direction: column;
   gap: 4px;
   box-sizing: border-box;
 }
 .wizard-sidebar-chat-title {
+  flex: 0 0 auto;
   font-size: 12px;
   font-weight: bold;
   color: #333;
 }
-.wizard-sidebar-chat-log.q-field {
-  font-family: Consolas, "Courier New", monospace;
-  font-size: 11px;
+.wizard-sidebar-chat-log,
+.wizard-sidebar-chat-log .q-field__inner,
+.wizard-sidebar-chat-log .q-field__control,
+.wizard-sidebar-chat-log .q-field__control-container {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
   width: 100%;
   max-width: 100%;
-  min-width: 0;
+  height: 100%;
 }
-.wizard-sidebar-chat-log .q-field__control {
-  min-width: 0;
-  max-width: 100%;
+.wizard-sidebar-chat-log {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11px;
+  display: flex;
+  flex-direction: column;
 }
 .wizard-sidebar-chat-log .q-field__native {
-  height: 32vh;
-  max-height: 32vh;
+  height: 100%;
+  max-height: none;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
+}
+.shell.is-workflow-active .sidebar {
+  overflow: hidden;
+}
+.shell.is-workflow-active .sidebar-template-list {
+  display: none;
+}
+.shell.is-workflow-active .wizard-sidebar-slot,
+.shell.is-workflow-active .wizard-sidebar-slot > * {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 /* 右侧主区 */
@@ -540,9 +562,18 @@ html, body {
   background: #fff;
   display: flex;
   align-items: center;
+  box-sizing: border-box;
 }
+.field-cell .input-box.dropdown.q-field .q-field__control,
 .dropdown.q-field .q-field__control {
   height: 2.77em;
+  max-height: 2.77em;
+}
+.field-cell .input-box.dropdown.q-field .q-field__control,
+.field-cell .input-box.dropdown.q-field .q-field__control-container {
+  height: 2.77em;
+  min-height: 2.77em;
+  max-height: 2.77em;
 }
 .field-cell .input-box.q-field--focused .q-field__control,
 .dropdown.q-field--focused .q-field__control {
@@ -556,9 +587,12 @@ html, body {
   padding-top: 0;
   padding-bottom: 0;
   min-height: 2.77em;
+  box-sizing: border-box;
 }
+.field-cell .input-box.dropdown.q-field .q-field__control-container,
 .dropdown.q-field .q-field__control-container {
   height: 2.77em;
+  max-height: 2.77em;
 }
 .field-cell .input-box input.q-field__native,
 .field-cell .input-box textarea.q-field__native,
@@ -578,8 +612,13 @@ html, body {
   align-self: center;
   width: 100%;
 }
+.field-cell .input-box.dropdown.q-field .q-field__native,
 .dropdown.q-field .q-field__native {
   height: 2.77em;
+  max-height: 2.77em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .field-cell .input-box .q-field__marginal,
 .dropdown.q-field .q-field__marginal {
@@ -776,11 +815,20 @@ body .q-dialog__inner > div {
 .wizard-fab-anchor {
   position: fixed;
   bottom: 24px;
-  right: 24px;
-  z-index: 2000;
+  /* 主区左下角：避开侧栏，随 --sidebar-w 与折叠态同步 */
+  left: calc(var(--sidebar-w, 250px) + 24px);
+  z-index: 1000;
   display: flex;
   gap: 8px;
   align-items: center;
+}
+.shell.is-sidebar-collapsed .wizard-fab-anchor {
+  left: 24px;
+}
+/* 向导进行中：为主区底部预留空间，避免遮挡输入页工具栏与打印行 */
+.shell.is-workflow-active .main {
+  padding-bottom: 60px;
+  box-sizing: border-box;
 }
 .wizard-step-dialog {
   min-width: min(720px, 92vw);

@@ -9,6 +9,15 @@ from typing import Any, Callable
 from nicegui import app, ui
 from nicegui.client import Client
 
+from llm_gemma4.workflow.events import (
+    EVENT_ERROR,
+    EVENT_FINISHED,
+    EVENT_INTERRUPT,
+    EVENT_RESUME,
+    EVENT_START,
+    EVENT_STOP,
+    WorkflowEvent,
+)
 from llm_gemma4.workflow.state import WorkflowState
 from nicegui_ui.components.buttons import AppBtn
 from nicegui_ui.components.general import SessionRegistry
@@ -41,7 +50,6 @@ _INTERRUPT_TABS: dict[str, str] = {
     "ask_sample": "输入",
     "ask_db_id": "输入配置",
 }
-_AUTO_CHAIN_MAX = 24
 _INTERRUPT_FAB_LABELS: dict[str, str] = {
     "ask_sources": "下一步",
     "ask_layout": "下一步",
@@ -137,6 +145,25 @@ def _set_workflow_active(active: bool) -> None:
         return
     store["workflow_active"] = active
     store["wizard_active"] = active
+    _sync_workflow_shell_class(active)
+
+
+def _sync_workflow_shell_class(active: bool | None = None) -> None:
+    """
+    函数名: _sync_workflow_shell_class
+    作用: 按工作流开关同步 .shell.is-workflow-active（侧栏铺满对话 / 主区留白）
+    输入:
+        active (bool | None): 显式开关；None 时读 storage
+    输出: 无
+    """
+    on = is_workflow_active() if active is None else bool(active)
+    try:
+        if on:
+            ui.query(".shell").classes(add="is-workflow-active")
+        else:
+            ui.query(".shell").classes(remove="is-workflow-active")
+    except Exception:
+        return
 
 
 def is_workflow_active() -> bool:
@@ -485,45 +512,43 @@ async def _after_layout_resume(ctrl, client: Client | None) -> bool:
     return False
 
 
-async def _auto_chain_ticks(ctrl, client: Client | None) -> None:
+async def _handle_outbound(ctrl, client: Client | None, outbound: WorkflowEvent | None) -> None:
     """
-    函数名: _auto_chain_ticks
-    作用: 连续执行 compute tick 直至中断或完成
+    函数名: _handle_outbound
+    作用: 根据 Graph 出站事件刷新 UI：完成则停止，中断则弹窗，错误则通知
     输入:
         ctrl: TomlWizardController
         client (Client | None): NiceGUI client
+        outbound (WorkflowEvent | None): dispatch 返回值
     输出: 无
     """
-    for _ in range(_AUTO_CHAIN_MAX):
-        if not is_workflow_active() or ctrl.is_stopping:
-            return
-        if ctrl.is_busy or ctrl.orchestrator is None:
-            return
-        if ctrl.orchestrator.is_interrupted():
-            return
-        if ctrl.orchestrator.state.is_finished:
-            await stop_wizard("配置向导已完成")
-            return
-        await ctrl.run_turn({})
-        await asyncio.sleep(0.05)
+    if outbound is None or not is_workflow_active() or ctrl.is_stopping:
+        return
+    if outbound.type == EVENT_FINISHED:
+        await stop_wizard("配置向导已完成")
+        return
+    if outbound.type == EVENT_ERROR:
+        reason = str((outbound.payload or {}).get("reason") or "工作流错误")
+        resolved = _resolve_client(client)
+        if resolved is not None:
+            with resolved:
+                ui.notify(reason, type="negative")
+        else:
+            ui.notify(reason, type="negative")
         _schedule_chrome_refresh(client)
         _schedule_sidebar_refresh(client)
-        if ctrl.orchestrator.is_interrupted():
-            return
-        if ctrl.orchestrator.state.is_finished:
-            await stop_wizard("配置向导已完成")
-            return
-
-
-def _handle_post_tick(ctrl, client: Client | None) -> None:
+        return
     if ctrl.orchestrator is None:
         return
     kind = _pending_interrupt_kind(ctrl)
-    if kind:
-        tab = _INTERRUPT_TABS.get(kind)
+    if kind or outbound.type == EVENT_INTERRUPT:
+        if not kind and outbound.interrupt is not None:
+            kind = outbound.interrupt.kind
+        tab = _INTERRUPT_TABS.get(kind or "")
         if tab:
             _switch_tab(tab)
-        _schedule_interrupt_dialog(kind, client)
+        if kind:
+            _schedule_interrupt_dialog(kind, client)
     _schedule_chrome_refresh(client)
     _schedule_sidebar_refresh(client)
 
@@ -564,11 +589,10 @@ def _show_interrupt_dialog(kind: str, *, client: Client | None = None) -> None:
                         "template_labels": ctrl_local.template_labels(),
                     }
                     _close_dialog()
-                    await ctrl_local.run_turn(payload)
-                    if not is_workflow_active() or ctrl_local.is_stopping:
-                        return
-                    await _auto_chain_ticks(ctrl_local, client_local)
-                    _handle_post_tick(ctrl_local, client_local)
+                    outbound = await ctrl_local.dispatch(
+                        WorkflowEvent(type=EVENT_RESUME, payload=payload)
+                    )
+                    await _handle_outbound(ctrl_local, client_local, outbound)
                 with ui.row().classes("mt-2"):
                     AppBtn("跳过 Google", variant="default", on_click=_skip_google)
             elif kind == "ask_layout":
@@ -769,7 +793,7 @@ async def on_fab_click() -> None:
         payload = await _collect_resume_payload(ctrl, client)
         if payload is None:
             return
-        await ctrl.run_turn(payload)
+        outbound = await ctrl.dispatch(WorkflowEvent(type=EVENT_RESUME, payload=payload))
         if kind_before == "ask_layout":
             ok = await _after_layout_resume(ctrl, client)
             if not ok:
@@ -783,13 +807,15 @@ async def on_fab_click() -> None:
             if resolved is not None:
                 with resolved:
                     ui.notify("TOML 已保存并应用", type="positive")
+            if outbound is not None and outbound.type == EVENT_FINISHED:
+                await stop_wizard("配置向导已完成")
+                return
             if ctrl.orchestrator is not None and ctrl.orchestrator.state.is_finished:
                 await stop_wizard("配置向导已完成")
                 return
         if not is_workflow_active() or ctrl.is_stopping:
             return
-        await _auto_chain_ticks(ctrl, client)
-        _handle_post_tick(ctrl, client)
+        await _handle_outbound(ctrl, client, outbound)
     except Exception:
         resolved = _resolve_client(client)
         if resolved is not None:
@@ -811,6 +837,9 @@ async def stop_wizard(reason: str | None = None) -> None:
     输出: 无
     """
     client = _resolve_client(None)
+    ctrl = get_toml_wizard()
+    if ctrl.orchestrator is not None and not ctrl.is_busy:
+        await ctrl.dispatch(WorkflowEvent(type=EVENT_STOP))
     _close_dialog()
     _set_workflow_active(False)
     from nicegui_ui.pages.tab_input import clear_ghost_cache
@@ -830,7 +859,7 @@ async def stop_wizard(reason: str | None = None) -> None:
 async def start_wizard() -> None:
     """
     函数名: start_wizard
-    作用: 启动 TOML 配置工作流（Gemma + 首次 tick）
+    作用: 启动 TOML 配置工作流（Gemma + 首次 Graph start）
     输入: 无
     输出: 无
     """
@@ -858,9 +887,10 @@ async def start_wizard() -> None:
             ctrl.orchestrator.reset_state()
         with client:
             ui.notify("工作流已重置，对话已清空", type="info")
-        await ctrl.run_turn(_initial_tick_payload(ctrl))
-        await _auto_chain_ticks(ctrl, client)
-        _handle_post_tick(ctrl, client)
+        outbound = await ctrl.dispatch(
+            WorkflowEvent(type=EVENT_START, payload=_initial_tick_payload(ctrl))
+        )
+        await _handle_outbound(ctrl, client, outbound)
         _schedule_chrome_refresh(client)
         _schedule_sidebar_refresh(client)
         return
@@ -884,9 +914,10 @@ async def start_wizard() -> None:
     _schedule_sidebar_refresh(client)
     with client:
         ui.notify("配置向导已启动", type="positive")
-    await ctrl.run_turn(_initial_tick_payload(ctrl))
-    await _auto_chain_ticks(ctrl, client)
-    _handle_post_tick(ctrl, client)
+    outbound = await ctrl.dispatch(
+        WorkflowEvent(type=EVENT_START, payload=_initial_tick_payload(ctrl))
+    )
+    await _handle_outbound(ctrl, client, outbound)
     from nicegui_ui.components.model_runtime import sync_model_runtime_ui
     sync_model_runtime_ui(client)
 
@@ -894,12 +925,14 @@ async def start_wizard() -> None:
 def render_wizard_sidebar_chat() -> None:
     """
     函数名: render_wizard_sidebar_chat
-    作用: 工作流进行中在 sidebar 展示运行日志与 Gemma 对话
+    作用: 工作流进行中铺满左侧 sidebar，覆盖模板列表并展示 Gemma 对话
     输入: 无
     输出: 无
     """
     if not is_workflow_active():
+        _sync_workflow_shell_class(False)
         return
+    _sync_workflow_shell_class(True)
     ctrl = get_toml_wizard()
     with ui.element("div").classes("wizard-sidebar-chat"):
         ui.label("Gemma 对话").classes("wizard-sidebar-chat-title")
@@ -907,7 +940,6 @@ def render_wizard_sidebar_chat() -> None:
             ui.textarea(value=ctrl.sidebar_feed_text)
             .classes("wizard-sidebar-chat-log w-full")
             .props("readonly outlined dense")
-            .style("min-width:0;max-width:100%;")
         )
         ctrl.bind_chat(chat_area)
 
@@ -920,9 +952,9 @@ def render_wizard_fab() -> None:
     输出: 无
     """
     if not is_workflow_active():
-        ui.query(".shell").classes(remove="is-workflow-active")
+        _sync_workflow_shell_class(False)
         return
-    ui.query(".shell").classes(add="is-workflow-active")
+    _sync_workflow_shell_class(True)
     ctrl = get_toml_wizard()
     with ui.element("div").classes("wizard-fab-anchor"):
         async def _exit():

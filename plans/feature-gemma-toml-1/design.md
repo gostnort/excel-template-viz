@@ -2,7 +2,7 @@
 
 > **DEPRECATED** — superseded by [plans/dynamic-wizard-runtime/](../dynamic-wizard-runtime/) and [docs/gemma4_dynamic_workflow.md](../docs/gemma4_dynamic_workflow.md). Fixed 8-step `WizardOrchestrator` removed.
 
-> 契约：[docs/embed_gemma4.md](../docs/embed_gemma4.md) v7.0、[docs/gemma4_e4b_workflow.md](../docs/gemma4_e4b_workflow.md) v7.0  
+> 契约：[docs/embed_gemma4.md](../docs/embed_gemma4.md) v7.0、[docs/gemma4_dynamic_workflow.md](../docs/gemma4_dynamic_workflow.md)  
 > 分支：`feature-gemma-toml-1`  
 > 日期：2026-07-27
 
@@ -80,7 +80,7 @@ llm_gemma4: SessionOptions, LiteRtBackend.open_session
 
 ## 9. 验收
 
-见 [gemma4_e4b_workflow.md](../docs/gemma4_e4b_workflow.md) §7（UI 路径改为进程内 Tab + FAB）。
+见 [gemma4_dynamic_workflow.md](../docs/gemma4_dynamic_workflow.md) §13（UI 路径改为进程内 Tab + FAB）。
 
 ## 10. UI 步骤表（进程内模式）
 

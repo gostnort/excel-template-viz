@@ -24,6 +24,49 @@ from app.core_transform import recompute_formula_draft_fields
 
 _ghost_input: ui.textarea | None = None
 _field_inputs: dict[str, Any] = {}
+_DROPDOWN_EMPTY_KEY = ""
+_DROPDOWN_EMPTY_LABEL = "—"
+
+
+def _dropdown_options_with_empty(opts: list[str]) -> dict[str, str]:
+    """
+    函数名: _dropdown_options_with_empty
+    作用: 为下拉字段构造带空值首项的 options 字典（NiceGUI ui.select）
+    输入:
+        opts (list[str]): DataValidation 读出的选项列表
+    输出:
+        dict[str, str]: 键为存库值，值为界面标签（空值显示为 —）
+    """
+    result: dict[str, str] = {_DROPDOWN_EMPTY_KEY: _DROPDOWN_EMPTY_LABEL}
+    for opt in opts:
+        s = "" if opt is None else str(opt)
+        if s and s not in result:
+            result[s] = s
+    return result
+
+
+def _match_dropdown_option(typed: str, option_keys: list[str]) -> str | None:
+    """
+    函数名: _match_dropdown_option
+    作用: 将用户输入与下拉选项做 trim + 大小写不敏感匹配
+    输入:
+        typed (str): 用户输入或筛选框文本
+        option_keys (list[str]): 合法选项键（含空串）
+    输出:
+        str | None: 匹配到的 canonical 值；空输入返回空串键；无匹配返回 None
+    """
+    needle = str(typed or "").strip()
+    if not needle:
+        return _DROPDOWN_EMPTY_KEY if _DROPDOWN_EMPTY_KEY in option_keys else ""
+    if needle in (_DROPDOWN_EMPTY_LABEL, "-", "None", "none", "null"):
+        return _DROPDOWN_EMPTY_KEY if _DROPDOWN_EMPTY_KEY in option_keys else None
+    needle_cf = needle.casefold()
+    for key in option_keys:
+        if key == _DROPDOWN_EMPTY_KEY:
+            continue
+        if str(key).strip().casefold() == needle_cf:
+            return str(key)
+    return None
 
 
 def _refresh_formula_draft(session) -> None:
@@ -104,10 +147,10 @@ def clear_ghost_cache(session) -> None:
     session.last_ghost_paste = ""
     if _ghost_input is not None:
         try:
-            if hasattr(_ghost_input, "_is_safe_to_interact") and not _ghost_input._is_safe_to_interact():
-                return
             _ghost_input.value = ""
-        except (RuntimeError, Exception):
+        except RuntimeError:
+            pass
+        except Exception:
             pass
 
 
@@ -951,14 +994,60 @@ def render_dynamic_fields(session, labels: list[str]):
         # - formula_mask / formula_cells 标记 Excel 公式格
         # - select_options 来自 DataValidation list
         is_blocked = _is_formula_blocked(session, lbl)
-        opts = list(select_options.get(lbl) or [])
+        raw_opts = list(select_options.get(lbl) or [])
+        opts_map = _dropdown_options_with_empty(raw_opts) if raw_opts else {}
+        option_keys = list(opts_map.keys())
 
-        def create_on_change(label: str):
+        def create_on_change(
+            label: str, *, is_dropdown: bool = False, typed_holder: dict[str, str] | None = None
+        ):
             def on_change(event) -> None:
-                session.draft[label] = event.value
+                val = event.value
+                if is_dropdown and (val is None or val == _DROPDOWN_EMPTY_KEY):
+                    session.draft[label] = ""
+                else:
+                    session.draft[label] = "" if val is None else str(val)
+                if is_dropdown and typed_holder is not None:
+                    typed_holder["text"] = ""
                 _refresh_formula_draft(session)
 
             return on_change
+
+        def create_dropdown_commit(label: str, keys: list[str]):
+            typed_holder: dict[str, str] = {"text": ""}
+
+            def on_input_value(event) -> None:
+                typed_holder["text"] = str(
+                    event.args if event.args is not None else ""
+                )
+
+            def commit(event=None) -> None:
+                sender = getattr(event, "sender", None) if event is not None else None
+                typed = typed_holder["text"]
+                if not typed and sender is not None:
+                    typed = str(getattr(sender, "value", "") or "")
+                matched = _match_dropdown_option(typed, keys)
+                if matched is not None:
+                    if sender is not None:
+                        sender.value = matched
+                    session.draft[label] = matched
+                elif not str(typed or "").strip():
+                    if sender is not None:
+                        sender.value = _DROPDOWN_EMPTY_KEY
+                    session.draft[label] = ""
+                else:
+                    draft_str = session.draft.get(label, "")
+                    draft_str = "" if draft_str is None else str(draft_str)
+                    if sender is not None:
+                        sender.value = (
+                            draft_str
+                            if draft_str in keys
+                            else (_DROPDOWN_EMPTY_KEY if not draft_str else draft_str)
+                        )
+                typed_holder["text"] = ""
+                _refresh_formula_draft(session)
+
+            return typed_holder, on_input_value, commit
 
         def create_on_blur(label: str):
             def on_id_blur(event) -> None:
@@ -1047,18 +1136,31 @@ def render_dynamic_fields(session, labels: list[str]):
             with ui.element("div").classes("field-input-row"):
                 draft_val = session.draft.get(lbl, "")
                 draft_str = "" if draft_val is None else str(draft_val)
-                if opts and not is_blocked:
-                    cur = draft_str if draft_str in opts else (draft_str or None)
+                if opts_map and not is_blocked:
+                    if draft_str in opts_map:
+                        cur = draft_str
+                    elif draft_str:
+                        cur = draft_str
+                    else:
+                        cur = _DROPDOWN_EMPTY_KEY
+                    typed_holder, on_input_value, commit_dropdown = create_dropdown_commit(
+                        lbl, option_keys
+                    )
                     inp = (
                         ui.select(
-                            options=opts,
+                            options=opts_map,
                             value=cur,
-                            on_change=create_on_change(lbl),
+                            on_change=create_on_change(
+                                lbl, is_dropdown=True, typed_holder=typed_holder
+                            ),
                             with_input=True,
                         )
-                        .classes("input-box")
+                        .classes("input-box dropdown")
                         .props("dense borderless hide-bottom-space")
                     )
+                    inp.on("input-value", on_input_value)
+                    inp.on("blur", commit_dropdown)
+                    inp.on("keyup.enter", commit_dropdown)
                 else:
                     inp = (
                         ui.textarea(
@@ -1072,11 +1174,11 @@ def render_dynamic_fields(session, labels: list[str]):
                     inp.props("readonly")
                 if is_pk:
                     inp.on("blur", create_on_blur(lbl))
-                else:
+                elif not opts_map or is_blocked:
                     inp.on("blur", create_sync_blur(lbl))
                 # 向导步骤 3 可直接读控件当前值
                 _field_inputs[lbl] = inp
-                if not is_blocked and not opts:
+                if not is_blocked and not opts_map:
                     with inp:
                         with ui.context_menu():
                             add_image_pick_menu_items(session, lbl, inp)

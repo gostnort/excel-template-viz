@@ -3,7 +3,7 @@
 > **Spec-kit:** `user-spec-kit` MCP invoked (`speckit_specify` / `speckit_plan` / `speckit_tasks`); `commands/speckit.*` templates not in repo — **this folder is authoritative**  
 > **Source:** [dynamic_wizard_runtime plan](../../../.cursor/plans/dynamic_wizard_runtime_22b6f6a5.plan.md)  
 > **Replaces:** `llm_gemma4/wizard/` (entire folder deleted after cutover), fixed 8-step `WizardOrchestrator.advance()`  
-> **Authority doc (new):** `docs/gemma4_dynamic_workflow.md` (replaces `docs/gemma4_e4b_workflow.md`)
+> **Authority doc:** `docs/gemma4_dynamic_workflow.md` (the former `docs/gemma4_e4b_workflow.md` 8-step spec was deleted)
 
 ---
 
