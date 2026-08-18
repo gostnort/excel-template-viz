@@ -364,7 +364,7 @@ With `--live` on a machine with weights + real `templates/{id}/`:
 - [`toml_config_design.md`](toml_config_design.md) — on-disk TOML semantics
 - [`connect_google.md`](connect_google.md) — Google Sheet source
 - [`db_store.md`](db_store.md) — runtime persist after workflow
-- [`plans/dynamic-wizard-runtime/`](plans/dynamic-wizard-runtime/) — historical phased plan (may lag v2)
+- [`plans/dynamic-wizard-runtime/HANDOFF.md`](plans/dynamic-wizard-runtime/HANDOFF.md) — v2 engineering handoff, tasks, file map
 
 ---
 
