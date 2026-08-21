@@ -1,1 +1,1 @@
-"""PP-OCR field backend for thin pre-cropped strips."""
+"""PP-OCRv6 field backend for thin pre-cropped strips."""

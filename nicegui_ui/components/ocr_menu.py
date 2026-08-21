@@ -448,7 +448,7 @@ def run_ocr(session, label: str, input_element: Any = None) -> None:
             OcrStage.FAST_OCR: f"正在识别 {label}: 快速 OCR 特征提取",
             OcrStage.SEMANTIC_CHECK: f"正在识别 {label}: 语义检查中…",
             OcrStage.GEMMA_REFINE: f"正在识别 {label}: Gemma 视觉纠错",
-            OcrStage.VL_REFINE: f"正在识别 {label}: Paddle-VL 最终纠错",
+            OcrStage.STRUCTURE_REFINE: f"正在识别 {label}: PP-StructureV3 版面精修",
         }
 
         def dismiss_progress() -> None:

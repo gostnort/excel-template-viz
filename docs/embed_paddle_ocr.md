@@ -5,8 +5,8 @@
 > 阶段：**C2 / C3 / C3.1 / C3.2 / C3.3 已完成**（`gemma_only` 档视觉纠错：**放弃** C3.1 的纯文本纠错 `gate/gemma_correct.py`——实测纠错效率约等于零，已删除；改用 `gate/gemma_vision_correct.py`——**派生角色 character + `Pic2Str` 整图读图 + 逐单元择优合并（保结构）**，见 §3.2a「gemma_only 视觉纠错（C3.3）」）  
 > 存储层：[`db_store.md`](db_store.md)（拍照落库、`input_label` 关联；**须先定稿并实现 `save_image`，再接 UI**）  
 > 导出层：[`excel_transform.md`](excel_transform.md)（按需附图到 sheet）  
-> 上游参考：[PaddlePaddle/PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR)（**3.x**；主路径 **PPStructureV3**，精修 **PaddleOCRVL v1.6**，**仅 GPU**）  
-> **精修门禁**：[`embed_gemma4.md`](embed_gemma4.md) 的 Gemma 4 **逐单元**判定 fast 结果是否存在**语义问题**，**短路**至首个有问题单元。**内存预算** = max(可用 RAM, 可用 VRAM)：< 4GB 不精修；4-10GB（`gemma_only`）Gemma4 检查 → 有问题则 **C3.3 视觉纠错**（派生角色 + `Pic2Str` 整图读图 + 逐单元择优，保结构）；10-14GB Gemma4 检查→**卸载 Gemma4**→PaddleOCRVL(GPU) 推理（顺序，峰值 4.6+10.8=15.4GB 不能共存）；≥14GB Gemma4 检查的同时**异步**加载 PaddleVL，两者常驻。10GB+ 两档需 `AcceleratorAvailable`（GPU + `paddlepaddle-gpu`），否则降级 gemma_only。
+> 上游参考：[PaddlePaddle/PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR)（**3.x** + **paddleocr-mcp**；fast **PP-OCRv6**，精修 **PP-StructureV3**；**已删除 PaddleOCR-VL**）  
+> **精修门禁**：[`llm_lmstudio.md`](llm_lmstudio.md) 的 LM Studio 模型 **逐单元**判定 fast 结果是否存在**语义问题**，**短路**至首个有问题单元。读图前查 `capabilities.vision`。**内存预算** = max(可用 RAM, 可用 VRAM)：< 4GB 不精修；4-10GB（`gemma_only`）语义检查 → 有问题则 **C3.3 视觉纠错**（需 vision）；10-14GB 检查→**卸载 LM Studio 模型**→PP-StructureV3；≥14GB 检查的同时**异步**预热 Structure。10GB+ 档 **不要求 GPU**（Structure 可 CPU）。
 
 ---
 
@@ -94,13 +94,11 @@ paddle_ocr/
   (deps)                   # 根 pyproject.toml extras: ocr | ocr-gpu；见 README.md
   models/                  # OCR/structure/VL 权重（PADDLE_PDX_CACHE_HOME，gitignored）
     official_models/       # PP-OCRv4 mobile / PP-DocLayout_plus-L / SLANeXt / RT-DETR / PP-DocLayoutV3 / PaddleOCR-VL-1.6
-  engines/                 # 三个独立 OCR 引擎，物理隔离
+  engines/                 # OCR 引擎，物理隔离
     pp_ocr/
-      backend.py           # FieldStripBackend：mobile PP-OCR，细条裁剪用（无网格路由命中）
+      backend.py           # FieldStripBackend：PP-OCRv6（paddleocr-mcp local；细条裁剪）
     pp_structure/
-      backend.py           # StructureBackend：PPStructureV3，整图/有网格；细条委托给 pp_ocr
-    paddle_vl/
-      backend.py           # VlBackend：PaddleOCRVL v1.6 精修（**仅 GPU，device="gpu"**；无加速器不构造）
+      backend.py           # StructureBackend：PP-StructureV3 fast（整图/有网格）+ StructureRefine（替代 VL）
   gate/                    # 精修路径门禁（仅 RefineTier != none 时生效）
     hardware_probe.py      # 启动时硬件探测：detect_accelerator()->gpu/npu/cpu；AcceleratorAvailable()（GPU+paddlepaddle-gpu）
     memory_guard.py        # 测可用 RAM+VRAM；RefineTier()->none/gemma_only/sequential/both_resident（4/10/14GB 阈值）
@@ -115,10 +113,10 @@ paddle_ocr/
   scripts/
     download_models.py     # install 时拉取/暖机权重（CLI / install.bat；VL 暖机仅 AcceleratorAvailable 时）
     install_backend.py     # 首次启动硬件探测 + 装 paddlepaddle-gpu（GPU）/ prune VL（CPU）；不能在已 import paddle 的进程内热替换
-    _warm_vl_gpu.py        # install_backend 装好 GPU paddle 后在全新子进程构造 PaddleOCRVL(gpu) 触发 VL 模型下载
+    _warm_structure.py     # install_backend 装好 GPU paddle 后在全新子进程构造 PP-OCRv6 + PP-StructureV3 触发模型下载
 ```
 
-**依赖方向**：`main` → `engines.pp_structure`（fast 主入口）→ 委托 `engines.pp_ocr`（细条）；`main` → `gate.semantic_gate` → `llm_gemma4`；`main` → `engines.paddle_vl`（精修）。三个引擎**共用** `runtime/` 的解码/后处理/锁/网格判定——这些是每次推理都走的热路径，不属于任何单一引擎，也不属于 `scripts/`。`pp_structure` 对 `pp_ocr` 的依赖是**域耦合**（细条裁剪业务上要委托字段 OCR），分文件夹不消除该依赖，只让它显式跨包。
+**依赖方向**：`main` → `engines.pp_structure`（fast 主入口）→ 委托 `engines.pp_ocr`（细条 PP-OCRv6）；`main` → `gate.semantic_gate` → `llm_lmstudio`；`main` → `StructureRefine`（PP-StructureV3，替代 VL）。依赖 extra：`paddleocr-mcp[local-cpu]` / `paddleocr-mcp[local]` + `paddlepaddle-gpu`。
 
 ---
 
@@ -155,8 +153,8 @@ PaddleOcr(pic, rectangle)
   → RefineTier()  (预算 = max(可用 RAM, 可用 VRAM))
   → none(<4GB)            → 返回 fast
   → gemma_only(4-10GB)    → Gemma4 检查 → 有问题则 C3.3 Pic2Str 整图读图 + 逐单元择优合并（保结构）(mode="gemma_vision_corrected")
-  → sequential(10-14GB)   → Gemma4 检查 → 有问题则 卸载 Gemma4 → PaddleOCRVL(gpu) 推理 (mode="llm")
-  → both_resident(≥14GB)  → Gemma4 检查 → 有问题则 PaddleOCRVL(gpu) 推理 (两者常驻) (mode="llm")
+  → sequential(10-14GB)   → Gemma4 检查 → 有问题则 卸载 Gemma4 → PP-StructureV3 精修 (mode="structure")
+  → both_resident(≥14GB)  → Gemma4 检查 → 有问题则 PP-StructureV3 精修（可常驻） (mode="structure")
   → 无问题 → 返回 fast
   → 返回统一 JSON（mode: "fast"|"llm"）
 ```
@@ -171,21 +169,21 @@ PaddleOcr(pic, rectangle)
 |------|----------|------|
 | `none` | 预算 < 4GB | 仅 fast，直接返回（不够装 Gemma4 4.6GB） |
 | `gemma_only` | 4GB ≤ 预算 < 10GB，**或** 10GB+ 但无加速器 | Gemma4 检查 → 有问题则 **C3.3 `GemmaVisionCorrect`**（派生角色 + `Pic2Str` 整图读图 + 逐单元择优合并，保结构；`mode="gemma_vision_corrected"`） |
-| `sequential` | 10GB ≤ 预算 < 14GB **且** `AcceleratorAvailable` | Gemma4 检查 → 有问题则**卸载 Gemma4**（`ResetBackend`）→ 加载 `PaddleOCRVL(device=gpu)` 推理（峰值 4.6+10.8=15.4 不能共存） |
-| `both_resident` | 预算 ≥ 14GB **且** `AcceleratorAvailable` | 启动时 Gemma4 + 异步预热 VL（两者常驻，峰值合计 15.4GB）；有问题则直接 VL 推理 |
+| `sequential` | 10GB ≤ 预算 < 14GB | 语义检查 → 有问题则**卸载 LM Studio** → `StructureRefine`（PP-StructureV3；可 CPU） |
+| `both_resident` | 预算 ≥ 14GB | 启动时可异步预热 Structure；有问题则 `StructureRefine` |
 
 - **`gate/memory_guard.py`**：`measure_available_vram_gb()`（`nvidia-smi --query-gpu=memory.free`）/ `available_budget_gb()`=max(RAM,VRAM) / `RefineTier()`→none/gemma_only/sequential/both_resident / `RefinePathEnabled()`=`tier!="none"`。`init_refine_path()` 启动测一次预算并缓存。
-- **`gate/hardware_probe.py`**：`AcceleratorAvailable()`=GPU 硬件 + `paddlepaddle-gpu`（CUDA 版）。10GB+ 档需它，否则降级 `gemma_only`。
-- **`main.PaddleOcr` 分支**：fast `ok=false`→返回；`tier=none`→返回 fast；`HasOcrSemanticProblem(fast)` 为 false→返回 fast；为 true：`gemma_only`→`GemmaVisionCorrect(pic, rectangle, fast)`（C3.3 视觉纠错）；`sequential`→`_unload_gemma4()`→`LlmRefine`；`both_resident`→`LlmRefine`（VL 已热）。VL/视觉纠错失败→返回 fast + `MSG_LLM_PARTIAL`。
-- **启动预热**（`main._warm_for_tier`）：`none`→不预热；`gemma_only`/`sequential`→`StartGemma()`（Gemma4 常驻做检查）；`both_resident`→`StartGemma()` + **异步线程**预热 `GetVlBackend().warm()`（不阻塞 CLI）；`sequential` 的 VL 按需在 `PaddleOcr` 内卸载 Gemma4 后加载。
-- **库文件安装**：`paddlepaddle`(CPU)→`paddlepaddle-gpu` 不能在已 import paddle 的进程内热替换。首次启动检测到 GPU 硬件但未装 GPU paddle 时 `main()` 提示运行 `scripts/install_backend.py`（卸载 CPU paddle → 装 `paddlepaddle-gpu==3.3.1` CUDA 12.9 index → 全新子进程 `_warm_vl_gpu.py` 构造 PaddleOCRVL(gpu) 触发 VL 模型下载），装好后重启。本次会话降级 `gemma_only`。
-- **VL 模型去留按硬件**：`EnsureModels`/`download_models` 用 `detect_accelerator()`——有加速器硬件则保留/补下载 VL 模型；纯 CPU 则 `prune_extra_official_models(keep_vl=False)` 释放磁盘。
+- **`gate/hardware_probe.py`**：`AcceleratorAvailable()`=GPU 硬件 + `paddlepaddle-gpu`（CUDA 版）。仅用于安装 GPU paddle；**不再**挡住 Structure 精修。
+- **`main.PaddleOcr` 分支**：fast `ok=false`→返回；`tier=none`→返回 fast；`HasOcrSemanticProblem(fast)` 为 false→返回 fast；为 true：`gemma_only` 或 fast 已是 Structure→`GemmaVisionCorrect`；`sequential`（OCR 细条）→卸载 LM Studio→`StructureRefine`；`both_resident`→`StructureRefine`。失败→返回 fast + `MSG_LLM_PARTIAL`。
+- **启动预热**（`main._warm_for_tier`）：`none`→不预热；`gemma_only`/`sequential`→`load_model()`（LM Studio）；`both_resident`→`load_model()` + **异步线程**预热 `GetStructureBackend().warm()`；`sequential` 的 Structure 按需在 `PaddleOcr` 内卸载 LM Studio 模型后加载。
+- **库文件安装**：`paddlepaddle`(CPU)→`paddlepaddle-gpu` 不能在已 import paddle 的进程内热替换。首次启动检测到 GPU 硬件但未装 GPU paddle 时 `main()` 提示运行 `scripts/install_backend.py`（卸载 CPU paddle → 装 `paddlepaddle-gpu==3.3.1` CUDA 12.9 index → 全新子进程 `_warm_structure.py` 构造 PP-OCRv6 + PP-StructureV3 触发模型下载），装好后重启。
+- **VL 权重一律 prune**：`EnsureModels`/`download_models` 调用 `prune_vl_official_models()`，不下载 PaddleOCR-VL。
 
 #### gemma_only 视觉纠错（C3.3，已完成）
 
 **背景 / 为何放弃 C3.1 方案**：C3.1 的 `gate/gemma_correct.py`（`GemmaCorrectUnits`）把 Gemma4 判有问题的单元**纯文本**扔给 `ConversationOnce` 自由改字。在 `test_paddlevl_gemma_e2e.py` 实测中纠错效率约等于零——Gemma4 拿到的只是已经错乱的 OCR 字符串本身，**没有任何独立信息源**可用来判断哪个字才是对的，模型只能在原文附近做保守微调（多数情况原样抄回或只改标点）。已确认放弃并删除该文件（连同 `semantic_gate.ShouldTryGemmaCorrection` 死代码、`config.MSG_GEMMA_CORRECTED`、相关单测一并清理）。
 
-**已实施方案**（`gate/gemma_vision_correct.py` · `GemmaVisionCorrect(pic, rectangle, fast)`）：用 Gemma4 的**视觉识别**（[`embed_gemma4.md`](embed_gemma4.md) §3.1d 的 `Pic2Str`）提供独立信息源，再逐单元判别式择优，不让模型凌空猜字：
+**已实施方案**（`gate/gemma_vision_correct.py` · `GemmaVisionCorrect(pic, rectangle, fast)`）：用 LM Studio 当前模型的**视觉识别**（[`llm_lmstudio.md`](llm_lmstudio.md)，须 `capabilities.vision`）提供独立信息源，再逐单元判别式择优，不让模型凌空猜字：
 
 1. **派生角色 character**：`_derive_character(fast)` 调 `ConversationOnce`，从 fast 结果判断这份文档的类型/角色背景，返回一句中文描述（如"机场地勤人员的旅客遗失物品交接单"、"银行支票"）。**角色是关键约束**——幻觉可接受的前提就是角色把再创造限制在正确语义域内。
 2. **`Pic2Str` 整图读图**：`_encode_cropped_jpg(pic, rectangle)` 把裁剪区编码成 jpg 字节；`_build_pic_prompt(fast)` 要求输出与 fast **同形 JSON**（键 / table 行列数写死，强制可对齐）；`Pic2Str(jpg, prompt, system="你是文档 OCR 引擎。背景：{character}")` 得到 Gemma4 自己的整份读数。**整图一次调用**，避免 C3.1 旧方案"单元→bbox 映射缺失"的前置阻塞。
@@ -194,7 +192,7 @@ PaddleOcr(pic, rectangle)
 
 **与 C3.1 的关键区别**：C3.1 是「单一信息源 + 自由生成」（在原错误附近打转）；C3.3 是「两个独立信息源（文本管线 + 视觉管线）+ 判别式择优」（Gemma4 只挑更合理的一行，不凌空猜字）。
 
-**幻觉策略**（见 `embed_gemma4.md` §3.1d 末段）：Pic2Str 对密集小字中文会"编出通顺但与图不符的文字"。本模块**接受该幻觉**——fast 的错字本就不可读，视觉犯错是人类也会犯的；幻觉作为语义上的"模糊/再创造"可接受，角色 character 是约束它的关键。逐单元择优只在 gemma 明显更顺时替换 fast，不会把好的 fast 单元换掉。
+**幻觉策略**：读图对密集小字中文会编出通顺但与图不符的文字。本模块**接受该幻觉**——fast 的错字本就不可读；角色 character 是约束。逐单元择优只在视觉结果明显更顺时替换 fast。
 
 **成本**：`gemma_only` 档本身是"预算不够常驻 VL"的降级路径；本方案 1 次 `Pic2Str` + N 次 `ConversationOnce` 比对（N=单元数）。纯 CPU 下延迟可接受（Gemma4 CPU 纠错本就快，见 C3.1 立项理由）。
 
@@ -211,7 +209,7 @@ def RefineTier() -> str: ...   # none / gemma_only / sequential / both_resident
 
 **判定粒度（逐单元 + 短路）**：`HasOcrSemanticProblem` 把 fast 草稿拆成单元（`string1..stringN` 每条一段；`table1..tableN` 每行 `cells` 拼成一段），**逐单元**调 `run_judgment`。一旦某单元 `affirmative`（有问题），**立即短路返回 `true`**。全部 `negative`/`unknown` → `false`。
 
-应用层通过 [`llm_gemma4`](embed_gemma4.md) §3.6 `run_judgment` 调底座：`semantic_gate` 组 OCR 专用 `JudgmentSpec`（每单元文本作 `user`），底座返回 `JudgmentResult` 三态，`_ocr_semantic_to_bool` 映射：`affirmative`→`True`（调精修）；`negative`/`unknown`→`False`（保守）。`verdict_key="has_problem"`；`use_constrained_decoding=True`；`max_tokens ≥ 200`。**禁止**在 `llm_gemma4` 内写 OCR 逻辑；**禁止**用 `HasContent` 代替语义判定。
+应用层通过 [`llm_lmstudio`](llm_lmstudio.md) `run_judgment` 调底座：`semantic_gate` 组 OCR 专用 `JudgmentSpec`（每单元文本作 `user`），底座返回 `JudgmentResult` 三态，`_ocr_semantic_to_bool` 映射：`affirmative`→`True`（调精修）；`negative`/`unknown`→`False`（保守）。`verdict_key="has_problem"`。读图前必须 `capabilities.vision`。**禁止**用 `HasContent` 代替语义判定。
 
 | 条件 | 走 VL(GPU)？ | 走 gemma_only 纠错？ |
 |------|----------------|----------------|
@@ -290,10 +288,10 @@ def RefineTier() -> str: ...   # none / gemma_only / sequential / both_resident
 
 | 阶段 | 引擎 | 说明 |
 |------|------|------|
-| fast（无网格裁剪） | mobile `PaddleOCR` | `engines/pp_ocr/backend.py` |
-| fast（有网格 / 整图） | PPStructureV3 | `engines/pp_structure/backend.py`（细条委托 `pp_ocr`） |
-| 语义门禁 | Gemma 4 E4B（LiteRT） | `gate/semantic_gate.py` → `llm_gemma4`（逐单元短路） |
-| vl 精修 | PaddleOCR-VL（`PaddleOCRVL` v1.6） | `engines/paddle_vl/backend.py`；**需** `RefinePathEnabled` |
+| fast（无网格裁剪） | PP-OCRv6（`PaddleOCR(ocr_version="PP-OCRv6")`） | `engines/pp_ocr/backend.py`；与 paddleocr-mcp `ocr` 产线一致 |
+| fast（有网格 / 整图） | PP-StructureV3 | `engines/pp_structure/backend.py`（细条委托 `pp_ocr`） |
+| 语义门禁 | LM Studio 当前模型 | `gate/semantic_gate.py` → `llm_lmstudio`（逐单元短路） |
+| 精修 | PP-StructureV3（`StructureRefine`） | 替代 PaddleOCR-VL；可 CPU；**需** `RefinePathEnabled` |
 
 ### 3.8 内存门禁（精修路径）
 
@@ -447,11 +445,11 @@ if not result["ok"]:
 
 ## 6. 安装
 
-默认装；`--skip-ocr` 可跳过。`ocr` / `ocr-gpu` extra 含 `paddlex[ocr]`。磁盘约 1GB+（structure + 可选 VL）。`enable_mkldnn=False`。
+默认装；`--skip-ocr` 可跳过。`ocr` extra 为 `paddleocr-mcp[local-cpu]`；`ocr-gpu` 为 `paddleocr-mcp[local]` + `paddlepaddle-gpu`。**不安装、不下载 PaddleOCR-VL。** `enable_mkldnn=False`。
 
-**Gemma 语义门禁**依赖 [`llm_gemma4`](embed_gemma4.md) 与 `models/gemma4/`（与项目 install 既有链路一致）。**PaddleVL** 权重走 `PADDLE_PDX_CACHE_HOME`。
+**LM Studio 语义门禁**依赖 [`llm_lmstudio.md`](llm_lmstudio.md)（本机 REST，不下载 HuggingFace 权重）。**PaddleVL** 权重走 `PADDLE_PDX_CACHE_HOME`。
 
-**内存**：启用 OCR 时启动测量可用 RAM + VRAM，按 `RefineTier()` 分档预热——`none`(<4GB) 不预热；`gemma_only`(4-10GB) `StartGemma()`；`sequential`(10-14GB) `StartGemma()`（VL 按需）；`both_resident`(≥14GB) `StartGemma()` + 异步预热 VL。`llm` extra 含 `psutil`（与 `llm_gemma4` 探测共用）。OCR `--skip-ocr` 时整段 OCR 含内存探测均跳过。
+**内存**：启用 OCR 时启动测量可用 RAM + VRAM，按 `RefineTier()` 分档预热——`none`(<4GB) 不预热；其余档 `load_model()`（LM Studio）；`both_resident` 另异步预热 VL。`psutil` 在 `ocr` extra。OCR `--skip-ocr` 时整段 OCR 含内存探测均跳过。
 
 ---
 
@@ -508,6 +506,7 @@ if not result["ok"]:
 | **C3.1** | ~~放弃 CPU VL：`gate/hardware_probe` + `ShouldTryVl` 需 `AcceleratorAvailable` + `gate/gemma_correct`（CPU-only Gemma4 改字）+ `scripts/install_backend.py`（装 paddlepaddle-gpu）+ VL 模型按 `detect_accelerator` 去留~~ | 有加速器→VL(GPU)；无加速器→Gemma4 纠错 | ✅ 完成（**`gate/gemma_correct.py` 纠错部分已于 C3.3 前置清理中删除**，`hardware_probe`/`install_backend.py`/VL 去留逻辑仍保留） |
 | **C3.2** | **内存分级精修**：`measure_available_vram_gb` + `RefineTier()`（none/gemma_only/sequential/both_resident，4/10/14GB）+ `main.PaddleOcr` 分档分支 + sequential 卸载 Gemma4 再 VL + both_resident 异步预热 VL + `main._warm_for_tier` | 峰值 Gemma4 4.6+VL 10.8=15.4GB；<4GB 仅 fast；4-10GB Gemma4 检查；10-14GB 顺序；≥14GB 常驻 | ✅ 完成 |
 | **C3.3** | **gemma_only 视觉纠错**：`gate/gemma_vision_correct.py`（`GemmaVisionCorrect`）——派生角色 character + `Pic2Str` 整图读图（同形 JSON）+ 逐单元 `_pick_better` 择优合并（保结构）；`main.PaddleOcr` 的 `gemma_only` 分支接线；`MSG_GEMMA_VISION`。幻觉可接受（角色约束）。见 §3.2a「gemma_only 视觉纠错（C3.3）」 | 纯文本纠错验证效率≈0（已删 C3.1）；新方案整图 Pic2Str 避开单元→bbox 映射阻塞 | ✅ 完成 |
+| **C4** | **paddleocr-mcp**：依赖改为 `paddleocr-mcp[local-cpu]` / `[local]`+GPU；fast 细条 **PP-OCRv6**；精修 **PP-StructureV3**（`StructureRefine`）；**删除** `engines/paddle_vl` 与 PaddleOCR-VL 权重；顶栏开关改为 PP-Structure；10GB+ 档不再要求 GPU | `dialog demo --spec toml` 仍须 exit 0；OCR 门禁 `python paddle_ocr/main.py` | ✅ 完成 |
 | **E** | **NiceGUI 一次调用 `PaddleOcr`（双模式回填）**：整表识别走 GHOST 模式回填全量 JSON 并通过 blur 分拆；单字段/覆盖录入走 FIELD 模式自动组合纯文本并回填单格。 | C2/C3.1 + S0；**无**重新识别按钮 | ✅ 完成 |
 
 ### C3.1 实施清单（本轮）
@@ -527,7 +526,7 @@ if not result["ok"]:
 1. **`config.py`**：阈值改 4 档——`REFINE_MIN_RAM_GB=4` / `REFINE_VL_MIN_GB=10` / `REFINE_BOTH_RESIDENT_MIN_GB=15`（C3.3 后改 14，定在实测峰值之下：Gemma4 4.6GB / VL 10.8GB / 合计 15.4GB，Paddle-VL/LiteRT 会往内存倒垃圾/复用故实际需求略低；替换旧 `REFINE_MIN_AVAILABLE_RAM_GB=7`）。
 2. **`gate/memory_guard.py` 重构**：`measure_available_vram_gb()`（`nvidia-smi --query-gpu=memory.free`）/ `available_budget_gb()`=max(RAM,VRAM) / `init_refine_path()` 测一次预算并缓存 / `RefineTier()`→none/gemma_only/sequential/both_resident（10GB+ 档需 `_hw.AcceleratorAvailable()`，否则降级 gemma_only）/ `RefinePathEnabled()`=`tier!="none"` / `ResetRefinePathCache()`。通过 `import paddle_ocr.gate.hardware_probe as _hw` 模块级访问以便测试 monkeypatch。
 3. **`main.PaddleOcr` 分档分支**：fast `ok=false`→返回；`tier=none`→返回 fast；`HasOcrSemanticProblem` false→返回 fast；true：`gemma_only`→`GemmaCorrectUnits`（C3.3 后改为 `GemmaVisionCorrect`）；`sequential`→`_unload_gemma4()`（`ResetBackend`）→`LlmRefine`；`both_resident`→`LlmRefine`（VL 已热）。VL 失败→fast + `MSG_LLM_PARTIAL`。
-4. **`main._warm_for_tier` + `main()`**：启动按档预热——`none`→不预热；`gemma_only`/`sequential`→`StartGemma()`；`both_resident`→`StartGemma()` + **异步线程** `GetVlBackend().warm()`（不阻塞 CLI）；`sequential` 的 VL 按需在 `PaddleOcr` 内卸载 Gemma4 后加载。`main()` 打印 `RefineTier()` 档位。
+4. **`main._warm_for_tier` + `main()`**：启动按档预热——`none`→不预热；`gemma_only`/`sequential`→`load_model()`；`both_resident`→`load_model()` + **异步线程** `GetVlBackend().warm()`；`sequential` 的 VL 按需在 `PaddleOcr` 内卸载 LM Studio 模型后加载。`main()` 打印 `RefineTier()` 档位。
 5. **`engines/paddle_vl/backend.py`**：`AcceleratorAvailable` 改模块级访问（`import ... as _hw`）以便测试 monkeypatch。
 6. **测试重构**：`test_cpu_only_gemma_correct.py` 改 mock `RefineTier`（none/gemma_only/gemma_only-无问题 + VL 无加速器不构造）；`test_paddlevl_gemma_e2e.py` 改 a-e 顺序流：(a) pp-ocr 一句话 (b) pp-structure JSON (c) Gemma4 判定+纠错+输出 (d) 卸载 Gemma4+加载 VL (e) VL 全面重算+输出。
 
@@ -576,7 +575,7 @@ if not result["ok"]:
     → PaddleOcr(pic, rectangle)
          → fast（PPStructure / 字段 OCR）
          → RefinePathEnabled? → HasOcrSemanticProblem（Gemma 4）
-         → 若语义有问题 → PaddleOCRVL 精修（自动，无第二次点击）
+         → 若语义有问题 → PP-StructureV3 精修（自动，无第二次点击）
          → 否则 → 直接 fast 结果
     → UI 用 JSON 回填 / notify(message)
 ```

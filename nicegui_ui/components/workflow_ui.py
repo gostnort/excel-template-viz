@@ -9,7 +9,7 @@ from typing import Any, Callable
 from nicegui import app, ui
 from nicegui.client import Client
 
-from llm_gemma4.workflow.events import (
+from llm_toml_wizard.workflow.events import (
     EVENT_ERROR,
     EVENT_FINISHED,
     EVENT_INTERRUPT,
@@ -18,7 +18,7 @@ from llm_gemma4.workflow.events import (
     EVENT_STOP,
     WorkflowEvent,
 )
-from llm_gemma4.workflow.state import WorkflowState
+from llm_toml_wizard.workflow.state import WorkflowState
 from nicegui_ui.components.buttons import AppBtn
 from nicegui_ui.components.general import SessionRegistry
 from nicegui_ui.components.model_runtime import is_gemma_loaded
@@ -266,7 +266,7 @@ def _initial_tick_payload(ctrl) -> dict[str, Any]:
         if orch.state.data_sources:
             sources = list(orch.state.data_sources)
         else:
-            from llm_gemma4.toml_config.intake_seed import sidecar_data_sources
+            from llm_toml_wizard.toml_config.intake_seed import sidecar_data_sources
             tid = str(orch.state.template_id or "")
             if tid:
                 sources = sidecar_data_sources(tid)
@@ -630,7 +630,7 @@ def _render_layout_dialog_body(ctrl) -> None:
     ui.label(
         "请配置 [[input_section]]：多个 input_area（并集）、move_to（1～2 个方向）、offset。"
     ).classes("text-sm mb-2")
-    from llm_gemma4.toml_config.toml_patcher import (
+    from llm_toml_wizard.toml_config.toml_patcher import (
         _areas_as_list,
         _layout_area_is_set,
         _moves_as_list,
@@ -897,7 +897,7 @@ async def start_wizard() -> None:
     progress = None
     if not is_gemma_loaded():
         with client:
-            progress = ui.notification("正在加载 Gemma4…", spinner=True, type="ongoing")
+            progress = ui.notification("正在通过 LM Studio 加载模型…", spinner=True, type="ongoing")
     _set_workflow_active(True)
     try:
         ok = await ctrl.start(client=client)
@@ -908,7 +908,7 @@ async def start_wizard() -> None:
     if not ok:
         _set_workflow_active(False)
         with client:
-            ui.notify("Gemma 模型加载失败，请检查 llm_gemma4 环境", type="negative")
+            ui.notify("LM Studio 模型加载失败，请检查模型名与连接", type="negative")
         return
     _schedule_chrome_refresh(client)
     _schedule_sidebar_refresh(client)
@@ -935,7 +935,7 @@ def render_wizard_sidebar_chat() -> None:
     _sync_workflow_shell_class(True)
     ctrl = get_toml_wizard()
     with ui.element("div").classes("wizard-sidebar-chat"):
-        ui.label("Gemma 对话").classes("wizard-sidebar-chat-title")
+        ui.label("向导对话").classes("wizard-sidebar-chat-title")
         chat_area = (
             ui.textarea(value=ctrl.sidebar_feed_text)
             .classes("wizard-sidebar-chat-log w-full")

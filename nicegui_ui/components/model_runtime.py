@@ -1,4 +1,4 @@
-"""进程级模型预加载：Gemma4 / Paddle-VL 与 NiceGUI 顶栏开关。"""
+"""进程级模型预加载：LM Studio 模型开关 / 启动 PaddleOcr（paddleocr-mcp）与 NiceGUI 顶栏。"""
 
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ def _schedule_runtime_refresh(client: Client | None) -> None:
 def sync_model_runtime_ui(client: Client | None = None) -> None:
     """
     函数名: sync_model_runtime_ui
-    作用: 将顶栏 Gemma4 / Paddle-VL 开关与进程内模型单例状态对齐
+    作用: 将顶栏 LM Studio / PaddleOcr 开关与远端加载状态对齐
     输入:
         client (Client | None): NiceGUI 客户端；OCR 等跨线程回调应传入
     输出: 无
@@ -94,7 +94,7 @@ def _dismiss_notification(handle: Any) -> None:
 def is_gemma_loading() -> bool:
     """
     函数名: is_gemma_loading
-    作用: Gemma4 是否正在后台预加载
+    作用: LM Studio 模型是否正在 load
     输入: 无
     输出:
         bool: 加载中为 True
@@ -106,7 +106,19 @@ def is_gemma_loading() -> bool:
 def is_vl_loading() -> bool:
     """
     函数名: is_vl_loading
-    作用: Paddle-VL 是否正在后台预加载
+    作用: paddleocr-mcp 是否正在启动（兼容旧名）
+    输入: 无
+    输出:
+        bool: 加载中为 True
+    """
+    return _vl_loading
+
+
+
+def is_structure_loading() -> bool:
+    """
+    函数名: is_structure_loading
+    作用: paddleocr-mcp 是否正在启动
     输入: 无
     输出:
         bool: 加载中为 True
@@ -118,15 +130,14 @@ def is_vl_loading() -> bool:
 def is_gemma_loaded() -> bool:
     """
     函数名: is_gemma_loaded
-    作用: 判断 Gemma4 Engine 是否已 warm
+    作用: 判断配置中的 LM Studio 模型是否已加载
     输入: 无
     输出:
         bool: 已加载为 True
     """
     try:
-        from llm_gemma4.__main__ import _get_backend
-        backend = _get_backend()
-        return getattr(backend, "_engine", None) is not None
+        from llm_lmstudio.models import is_model_loaded
+        return is_model_loaded()
     except Exception:
         return False
 
@@ -135,14 +146,26 @@ def is_gemma_loaded() -> bool:
 def is_vl_loaded() -> bool:
     """
     函数名: is_vl_loaded
-    作用: 判断 Paddle-VL 引擎是否已构造
+    作用: 判断 paddleocr-mcp 是否已启动（兼容旧名）
+    输入: 无
+    输出:
+        bool: 已加载为 True
+    """
+    return is_structure_loaded()
+
+
+
+def is_structure_loaded() -> bool:
+    """
+    函数名: is_structure_loaded
+    作用: 判断 paddleocr-mcp HTTP 是否在听端口
     输入: 无
     输出:
         bool: 已加载为 True
     """
     try:
-        from paddle_ocr.engines.paddle_vl.backend import GetVlBackend
-        return GetVlBackend()._engine is not None
+        from paddle_ocr.mcp_runtime import is_mcp_running
+        return is_mcp_running()
     except Exception:
         return False
 
@@ -151,7 +174,7 @@ def is_vl_loaded() -> bool:
 async def ensure_gemma_loaded(*, notify: bool = True, client: Client | None = None) -> bool:
     """
     函数名: ensure_gemma_loaded
-    作用: 若 Gemma4 未加载则后台 warm；已加载时立即返回
+    作用: 若当前模型未加载则 POST /api/v1/models/load
     输入:
         notify (bool): 是否显示加载中通知
         client (Client | None): NiceGUI 客户端，用于跨 refresh 安全通知
@@ -159,6 +182,13 @@ async def ensure_gemma_loaded(*, notify: bool = True, client: Client | None = No
         bool: 是否已成功就绪
     """
     global _gemma_loading
+    from llm_lmstudio.config import load_user_config
+    if not str(load_user_config().get("model") or "").strip():
+        resolved = _resolve_client(client)
+        if notify and resolved is not None:
+            with resolved:
+                ui.notify("请先填写 LM Studio 模型名称", type="warning")
+        return False
     if is_gemma_loaded():
         if client is not None:
             sync_model_runtime_ui(client)
@@ -170,12 +200,10 @@ async def ensure_gemma_loaded(*, notify: bool = True, client: Client | None = No
     progress = None
     if notify and resolved is not None:
         with resolved:
-            progress = ui.notification("正在加载 Gemma4…", spinner=True, type="ongoing")
+            progress = ui.notification("正在通过 LM Studio 加载模型…", spinner=True, type="ongoing")
     try:
-        from llm_gemma4.__main__ import StartGemma
-        from llm_gemma4.runtime.gemma_worker import await_gemma_thread
-        # LiteRT 须在专用 Gemma 工作线程预热，避免阻塞 UI 事件循环
-        await await_gemma_thread(StartGemma)
+        from llm_lmstudio.models import load_model
+        await run.io_bound(load_model)
         return is_gemma_loaded()
     except Exception:
         return False
@@ -189,9 +217,9 @@ async def ensure_gemma_loaded(*, notify: bool = True, client: Client | None = No
 async def set_gemma_preload(enabled: bool, client: Client | None = None) -> bool:
     """
     函数名: set_gemma_preload
-    作用: 顶栏开关：开启预加载或卸载 Gemma4
+    作用: 顶栏开关：遥控 LM Studio 加载或卸载当前模型
     输入:
-        enabled (bool): True 预加载，False 卸载
+        enabled (bool): True 加载，False 卸载
         client (Client | None): NiceGUI 客户端
     输出:
         bool: 操作后是否处于已加载状态
@@ -202,20 +230,19 @@ async def set_gemma_preload(enabled: bool, client: Client | None = None) -> bool
         if resolved is not None:
             with resolved:
                 if ok:
-                    ui.notify("Gemma4 已预加载", type="positive")
+                    ui.notify("LM Studio 模型已加载", type="positive")
                 else:
-                    ui.notify("Gemma4 预加载失败", type="negative")
+                    ui.notify("LM Studio 模型加载失败", type="negative")
         return ok
     from nicegui_ui.components.workflow_ui import is_workflow_active, stop_wizard
     if is_workflow_active():
-        await stop_wizard("Gemma4 已卸载，配置向导已结束")
-    from llm_gemma4.__main__ import EndGemma
-    from llm_gemma4.runtime.gemma_worker import await_gemma_thread
-    await await_gemma_thread(EndGemma)
+        await stop_wizard("模型已卸载，配置向导已结束")
+    from llm_lmstudio.models import unload_model
+    await run.io_bound(unload_model)
     _schedule_runtime_refresh(resolved)
     if resolved is not None:
         with resolved:
-            ui.notify("Gemma4 已卸载", type="info")
+            ui.notify("LM Studio 模型已卸载", type="info")
     return False
 
 
@@ -223,9 +250,23 @@ async def set_gemma_preload(enabled: bool, client: Client | None = None) -> bool
 async def set_vl_preload(enabled: bool, client: Client | None = None) -> bool:
     """
     函数名: set_vl_preload
-    作用: 顶栏开关：开启预加载或卸载 Paddle-VL
+    作用: 顶栏开关：启动或停止 paddleocr-mcp（兼容旧名）
     输入:
         enabled (bool): True 预加载，False 卸载
+        client (Client | None): NiceGUI 客户端
+    输出:
+        bool: 操作后是否处于已加载状态
+    """
+    return await set_structure_preload(enabled, client=client)
+
+
+
+async def set_structure_preload(enabled: bool, client: Client | None = None) -> bool:
+    """
+    函数名: set_structure_preload
+    作用: 顶栏开关：先选五位数空闲端口，再启动或停止 paddleocr-mcp
+    输入:
+        enabled (bool): True 启动，False 停止
         client (Client | None): NiceGUI 客户端
     输出:
         bool: 操作后是否处于已加载状态
@@ -233,7 +274,7 @@ async def set_vl_preload(enabled: bool, client: Client | None = None) -> bool:
     global _vl_loading
     resolved = _resolve_client(client)
     if enabled:
-        if is_vl_loaded():
+        if is_structure_loaded():
             sync_model_runtime_ui(resolved)
             return True
         if _vl_loading:
@@ -242,22 +283,21 @@ async def set_vl_preload(enabled: bool, client: Client | None = None) -> bool:
         progress = None
         if resolved is not None:
             with resolved:
-                progress = ui.notification("正在预加载 Paddle-VL…", spinner=True, type="ongoing")
+                progress = ui.notification("正在启动 PaddleOcr（paddleocr-mcp）…", spinner=True, type="ongoing")
         try:
-            from paddle_ocr.engines.paddle_vl.backend import GetVlBackend
-            await run.io_bound(GetVlBackend().warm)
-            ok = is_vl_loaded()
+            from paddle_ocr.mcp_runtime import start_mcp
+            ok = bool(await run.io_bound(lambda: start_mcp(include_structure=True)))
             if resolved is not None:
                 with resolved:
                     if ok:
-                        ui.notify("Paddle-VL 已预加载", type="positive")
+                        ui.notify("PaddleOcr 已启动", type="positive")
                     else:
-                        ui.notify("Paddle-VL 不可用（需 GPU 与模型）", type="warning")
+                        ui.notify("PaddleOcr 启动失败（请先完成 OCR 安装）", type="warning")
             return ok
         except Exception:
             if resolved is not None:
                 with resolved:
-                    ui.notify("Paddle-VL 预加载失败", type="negative")
+                    ui.notify("PaddleOcr 启动失败", type="negative")
             return False
         finally:
             _vl_loading = False
@@ -267,12 +307,12 @@ async def set_vl_preload(enabled: bool, client: Client | None = None) -> bool:
             else:
                 _dismiss_notification(progress)
             _schedule_runtime_refresh(resolved)
-    from paddle_ocr.engines.paddle_vl.backend import ResetVlBackend
-    await run.io_bound(ResetVlBackend)
+    from paddle_ocr.mcp_runtime import stop_mcp
+    await run.io_bound(stop_mcp)
     _schedule_runtime_refresh(resolved)
     if resolved is not None:
         with resolved:
-            ui.notify("Paddle-VL 已卸载", type="info")
+            ui.notify("PaddleOcr 已停止", type="info")
     return False
 
 
@@ -280,7 +320,7 @@ async def set_vl_preload(enabled: bool, client: Client | None = None) -> bool:
 def release_all_models_sync() -> None:
     """
     函数名: release_all_models_sync
-    作用: 进程退出前同步释放 Gemma / Paddle-VL 占用的显存与内存（可重复调用）
+    作用: 进程退出前结束向导、卸载 LM Studio 当前模型与 PP-StructureV3
     输入: 无
     输出: 无
     """
@@ -289,7 +329,7 @@ def release_all_models_sync() -> None:
         if _models_released:
             return
         _models_released = True
-    # 中文注释: 先结束配置向导，避免 tick 与 EndGemma 竞态
+    # 中文注释: 先结束配置向导，避免 dispatch 与 unload 竞态
     try:
         from nicegui_ui.components.workflow_ui import is_workflow_active
         from nicegui_ui.components.toml_wizard import get_toml_wizard
@@ -297,22 +337,14 @@ def release_all_models_sync() -> None:
         if is_workflow_active() or wizard.started or wizard.orchestrator is not None:
             wizard.stop()
         elif is_gemma_loaded():
-            from llm_gemma4.__main__ import EndGemma
-            from llm_gemma4.runtime.gemma_worker import run_on_gemma_thread_blocking
-            run_on_gemma_thread_blocking(EndGemma)
+            from llm_lmstudio.models import unload_model
+            unload_model()
     except Exception:
         pass
-    # 中文注释: 卸载 Paddle-VL（若已预加载）
     try:
-        if is_vl_loaded():
-            from paddle_ocr.engines.paddle_vl.backend import ResetVlBackend
-            ResetVlBackend()
-    except Exception:
-        pass
-    # 中文注释: EndGemma 完成后停止 Gemma 工作线程
-    try:
-        from llm_gemma4.runtime.gemma_worker import shutdown_gemma_worker
-        shutdown_gemma_worker()
+        if is_structure_loaded():
+            from paddle_ocr.engines.pp_structure.backend import ResetStructureBackend
+            ResetStructureBackend()
     except Exception:
         pass
 
@@ -321,7 +353,7 @@ def release_all_models_sync() -> None:
 def _register_shutdown_hooks() -> None:
     """
     函数名: _register_shutdown_hooks
-    作用: 注册 NiceGUI on_shutdown 与 atexit 兜底，确保退出时释放模型显存
+    作用: 注册 NiceGUI on_shutdown 与 atexit 兜底
     输入: 无
     输出: 无
     """
@@ -350,22 +382,29 @@ def shutdown_application() -> None:
 def render_runtime_controls(*, show_shutdown: bool = True) -> None:
     """
     函数名: render_runtime_controls
-    作用: 渲染顶栏右侧 Gemma4 / Paddle-VL 预加载开关与关闭程序按钮
+    作用: 渲染顶栏可编辑模型名、LM Studio 加载开关、PP-Structure 开关与关闭程序
     输入:
         show_shutdown (bool): 是否显示关闭程序按钮（手机浏览器为 False）
     输出: 无
     """
+    from llm_lmstudio.config import load_user_config, save_user_config
     from nicegui_ui.components.buttons import AppBtn
-
+    cfg = load_user_config()
     gemma_loaded = is_gemma_loaded()
     vl_loaded = is_vl_loaded()
     gemma_busy = is_gemma_loading()
     vl_busy = is_vl_loading()
     with ui.element("div").classes("tabs-runtime"):
-        gemma_switch = ui.switch(
-            "Gemma4",
-            value=gemma_loaded,
-        ).classes("model-toggle").props("dense")
+        model_input = (
+            ui.input(placeholder="LM Studio 模型名", value=str(cfg.get("model") or ""))
+            .classes("model-name-input")
+            .props("dense outlined hide-bottom-space")
+        )
+        async def _on_model_blur(_e) -> None:
+            name = str(model_input.value or "").strip()
+            save_user_config(model=name, remember_model=bool(name))
+        model_input.on("blur", _on_model_blur)
+        gemma_switch = ui.switch("", value=gemma_loaded).classes("model-toggle").props("dense")
         if gemma_busy:
             gemma_switch.disable()
         async def _on_gemma(_e):
@@ -376,7 +415,7 @@ def render_runtime_controls(*, show_shutdown: bool = True) -> None:
             await set_gemma_preload(target, client=client)
         gemma_switch.on("update:model-value", _on_gemma)
         vl_switch = ui.switch(
-            "Paddle-VL",
+            "PP-Structure",
             value=vl_loaded,
         ).classes("model-toggle").props("dense")
         if vl_busy:
@@ -384,9 +423,9 @@ def render_runtime_controls(*, show_shutdown: bool = True) -> None:
         async def _on_vl(_e):
             client = ui.context.client
             target = bool(vl_switch.value)
-            if target == is_vl_loaded():
+            if target == is_structure_loaded():
                 return
-            await set_vl_preload(target, client=client)
+            await set_structure_preload(target, client=client)
         vl_switch.on("update:model-value", _on_vl)
         if show_shutdown:
             AppBtn("关闭程序", on_click=shutdown_application, extra_classes="app-btn-shutdown")

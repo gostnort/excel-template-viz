@@ -4,7 +4,7 @@
 > 日期：2026-07-30  
 > OCR 平台：[`embed_paddle_ocr.md`](embed_paddle_ocr.md)（推理；本文件只定落库与写回）  
 > UI 菜单：[`nicegui_ui/nicegui_ui_plan.md`](nicegui_ui/nicegui_ui_plan.md) §3.1  
-> 模板即库写回：[`excel_transform.md`](excel_transform.md) §4.6；向导落盘后的运行时边界见 [`gemma4_dynamic_workflow.md`](gemma4_dynamic_workflow.md) §10
+> 模板即库写回：[`excel_transform.md`](excel_transform.md) §4.6；向导落盘后的运行时边界见 [`toml_wizard.md`](toml_wizard.md)
 
 ## 1) 目标
 

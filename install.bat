@@ -82,7 +82,6 @@ py -3.10 bootup\bootstrap_install.py %*
 
 echo.
 echo To start the application, run: .\run.ps1
-echo Gemma 4 model (~3.66GB) downloads on first LLM/OCR use, or prefetch:
-echo   uv run --project bootup python -c "from llm_gemma4.hf_download import download_litert; print(download_litert())"
+echo LLM inference uses local LM Studio (see llm_lmstudio/user.toml.example).
 echo.
 pause

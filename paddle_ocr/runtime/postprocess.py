@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 
@@ -80,7 +81,7 @@ def StructureResultToJson(raw: Any, *, mode: str = "fast") -> dict[str, Any]:
                 if rows:
                     tables.append(rows)
                     continue
-                # VL 的 OTSL→HTML 转换可能失败，block_content 留下非空原始文本。
+                # 表格 HTML 解析为空时，block_content 可能留下非空原始文本。
                 # 不丢内容：把非空 table 文本降级成 string*，避免表格被静默丢弃。
                 fallback = content.strip()
                 if fallback and not fallback.startswith("<html") and not fallback.startswith("<table"):
@@ -159,6 +160,124 @@ def HasContent(result: dict[str, Any]) -> bool:
         if key.startswith("table") and isinstance(val, list) and len(val) > 0:
             return True
     return False
+
+
+
+def OcrMcpToStringJson(raw: Any) -> dict[str, Any]:
+    """
+    函数名: OcrMcpToStringJson
+    作用: 把 paddleocr-mcp ocr 工具的 detailed JSON / 纯文本映射为 string1 JSON。
+    输入:
+        raw: MCP 返回的字符串或 dict。
+    输出:
+        dict: §3.3 fast JSON。
+    """
+    from paddle_ocr import config
+    text = ""
+    if isinstance(raw, dict):
+        if str(raw.get("error") or "").strip():
+            return {"ok": True, "mode": "fast", "engine": "ocr", "message": config.MSG_EMPTY}
+        text = str(raw.get("text") or "").strip()
+        if not text:
+            lines = raw.get("text_lines") or []
+            parts = []
+            for line in lines:
+                if isinstance(line, dict):
+                    parts.append(str(line.get("text") or "").strip())
+                else:
+                    parts.append(str(line).strip())
+            text = "\n".join(p for p in parts if p)
+    else:
+        payload = str(raw or "").strip()
+        if payload.startswith("{") or payload.startswith("["):
+            try:
+                parsed = json.loads(payload)
+            except Exception:
+                parsed = None
+            if isinstance(parsed, dict):
+                return OcrMcpToStringJson(parsed)
+        if payload in ("No text detected", "No document content detected"):
+            payload = ""
+        text = payload
+    out: dict[str, Any] = {"ok": True, "mode": "fast", "engine": "ocr"}
+    if text:
+        out["string1"] = text
+        out["message"] = config.MSG_OK
+    else:
+        out["message"] = config.MSG_EMPTY
+    return out
+
+
+
+def MarkdownToOcrJson(markdown: str, *, mode: str = "fast") -> dict[str, Any]:
+    """
+    函数名: MarkdownToOcrJson
+    作用: 把 PP-StructureV3 MCP 的 markdown/HTML 拆成 string* / table*。
+    输入:
+        markdown (str): MCP 返回的 markdown 或内嵌 HTML。
+        mode (str): fast 或 structure。
+    输出:
+        dict: §3.3 JSON。
+    """
+    import re
+    from paddle_ocr import config
+    payload = str(markdown or "").strip()
+    if payload in ("No document content detected", "No text detected"):
+        return {"ok": True, "mode": mode, "engine": "structure", "message": config.MSG_EMPTY}
+    strings: list[str] = []
+    tables: list[list[dict[str, Any]]] = []
+    rest = payload
+    for html in re.findall(r"<table[\s\S]*?</table>", payload, flags=re.I):
+        rows = HtmlTableToRows(html)
+        if rows:
+            tables.append(rows)
+        rest = rest.replace(html, "\n")
+    pending: list[list[str]] = []
+    for line in rest.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("|") and stripped.count("|") >= 2:
+            cells = [c.strip() for c in stripped.strip("|").split("|")]
+            if cells and all(c and set(c) <= set("-: ") for c in cells):
+                continue
+            pending.append(cells)
+            continue
+        if pending:
+            tables.append([{"row": i, "cells": row} for i, row in enumerate(pending, start=1)])
+            pending = []
+        text = _html_to_plain(stripped)
+        if text:
+            strings.append(text)
+    if pending:
+        tables.append([{"row": i, "cells": row} for i, row in enumerate(pending, start=1)])
+    out: dict[str, Any] = {"ok": True, "mode": mode, "engine": "structure"}
+    for i, s in enumerate(strings, start=1):
+        out[f"string{i}"] = s
+    for i, rows in enumerate(tables, start=1):
+        out[f"table{i}"] = rows
+    if not strings and not tables:
+        out["message"] = config.MSG_EMPTY
+    else:
+        out["message"] = config.MSG_OK
+    return out
+
+
+
+def _html_to_plain(fragment: str) -> str:
+    """
+    函数名: _html_to_plain
+    作用: 去掉 div/html 包装，留下可读文本；非 HTML 原样返回。
+    输入:
+        fragment (str): 一行 markdown 或 HTML 碎片。
+    输出:
+        str: 纯文本。
+    """
+    text = str(fragment or "").strip()
+    if not text:
+        return ""
+    if "<" not in text:
+        return text
+    from bs4 import BeautifulSoup
+    return BeautifulSoup(text, "html.parser").get_text(separator="\n", strip=True)
 
 
 

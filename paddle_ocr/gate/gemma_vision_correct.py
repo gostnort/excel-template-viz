@@ -1,15 +1,13 @@
-"""C3.3：gemma_only 档视觉纠错——Pic2Str 读图 + 逐单元择优合并（保结构）。
+"""C3.3：gemma_only 档视觉纠错——读图 + 逐单元择优合并（保结构）。
 
-4GB ≤ 预算 < 10GB（或 10GB+ 无加速器）时，PaddleVL 不加载；Gemma4 先做语义检查，
+4GB ≤ 预算 < 10GB 时不加载 PP-StructureV3 精修；LM Studio 先做语义检查，
 有问题则走本模块：
-  1) 从 fast 结果派生角色 character（如"机场地勤人员的遗失物品交接单"、"银行支票"）；
-  2) Pic2Str 用该角色读图，得到 Gemma4 自己的同形 JSON（string*/table*）；
-  3) 逐单元（string* / table* 每行/每格）文本裁判 fast vs gemma 择优；
+  1) 从 fast 结果派生角色 character；
+  2) 用该角色读图，得到同形 JSON（string*/table*）；须 capabilities.vision；
+  3) 逐单元文本裁判 fast vs 视觉结果择优；
   4) 合并保持 fast 的键/行数/列数不变，返回 mode="gemma_vision_corrected"。
 
-幻觉策略（见 docs/embed_gemma4.md §3.1d 末段）：Pic2Str 对密集小字中文会"编出
-通顺但与图不符的文字"。本模块接受该幻觉——角色 character 是关键约束，幻觉作为
-语义上的"模糊/再创造"可接受；逐单元择优只在 gemma 明显更顺时替换 fast。
+幻觉策略：读图对密集小字中文会编出通顺但与图不符的文字。本模块接受该幻觉；角色 character 是约束。
 """
 
 from __future__ import annotations
@@ -64,7 +62,7 @@ def _derive_character(fast: dict[str, Any]) -> str:
     输出:
         str: 一句话角色描述。
     """
-    import llm_gemma4.__main__ as gemma_main
+    import llm_lmstudio.facade as llm_facade
     text = _fast_to_text(fast)
     prompt = (
         "下面是一份文档的快速 OCR 结果（可能有错字）。请判断这份文档的类型和角色"
@@ -72,7 +70,7 @@ def _derive_character(fast: dict[str, Any]) -> str:
         "、'医院检验报告'）。只输出这一句角色描述，不要其他内容。\n"
         f"---\n{text}\n---"
     )
-    return gemma_main.ConversationOnce(prompt).strip()
+    return llm_facade.conversation_once(prompt).strip()
 
 
 
@@ -80,7 +78,7 @@ def _encode_cropped_jpg(pic: Any, rectangle: tuple[int, int, int, int] | None) -
     """
     函数名: _encode_cropped_jpg
     作用: 解码 + 裁剪 → jpg 已编码字节。Pic2Str 要的是已编码图片字节（jpg/png 原始
-        字节），不是解码后的像素数组（见 docs/embed_gemma4.md §3.1d ImageBytes）。
+        字节），不是解码后的像素数组。
     输入:
         pic (bytes|Path|str|ndarray): 同 PaddleOcr 入参。
         rectangle (tuple|None): OpenCV ROI (x,y,w,h)。
@@ -177,7 +175,7 @@ def _pick_better(fast_text: str, gemma_text: str, character: str, *, verbose: bo
     输出:
         str: 胜者文本。
     """
-    import llm_gemma4.__main__ as gemma_main
+    import llm_lmstudio.facade as llm_facade
     if not gemma_text:
         if verbose:
             print(f"    [pick {unit_id}] gemma 空 → 保留 fast: {fast_text!r}", flush=True)
@@ -192,7 +190,7 @@ def _pick_better(fast_text: str, gemma_text: str, character: str, *, verbose: bo
         f"B: {gemma_text}\n"
         "只输出 A 或 B（仅字母）。"
     )
-    ans = gemma_main.ConversationOnce(prompt).strip().upper()
+    ans = llm_facade.conversation_once(prompt).strip().upper()
     # 中文注释：取首字母；B 才替换，其余（A/歧义/异常）保守保留 fast。
     winner = "B" if ans.startswith("B") else "A"
     if verbose:
@@ -230,13 +228,19 @@ def GemmaVisionCorrect(
     out = copy.deepcopy(fast)
     # 中文注释：阶段一——派生角色 + 读图 + 解析；任一失败回退 fast。
     try:
-        import llm_gemma4.__main__ as gemma_main
+        import llm_lmstudio.facade as llm_facade
+        from llm_lmstudio.models import has_vision
+        if not has_vision():
+            if verbose:
+                print("    [vision] capabilities.vision=false → 保留 fast", flush=True)
+            out["message"] = config.MSG_LLM_PARTIAL
+            return out
         character = _derive_character(fast)
         if verbose:
             print(f"    [derive character] {character!r}", flush=True)
         jpg = _encode_cropped_jpg(pic, rectangle)
         prompt = _build_pic_prompt(fast)
-        raw = gemma_main.Pic2Str(jpg, prompt, system=f"你是文档 OCR 引擎。背景：{character}。")
+        raw = llm_facade.pic2str(jpg, prompt, system=f"你是文档 OCR 引擎。背景：{character}。")
         if verbose:
             print(f"    [Pic2Str raw] {raw!r}", flush=True)
         gemma = _parse_gemma_json(raw)

@@ -1,0 +1,4 @@
+api_url = "http://localhost:9999"
+api_token = ""
+model = ""
+model_history = []

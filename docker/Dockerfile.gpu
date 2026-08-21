@@ -22,7 +22,7 @@ RUN uv python install 3.11
 
 COPY bootup/pyproject.toml bootup/uv.lock bootup/
 
-RUN uv sync --frozen --project bootup --extra llm --extra ocr-gpu --python 3.11
+RUN uv sync --frozen --project bootup --extra ocr-gpu --python 3.11
 
 COPY . .
 

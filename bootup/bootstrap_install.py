@@ -202,7 +202,7 @@ def _resolve_accelerator(args: argparse.Namespace, detected: bool) -> str:
     default = "Y" if detected else "N"
     if detected:
         prompt = (
-            "Install GPU OCR stack (paddlepaddle-gpu / VL)? "
+            "Install GPU OCR stack (paddlepaddle-gpu / PP-OCRv6 + PP-StructureV3)? "
             f"Recommended based on probe: GPU [{default}/n]: "
         )
     else:
@@ -237,7 +237,7 @@ def _ensure_venv(uv: str, python: str | None) -> int:
 def _sync(uv: str, *, accelerator: str, ocr: bool, frozen: bool) -> int:
     """
     函数名: _sync
-    作用: 在 bootup 目录 uv sync 安装 core+llm，按需互斥安装 ocr 或 ocr-gpu。
+    作用: 在 bootup 目录 uv sync 安装 core，按需互斥安装 ocr 或 ocr-gpu。
            使用 Popen + 逐行读取实时输出进度（不再是静默的 subprocess.call）。
     输入:
         uv (str): uv 路径
@@ -247,21 +247,25 @@ def _sync(uv: str, *, accelerator: str, ocr: bool, frozen: bool) -> int:
     输出:
         int: 退出码
     """
-    cmd = [uv, "sync", "--extra", "llm"]
+    cmd = [uv, "sync"]
     if frozen:
         cmd.append("--frozen")
-    if ocr:
-        if accelerator == "gpu":
-            cmd.extend(["--extra", "ocr-gpu"])
-        else:
-            cmd.extend(["--extra", "ocr"])
+    try:
+        from uv_profile import extra_args
+        cmd.extend(extra_args(ocr=ocr, accelerator=accelerator))
+    except Exception:
+        if ocr:
+            if accelerator == "gpu":
+                cmd.extend(["--extra", "ocr-gpu"])
+            else:
+                cmd.extend(["--extra", "ocr"])
     return _stream_run(cmd)
 
 
 def _post_ocr(accelerator: str) -> int:
     """
     函数名: _post_ocr
-    作用: GPU 走 install_backend（VL 预热）；CPU 走 prune；再跑 OCR 门禁
+    作用: GPU 走 install_backend（PP-OCRv6 / PP-StructureV3 预热）；CPU 走 prune；再跑 OCR 门禁
     输入:
         accelerator (str): cpu|gpu
     输出:
@@ -270,7 +274,7 @@ def _post_ocr(accelerator: str) -> int:
     backend = ROOT / "paddle_ocr" / "scripts" / "install_backend.py"
     venv_py = _venv_python()
     python = str(venv_py) if venv_py is not None else sys.executable
-    # GPU：确保无 CPU 包残留并预热 VL；CPU：prune VL
+    # GPU：确保无 CPU 包残留并预热 OCR/Structure；CPU：prune 旧 VL 残留
     rc = _run([python, str(backend), accelerator], cwd=ROOT)
     if rc != 0:
         print(f"WARNING: install_backend ({accelerator}) exited {rc}", flush=True)
@@ -295,13 +299,12 @@ def _post_ocr(accelerator: str) -> int:
 def _ensure_runtime_dirs() -> None:
     """
     函数名: _ensure_runtime_dirs
-    作用: 创建 temp / exports / models/gemma4
+    作用: 创建 temp / exports
     输入: 无
     输出: 无
     """
     (ROOT / "temp").mkdir(parents=True, exist_ok=True)
     (ROOT / "exports").mkdir(parents=True, exist_ok=True)
-    (ROOT / "models" / "gemma4").mkdir(parents=True, exist_ok=True)
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -351,12 +354,8 @@ def main(argv: list[str] | None = None) -> int:
     detected = _detect_gpu()
     accelerator = _resolve_accelerator(args, detected)
     ocr = not args.skip_ocr
-    existing = _read_profile()
     if args.skip_ocr:
         ocr = False
-    elif existing.get("ocr") == "false" and not args.force_profile and not args.gpu and not args.cpu:
-        ocr = False
-        print("Reusing .install_profile ocr=false.", flush=True)
     _write_profile(accelerator=accelerator, ocr=ocr)
     print(f"Profile: accelerator={accelerator} ocr={ocr}", flush=True)
     rc = _sync(uv, accelerator=accelerator, ocr=ocr, frozen=args.frozen)
@@ -365,16 +364,15 @@ def main(argv: list[str] | None = None) -> int:
         return rc
     venv_py = _venv_python()
     python = str(venv_py) if venv_py is not None else sys.executable
-    smoke = _run([python, "-c", "import litert_lm; print('litert-lm OK')"], cwd=ROOT)
+    smoke = _run([python, "-c", "import llm_lmstudio; print('llm_lmstudio OK')"], cwd=ROOT)
     if smoke != 0:
-        print("ERROR: litert-lm import failed after sync", flush=True)
+        print("ERROR: llm_lmstudio import failed after sync", flush=True)
         return smoke
     if ocr:
         _post_ocr(accelerator)
     _ensure_runtime_dirs()
     print(
-        "Installation completed. Start with .\\run.ps1 or: "
-        "uv run --project bootup python -m nicegui_ui.app",
+        "Installation completed. Start with .\\run.ps1 or .\\uv_run.ps1 python -m nicegui_ui.app",
         flush=True,
     )
     return 0

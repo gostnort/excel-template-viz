@@ -1,1 +1,1 @@
-"""PP-Structure full-page backend (routes thin strips to pp_ocr)."""
+"""PP-StructureV3 backend: fast full-page/tables and refine (replaces PaddleOCR-VL)."""

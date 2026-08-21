@@ -7,13 +7,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from nicegui import ui
+from nicegui import run, ui
 
 from nicegui_ui.components.model_runtime import ensure_gemma_loaded
-from llm_gemma4.__main__ import EndGemma, _get_backend
-from llm_gemma4.runtime.gemma_worker import await_gemma_thread, run_on_gemma_thread_blocking
-from llm_gemma4.toml_config.workflow_orchestrator import WorkflowOrchestrator
-from llm_gemma4.workflow.events import EVENT_RESUME, EVENT_START, WorkflowEvent
+from llm_lmstudio.backend import get_backend
+from llm_toml_wizard.toml_config.workflow_orchestrator import WorkflowOrchestrator
+from llm_toml_wizard.workflow.events import EVENT_RESUME, EVENT_START, WorkflowEvent
 from nicegui_ui.components.general import Auth, SessionRegistry
 
 
@@ -296,7 +295,7 @@ class TomlWizardController:
             pass
 
     def _chat(self, role: str, text: str) -> None:
-        label = "用户" if role == "user" else "Gemma"
+        label = "用户" if role == "user" else "模型"
         block = f"【{label}】\n{text.strip()}"
         self._chat_history.append(block)
         self._push_sidebar_update()
@@ -353,7 +352,7 @@ class TomlWizardController:
         if session.ui_provider:
             return session.ui_provider.get_labels()
         if session.template_path:
-            from llm_gemma4.toml_config.template_labels import list_template_labels
+            from llm_toml_wizard.toml_config.template_labels import list_template_labels
             return list_template_labels(session.template_path)
         return []
 
@@ -376,7 +375,7 @@ class TomlWizardController:
     async def start(self, client=None) -> bool:
         """
         函数名: start
-        作用: 预热 Gemma 并创建 orchestrator
+        作用: 确认 LM Studio 模型已加载并创建 orchestrator
         输入:
             client: NiceGUI 客户端（可选，用于跨 refresh 安全加载）
         输出:
@@ -398,7 +397,7 @@ class TomlWizardController:
             return False
         finally:
             self._starting = False
-        backend = _get_backend()
+        backend = get_backend()
         health = backend.health_check()
         principal = Auth.resolve_principal()
         thread_id = f"{principal.principal_id}:workflow"
@@ -415,7 +414,14 @@ class TomlWizardController:
             Path(session.template_path),
             labels,
         )
-        self._log("向导已启动，Engine profile=" + health.litert_backend)
+        self._log(
+            "向导已启动，LM Studio "
+            + str(health.api_url)
+            + " model="
+            + str(health.model)
+            + " vision="
+            + str(health.vision)
+        )
         if not health.ok:
             self._log(health.message)
         self.started = True
@@ -424,7 +430,7 @@ class TomlWizardController:
     async def dispatch(self, event: WorkflowEvent) -> WorkflowEvent | None:
         """
         函数名: dispatch
-        作用: 在 Gemma 工作线程执行 orchestrator.dispatch
+        作用: 在线程池执行 orchestrator.dispatch（LM Studio HTTP）
         输入:
             event (WorkflowEvent): start / resume / stop
         输出:
@@ -435,7 +441,7 @@ class TomlWizardController:
         self._busy = True
         try:
             orch = self.orchestrator
-            outbound = await await_gemma_thread(orch.dispatch, event)
+            outbound = await run.io_bound(orch.dispatch, event)
             if self._stopping:
                 return None
             return outbound
@@ -474,7 +480,7 @@ class TomlWizardController:
         if not tid:
             return
         try:
-            from llm_gemma4.toml_config.toml_patcher import persist_wizard_toml
+            from llm_toml_wizard.toml_config.toml_patcher import persist_wizard_toml
             persist_wizard_toml(st, tid)
         except Exception as exc:
             self._log(f"停止前 TOML 保存失败: {exc}")
@@ -482,16 +488,13 @@ class TomlWizardController:
     def _release_gemma(self) -> None:
         """
         函数名: _release_gemma
-        作用: 关闭 orchestrator 并释放 Gemma 模型（假定无进行中的 dispatch）
+        作用: 关闭 orchestrator（不卸载 LM Studio 权重；由顶栏开关遥控）
         输入: 无
         输出: 无
         """
         orch = self.orchestrator
-        def _release_on_worker() -> None:
-            if orch is not None:
-                orch.close()
-            EndGemma()
-        run_on_gemma_thread_blocking(_release_on_worker)
+        if orch is not None:
+            orch.close()
         self.orchestrator = None
         self.log_widget = None
         self.chat_widget = None
@@ -500,13 +503,11 @@ class TomlWizardController:
         self.started = False
         from nicegui_ui.components.model_runtime import sync_model_runtime_ui
         sync_model_runtime_ui()
-        from nicegui_ui.components.model_runtime import sync_model_runtime_ui
-        sync_model_runtime_ui()
 
     async def stop_async(self, timeout: float = 300.0) -> None:
         """
         函数名: stop_async
-        作用: 等待当前 dispatch 结束后再释放 Gemma，避免 worker 与 EndGemma 竞态
+        作用: 等待当前 dispatch 结束后关闭向导，不卸载远端模型
         输入:
             timeout (float): 等待 dispatch 结束的最长秒数
         输出: 无
@@ -517,7 +518,7 @@ class TomlWizardController:
         deadline = time.monotonic() + timeout
         while self._busy or self._starting:
             if time.monotonic() >= deadline:
-                self._log("停止超时：仍有任务执行中，将强制释放 Gemma")
+                self._log("停止超时：仍有任务执行中，将强制结束向导")
                 break
             await asyncio.sleep(0.05)
         self._persist_workflow_toml()

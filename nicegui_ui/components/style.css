@@ -262,6 +262,12 @@ html, body {
   padding: 0 12px;
   flex-shrink: 0;
 }
+.tabs-runtime .model-name-input {
+  width: 200px;
+}
+.tabs-runtime .model-name-input .q-field__control {
+  min-height: 28px;
+}
 .tabs-runtime .q-toggle,
 .tabs-runtime .app-btn {
   font-size: 12px;

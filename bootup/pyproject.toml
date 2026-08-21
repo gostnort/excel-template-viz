@@ -19,27 +19,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-llm = [
-    # litert-lm 0.13.x lacks max_output_tokens on Conversation.send_message()
-    "litert-lm==0.14.0",
-    "huggingface-hub>=1.2.0,<2.0.0",
+ocr = [
+    "paddleocr-mcp[local-cpu]>=0.8.5,<1.0",
+    "opencv-python-headless>=4.8",
+    "pillow-heif>=0.16",
+    "beautifulsoup4>=4.12",
     "psutil>=5.9.0",
 ]
-ocr = [
-    "paddlepaddle>=3.3.1,<4.0",
-    "paddleocr>=3.7.0,<4.0",
-    "paddlex[ocr]>=3.7.0,<3.8",
-    "opencv-python-headless>=4.8",
-    "pillow-heif>=0.16",
-    "beautifulsoup4>=4.12",
-]
 ocr-gpu = [
+    "paddleocr-mcp[local]>=0.8.5,<1.0",
     "paddlepaddle-gpu==3.3.1",
-    "paddleocr>=3.7.0,<4.0",
-    "paddlex[ocr]>=3.7.0,<3.8",
     "opencv-python-headless>=4.8",
     "pillow-heif>=0.16",
     "beautifulsoup4>=4.12",
+    "psutil>=5.9.0",
 ]
 
 [dependency-groups]

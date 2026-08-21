@@ -13,7 +13,7 @@ WORKDIR /app
 # Lock + metadata first for layer cache
 COPY bootup/pyproject.toml bootup/uv.lock bootup/
 
-RUN uv sync --frozen --project bootup --extra llm --extra ocr
+RUN uv sync --frozen --project bootup --extra ocr
 
 COPY . .
 

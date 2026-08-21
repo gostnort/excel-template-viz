@@ -1,4 +1,4 @@
-"""启动时硬件探测：GPU / NPU / CPU-only；决定 VL 精修走哪条路（或跳过）。"""
+"""启动时硬件探测：GPU / NPU / CPU-only；决定 paddle 走 GPU 还是 CPU。"""
 
 from __future__ import annotations
 
@@ -102,22 +102,20 @@ def detect_accelerator() -> str:
 def AcceleratorAvailable() -> bool:
     """
     函数名: AcceleratorAvailable
-    作用: 运行时判断 VL 精修路径是否真能跑：GPU 硬件存在 且 paddlepaddle-gpu(CUDA 版)
-        已安装。任一不满足返回 False（此时走 CPU-only Gemma4 直接纠错分支，不调 VL）。
-        结果缓存（进程内不变）。
+    作用: 运行时判断能否用 GPU 版 paddle：GPU 硬件存在 且 paddlepaddle-gpu 已安装。
+        结果缓存（进程内不变）。StructureV3 精修不依赖本函数（可 CPU）。
     输入: 无。
     输出:
-        bool: True=可走 GPU VL 精修；False=走 CPU-only Gemma4 纠错。
+        bool: True=已装 CUDA 版 paddle；False=CPU 版或探测失败。
     """
     return detect_gpu_hardware() and paddle_is_cuda()
 
 
 
-def VlBackendKind() -> str:
+def AcceleratorKind() -> str:
     """
-    函数名: VlBackendKind
-    作用: 返回当前应使用的 VL 后端类型："gpu"（AcceleratorAvailable）/ "npu"（未来扩展）/
-        "none"（CPU-only，不跑 VL，走 Gemma4 直接纠错）。
+    函数名: AcceleratorKind
+    作用: 返回当前加速器类型：gpu / npu / none（CPU）。
     输入: 无。
     输出:
         str: "gpu" / "npu" / "none"。

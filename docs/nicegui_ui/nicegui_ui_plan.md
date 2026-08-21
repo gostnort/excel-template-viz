@@ -357,7 +357,7 @@ Wireframe: `nicegui_ui_toml.html`. Same CSS Grid shell as index.
 1. **校验与应用:** `校验并应用配置` → `verify_toml` + on success rebuild engines.
 2. **高级（TOML 全文）:** `ui.codemirror` or `ui.textarea` + `保存` / `重置`.
 
-**Out of scope (removed from this plan):** Gemma4「AI 配置向导」、页内 stepper / 对话框 — see [`docs/gemma4_dynamic_workflow.md`](../gemma4_dynamic_workflow.md); do not implement in NiceGUI v1 wireframe.
+**Out of scope (removed from this plan):** AI 配置向导、页内 stepper / 对话框 — see [`docs/toml_wizard.md`](../toml_wizard.md); do not implement in NiceGUI v1 wireframe.
 
 Optional later: manual cards for 基础 / 数据源 / 输入区段 / 字段映射 if needed without LLM wizard.
 

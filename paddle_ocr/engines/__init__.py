@@ -1,1 +1,1 @@
-"""OCR engines: pp_ocr (field), pp_structure (full page), paddle_vl (refine)."""
+"""OCR engines: pp_ocr (PP-OCRv6 field), pp_structure (fast tables + refine)."""
