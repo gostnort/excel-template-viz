@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
+import sys
+import threading
 from argparse import Namespace
 from typing import Any
 
 from llm_gemma4.cli.briefing import DEMO_FACTS, BriefingSpec
+from llm_gemma4.cli.queue import MainTurnQueue
 from llm_gemma4.dialog import ACTION_CATALOG, ACTION_HANDLERS, DialogOrchestrator, pending_needs
 from llm_gemma4.dialog.spec import DialogSpec
 from llm_gemma4.dialog.state import DialogState
@@ -141,6 +145,42 @@ def _prompt_fact(interrupt) -> dict[str, Any]:
     return {"fact_key": key, "fact_value": value}
 
 
+def _toml_payload_from_text(kind: str, text: str) -> dict[str, Any]:
+    """
+    函数名: _toml_payload_from_text
+    作用: 把一行 stdin 文本转成 toml 四类 interrupt 的 Resume 载荷
+    输入:
+        kind (str): 中断 kind
+        text (str): 一行用户输入（不含换行）
+    输出:
+        dict: dispatch(Resume) 载荷
+    """
+    value = text.strip()
+    if kind == "ask_sources":
+        if value.lower() in ("", "skip", "none"):
+            return {"data_sources_skipped": True}
+        return {"data_sources": [{"type": "google_sheet", "source1": value}]}
+    if kind == "ask_layout":
+        raw = value or "B2:F20 down 1"
+        parts = raw.split()
+        area = parts[0] if parts else "B2:F20"
+        move = parts[1] if len(parts) > 1 else "down"
+        try:
+            offset = int(parts[2]) if len(parts) > 2 else 1
+        except ValueError:
+            offset = 1
+        return {"input_area": area, "move_to": move, "offset": offset}
+    if kind == "ask_sample":
+        return {
+            "ghost_text_sample": value or TOML_DEMO_GHOST,
+            "user_draft": dict(TOML_DEMO_DRAFT),
+            "template_labels": list(TOML_DEMO_LABELS),
+        }
+    if kind == "ask_db_id":
+        return {"db_id": value, "db_id_confirmed": True}
+    return {"fact_key": kind or "fact", "fact_value": value}
+
+
 def _prompt_toml_interrupt(kind: str, interrupt) -> dict[str, Any]:
     """
     函数名: _prompt_toml_interrupt
@@ -155,46 +195,27 @@ def _prompt_toml_interrupt(kind: str, interrupt) -> dict[str, Any]:
     _print(f"need [{kind}]: {expected}")
     if kind == "ask_sources":
         _print("Enter skip to skip Google, or a source URL.")
-        try:
-            value = input("> ").strip()
-        except EOFError:
-            value = "skip"
-        if value.lower() in ("", "skip", "none"):
-            return {"data_sources_skipped": True}
-        return {"data_sources": [{"type": "google_sheet", "source1": value}]}
-    if kind == "ask_layout":
+        prompt = "> "
+        default = "skip"
+    elif kind == "ask_layout":
         _print("Format: input_area [move_to] [offset]  e.g. B2:F20 down 1")
-        try:
-            raw = input("> ").strip()
-        except EOFError:
-            raw = "B2:F20 down 1"
-        parts = raw.split()
-        area = parts[0] if parts else "B2:F20"
-        move = parts[1] if len(parts) > 1 else "down"
-        try:
-            offset = int(parts[2]) if len(parts) > 2 else 1
-        except ValueError:
-            offset = 1
-        return {"input_area": area, "move_to": move, "offset": offset}
-    if kind == "ask_sample":
+        prompt = "> "
+        default = "B2:F20 down 1"
+    elif kind == "ask_sample":
         _print("Paste ghost sample (one line). Drafts default to demo Ginger values if empty.")
-        try:
-            ghost = input("ghost> ").strip()
-        except EOFError:
-            ghost = ""
-        return {
-            "ghost_text_sample": ghost or TOML_DEMO_GHOST,
-            "user_draft": dict(TOML_DEMO_DRAFT),
-            "template_labels": list(TOML_DEMO_LABELS),
-        }
-    if kind == "ask_db_id":
+        prompt = "ghost> "
+        default = ""
+    elif kind == "ask_db_id":
         _print("Primary key label, or empty for none.")
-        try:
-            db_id = input("> ").strip()
-        except EOFError:
-            db_id = ""
-        return {"db_id": db_id, "db_id_confirmed": True}
-    return _prompt_fact(interrupt)
+        prompt = "> "
+        default = ""
+    else:
+        return _prompt_fact(interrupt)
+    try:
+        value = input(prompt)
+    except EOFError:
+        value = default
+    return _toml_payload_from_text(kind, value)
 
 
 def _run_loop(
@@ -253,6 +274,128 @@ def _run_loop(
         else:
             payload = _prompt_fact(interrupt) if interrupt is not None else {}
         outbound = orch.dispatch(WorkflowEvent(type=EVENT_RESUME, payload=payload))
+
+
+def _repl_line_to_item(text: str) -> dict[str, Any]:
+    """
+    函数名: _repl_line_to_item
+    作用: 把 stdin 一行变成入队字典：JSON 对象原样入队，否则包成 _repl_line
+    输入:
+        text (str): 已去掉换行的一行
+    输出:
+        dict: MainTurnQueue.put 的载荷
+    """
+    stripped = text.strip()
+    if stripped.startswith("{"):
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            return dict(parsed)
+    return {"_repl_line": text}
+
+
+def _repl_resolve_payload(kind: str, queued: dict[str, Any]) -> dict[str, Any]:
+    """
+    函数名: _repl_resolve_payload
+    作用: 将队列项转为当前 interrupt 的 Resume 载荷；auto 用 TOML_DEMO_AUTO
+    输入:
+        kind (str): 当前中断 kind
+        queued (dict): 队列取出的字典（可含 _repl_line）
+    输出:
+        dict: dispatch(Resume) 载荷
+    """
+    if "_repl_line" in queued:
+        text = str(queued.get("_repl_line") or "")
+        if text.strip().lower() == "auto":
+            return dict(TOML_DEMO_AUTO.get(kind, {}))
+        return _toml_payload_from_text(kind, text)
+    return dict(queued)
+
+
+def _run_repl_loop(
+    orch: DialogOrchestrator,
+    start_payload: dict[str, Any],
+    queue: MainTurnQueue,
+) -> int:
+    """
+    函数名: _run_repl_loop
+    作用: worker 侧 dispatch Start，遇中断则从队列取载荷 dispatch(Resume)
+    输入:
+        orch (DialogOrchestrator): 编排器
+        start_payload (dict): 启动载荷
+        queue (MainTurnQueue): stdin 线程写入的 FIFO
+    输出:
+        int: 退出码
+    """
+    outbound = orch.dispatch(WorkflowEvent(type=EVENT_START, payload=dict(start_payload)))
+    while True:
+        if outbound.type == EVENT_FINISHED:
+            _print("[event] finished")
+            _dump_state(orch)
+            orch.close()
+            return 0
+        if outbound.type == EVENT_STOP:
+            _print("[event] stopped")
+            return 0
+        if outbound.type != EVENT_INTERRUPT:
+            _print(f"[event] {outbound.type} {outbound.payload}")
+            orch.close()
+            return 1
+        interrupt = outbound.interrupt or orch.pending_interrupt
+        kind = getattr(interrupt, "kind", "") if interrupt is not None else ""
+        _print(f"[event] interrupt kind={kind}")
+        queued = queue.get()
+        if queued is None:
+            _print("[repl] queue closed before resume")
+            orch.dispatch(WorkflowEvent(type=EVENT_STOP, payload={}))
+            orch.close()
+            return 1
+        payload = _repl_resolve_payload(str(kind), queued)
+        _print(f"[repl] {kind} keys={list(payload.keys())}")
+        outbound = orch.dispatch(WorkflowEvent(type=EVENT_RESUME, payload=payload))
+
+
+def _repl_worker_main(
+    orch: DialogOrchestrator,
+    start_payload: dict[str, Any],
+    queue: MainTurnQueue,
+    box: list[int],
+) -> None:
+    """
+    函数名: _repl_worker_main
+    作用: worker 线程入口；独占 dispatch，结束后关闭队列
+    输入:
+        orch (DialogOrchestrator): 编排器
+        start_payload (dict): 启动载荷
+        queue (MainTurnQueue): 主轮次 FIFO
+        box (list[int]): 单元素列表，写回退出码
+    输出: 无
+    """
+    try:
+        box[0] = _run_repl_loop(orch, start_payload, queue)
+    except Exception as exc:
+        _print(f"[repl] worker error: {exc}")
+        box[0] = 1
+    finally:
+        queue.close()
+
+
+def _repl_enqueue_stdin(queue: MainTurnQueue) -> None:
+    """
+    函数名: _repl_enqueue_stdin
+    作用: 主线程逐行读 stdin 入队；队列已关闭则停止
+    输入:
+        queue (MainTurnQueue): 主轮次 FIFO
+    输出: 无
+    """
+    for line in sys.stdin:
+        text = line.rstrip("\r\n")
+        try:
+            queue.put(_repl_line_to_item(text))
+        except RuntimeError:
+            return
 
 
 def cmd_catalog(args: Namespace) -> int:
@@ -357,3 +500,48 @@ def cmd_dialog_demo(args: Namespace) -> int:
     args.constraints = args.constraints or ""
     args.output_shape = args.output_shape or ""
     return cmd_dialog_run(args)
+
+
+def cmd_dialog_repl(args: Namespace) -> int:
+    """
+    函数名: cmd_dialog_repl
+    作用: 读 stdin 行入队，worker 线程消费 dispatch(Resume)；仅 CLI toml
+    输入:
+        args (Namespace): spec / mock / stub / live / write_toml / goal
+    输出:
+        int: 退出码
+    """
+    if _spec_name(args) != "toml":
+        _print("dialog repl currently supports --spec toml only")
+        return 2
+    if not getattr(args, "live", False):
+        args.mock = True
+        args.stub = True
+    orch = _make_orchestrator(args)
+    queue = MainTurnQueue()
+    payload: dict[str, Any] = {
+        "goal": args.goal or TOML_DEMO_GOAL,
+        "template_id": "cli_toml_demo",
+        "template_labels": list(TOML_DEMO_LABELS),
+    }
+    box: list[int] = [1]
+    thread = threading.Thread(
+        target=_repl_worker_main,
+        args=(orch, payload, queue, box),
+        name="dialog-repl-worker",
+        daemon=True,
+    )
+    thread.start()
+    try:
+        # 中文注释: 主线程只入队，dispatch 仅在 worker
+        _repl_enqueue_stdin(queue)
+    except KeyboardInterrupt:
+        _print("[repl] interrupted")
+    finally:
+        queue.close()
+        thread.join()
+        orch.close()
+        if (not args.mock) and getattr(args, "release", False):
+            from llm_gemma4.__main__ import EndGemma
+            EndGemma()
+    return int(box[0])

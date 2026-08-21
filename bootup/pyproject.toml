@@ -42,8 +42,19 @@ ocr-gpu = [
     "beautifulsoup4>=4.12",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+# 仓库根目录：uv run --project bootup pytest tests/test_cli_dialog_toml.py -q
+testpaths = ["../tests"]
+pythonpath = [".."]
+
 [tool.uv]
 package = false
+default-groups = ["dev"]
 
 # Paddle GPU wheels live on the official cu129 index (not PyPI).
 [[tool.uv.index]]

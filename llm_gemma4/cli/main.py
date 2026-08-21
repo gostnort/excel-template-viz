@@ -7,6 +7,7 @@
   python -m llm_gemma4.cli dialog catalog --spec toml
   python -m llm_gemma4.cli dialog demo --spec toml --mock --stub
   python -m llm_gemma4.cli dialog run --spec toml --mock --stub
+  python -m llm_gemma4.cli dialog repl --spec toml --mock --stub
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from llm_gemma4.cli.dialog_cmds import cmd_catalog, cmd_dialog_demo, cmd_dialog_run
+from llm_gemma4.cli.dialog_cmds import cmd_catalog, cmd_dialog_demo, cmd_dialog_repl, cmd_dialog_run
 from llm_gemma4.cli.gemma_cmds import (
     cmd_ask,
     cmd_health,
@@ -100,6 +101,16 @@ def _build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--demo", action="store_true", default=True)
     demo.add_argument("--write-toml", action="store_true", help="persist sidecar TOML (off by default)")
     demo.set_defaults(func=cmd_dialog_demo)
+    repl = dcmd.add_parser("repl", help="stdin FIFO queue + dispatch Resume (CLI only, toml)")
+    repl.add_argument("--spec", default="toml", help="toml (repl is toml-only)")
+    repl.add_argument("--stub", action="store_true")
+    repl.add_argument("--mock", action="store_true")
+    repl.add_argument("--force-thinking-retry", action="store_true")
+    repl.add_argument("--release", action="store_true")
+    repl.add_argument("--live", action="store_true", help="use real Gemma instead of mock+stub")
+    repl.add_argument("--goal", default="")
+    repl.add_argument("--write-toml", action="store_true")
+    repl.set_defaults(func=cmd_dialog_repl)
     return parser
 
 

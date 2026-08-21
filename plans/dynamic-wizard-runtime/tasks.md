@@ -14,19 +14,19 @@
 
 ## Phase 1 — CLI 验收自动化（最高优先级）
 
-- [ ] 新建 `tests/test_cli_dialog_toml.py`
+- [x] 新建 `tests/test_cli_dialog_toml.py`
   - 子进程或 import 调用 `dialog demo --spec toml`
   - 断言 exit code 0
   - 断言 stdout 含 `[event] finished`、`field_match`
-- [ ] 在 `bootup/pyproject.toml` 或根 CI 脚本中注册 pytest 步骤（若项目有 CI）
-- [ ] `README.md` 增加 CLI 三节：安装、`dialog demo`、`dialog run --live`
+- [x] 在 `bootup/pyproject.toml` 或根 CI 脚本中注册 pytest 步骤（若项目有 CI）
+- [x] `README.md` 增加 CLI 三节：安装、`dialog demo`、`dialog run --live`
 
 ---
 
 ## Phase 2 — CLI 增强（可选，不碰 NiceGUI）
 
-- [ ] 新建 `llm_gemma4/cli/queue.py`：`MainTurnQueue`（线程安全 FIFO）
-- [ ] `dialog repl --spec toml`：读 stdin 行入队，worker 消费 `dispatch(Resume)`
+- [x] 新建 `llm_gemma4/cli/queue.py`：`MainTurnQueue`（线程安全 FIFO）
+- [x] `dialog repl --spec toml`：读 stdin 行入队，worker 消费 `dispatch(Resume)`
 - [ ] 文档：在 `gemma4_dynamic_workflow.md` §3.3 补 repl 说明
 
 ---

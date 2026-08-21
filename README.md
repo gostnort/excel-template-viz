@@ -150,6 +150,39 @@ uv run python -m llm_gemma4 "用一句话介绍你自己"
 
 TOML 配置向导（应用层编排）规格见 `docs/gemma4_dynamic_workflow.md`；NiceGUI「TOML」页提供校验、全文编辑与 Graph 事件驱动的配置工作流。
 
+### 安装（TOML 向导 CLI）
+
+向导 CLI 与主应用共用同一套环境。先完成上文安装（`install.bat` / `./install.sh`，或 `uv sync --project bootup --extra llm`）。`uv sync` 会安装 `dev` 依赖组中的 `pytest`，用于下面的冒烟测试。
+
+```bat
+uv sync --project bootup --extra llm
+```
+
+### `dialog demo`
+
+离线验收（默认 `--mock --stub`，不加载 LiteRT；每次提交前建议跑通）：
+
+```bat
+uv run --project bootup python -m llm_gemma4.cli dialog demo --spec toml
+uv run --project bootup pytest tests/test_cli_dialog_toml.py -q
+```
+
+期望退出码 0，stdout 含 `[event] finished` 与 `field_match`。查看动作表：
+
+```bat
+uv run --project bootup python -m llm_gemma4.cli dialog catalog --spec toml
+```
+
+### `dialog run --live`
+
+本机已有 Gemma 4 权重时，用真模型跑完整 interrupt 路径（结束后 `--release` 释放引擎）：
+
+```bat
+uv run --project bootup python -m llm_gemma4.cli dialog run --spec toml --live --release
+```
+
+真人输入对应四类中断：`ask_sources` / `ask_layout` / `ask_sample` / `ask_db_id`。无权重机器请用上一节 `dialog demo`。
+
 ### 可选：PaddleOCR（`paddle_ocr/`）
 
 - 对外 API：`paddle_ocr.main.PaddleOcr(pic, rectangle)` → `string*` / `table*` JSON
