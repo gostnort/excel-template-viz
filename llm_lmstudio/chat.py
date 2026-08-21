@@ -8,7 +8,7 @@ from typing import Any
 
 from llm_lmstudio.client import request_json
 from llm_lmstudio.config import load_user_config
-from llm_lmstudio.models import reasoning_allowed
+from llm_lmstudio.models import load_model, reasoning_allowed
 
 
 CHAT_TIMEOUT = 120.0
@@ -87,7 +87,7 @@ def chat(
 ) -> dict[str, Any]:
     """
     函数名: chat
-    作用: 调用 POST /api/v1/chat
+    作用: 若指定模型未加载则先 load，再调用 POST /api/v1/chat
     输入:
         input_payload (str | list): 文本或 message/image 数组
         model (str | None): 模型 key；空则用配置
@@ -104,6 +104,8 @@ def chat(
     key = str(model or cfg.get("model") or "").strip()
     if not key:
         raise ValueError("未指定 LM Studio 模型名称")
+    # 中文注释: 模型已在 LM Studio 但未加载时先 load，再发 chat
+    load_model(key, remember=True)
     body: dict[str, Any] = {
         "model": key,
         "input": input_payload,
