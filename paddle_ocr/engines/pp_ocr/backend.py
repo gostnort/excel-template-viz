@@ -6,7 +6,7 @@ import threading
 from typing import Any
 
 from paddle_ocr import config
-from paddle_ocr.mcp_runtime import call_ocr_mcp, ensure_mcp_started, is_mcp_running
+from paddle_ocr.mcp_runtime import call_ocr_mcp, ensure_ocr_mcp
 from paddle_ocr.runtime.infer_lock import INFER_LOCK
 
 
@@ -24,15 +24,13 @@ class FieldStripBackend:
     def _ensure_engine(self):
         """
         函数名: _ensure_engine
-        作用: 确保 PP-OCRv6 MCP 已启动。
+        作用: 经 ensure_ocr_mcp 懒启动 PP-OCRv6 daemon（已运行则直接就绪）；不拉 Structure。
         输入: 无。
         输出:
             Any: 就绪为 True；失败为 None。
         """
-        if is_mcp_running():
-            self._engine = True
-            return self._engine
-        if ensure_mcp_started(include_structure=False):
+        # 中文注释: 未起则懒启动 OCR 槽；已起则 no-op。不 stop。
+        if ensure_ocr_mcp():
             self._engine = True
             return self._engine
         self._init_error = "import"
@@ -79,7 +77,7 @@ def GetFieldStripBackend() -> FieldStripBackend:
 def ResetFieldStripBackend() -> None:
     """
     函数名: ResetFieldStripBackend
-    作用: 清空字段 OCR 单例（不停止 MCP；由 ResetStructureBackend/stop_mcp 停进程）。
+    作用: 清空字段 OCR 单例（不停止 MCP；OCR 由 stop_ocr_mcp/stop_mcp 停，Structure 由 ResetStructureBackend）。
     输入: 无。
     输出: 无。
     """

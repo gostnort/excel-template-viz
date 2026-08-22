@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from paddle_ocr import config
+from paddle_ocr.runtime.image_decode import scale_min_side
 
 
 _lock = threading.Lock()
@@ -243,13 +244,26 @@ def _structure_alive_unlocked() -> bool:
 def is_mcp_running() -> bool:
     """
     函数名: is_mcp_running
-    作用: OCR MCP 子进程是否在听端口（顶栏开关 / 预加载状态）。
+    作用: OCR MCP 子进程是否在听 OCR 端口（不含 Structure）。
     输入: 无。
     输出:
-        bool: True=已启动。
+        bool: True=OCR 已启动。
     """
     with _lock:
         return _ocr_alive_unlocked()
+
+
+
+def is_structure_mcp_running() -> bool:
+    """
+    函数名: is_structure_mcp_running
+    作用: Structure MCP 子进程是否在听 Structure 端口（不含 OCR）。
+    输入: 无。
+    输出:
+        bool: True=Structure 已启动。
+    """
+    with _lock:
+        return _structure_alive_unlocked()
 
 
 
@@ -286,7 +300,7 @@ def structure_mcp_url() -> str | None:
 def _wait_not_starting() -> None:
     """
     函数名: _wait_not_starting
-    作用: 若另一线程正在 start_mcp，则等到其结束，避免重复 spawn / 误杀。
+    作用: 若另一线程正在 start_ocr_mcp / start_structure_mcp，则等到其结束。
     输入: 无。
     输出: 无。
     """
@@ -298,63 +312,40 @@ def _wait_not_starting() -> None:
 
 
 
-def start_mcp(*, include_structure: bool = True) -> bool:
+def start_ocr_mcp() -> bool:
     """
-    函数名: start_mcp
-    作用: 选五位数空闲端口后启动 paddleocr-mcp（PP-OCRv6，可选 PP-StructureV3）。
-        先确认端口空闲，再 spawn；等端口可连接才算启用。
-    输入:
-        include_structure (bool): True 时再拉起 Structure 进程。
+    函数名: start_ocr_mcp
+    作用: 只启动 PP-OCRv6 MCP 槽；已存活则直接返回。失败只停 OCR，不停 Structure。
+    输入: 无。
     输出:
         bool: OCR MCP 是否就绪。
     """
-    global _ocr_proc, _structure_proc, _ocr_port, _structure_port, _starting
+    global _ocr_proc, _ocr_port, _starting
     _wait_not_starting()
     ocr_proc = None
     ocr_port = None
-    st_proc = None
-    st_port = None
     need_ocr = False
-    need_st = False
     with _lock:
-        _starting = True
         if _ocr_alive_unlocked():
-            ocr_port = _ocr_port
-            need_st = include_structure and not _structure_alive_unlocked()
-        else:
-            _stop_proc(_ocr_proc)
-            _stop_proc(_structure_proc)
-            _ocr_proc = None
-            _structure_proc = None
-            _ocr_port = None
-            _structure_port = None
-            need_ocr = True
-            need_st = include_structure
-            ocr_port = pick_free_mcp_port(preferred=config.MCP_PREFERRED_OCR_PORT)
-            ocr_proc = _spawn("PP-OCRv6", ocr_port)
-            _ocr_proc = ocr_proc
-            _ocr_port = ocr_port
-        if need_st:
-            used = {ocr_port} if ocr_port else set()
-            st_port = pick_free_mcp_port(preferred=config.MCP_PREFERRED_STRUCTURE_PORT, used=used)
-            st_proc = _spawn("PP-StructureV3", st_port)
-            _structure_proc = st_proc
-            _structure_port = st_port
+            return True
+        _starting = True
+        # 中文注释: 只清 OCR 槽，不误杀已在跑的 Structure
+        _stop_proc(_ocr_proc)
+        _ocr_proc = None
+        _ocr_port = None
+        used = {_structure_port} if _structure_port is not None else set()
+        ocr_port = pick_free_mcp_port(preferred=config.MCP_PREFERRED_OCR_PORT, used=used)
+        ocr_proc = _spawn("PP-OCRv6", ocr_port)
+        _ocr_proc = ocr_proc
+        _ocr_port = ocr_port
+        need_ocr = True
     try:
         if need_ocr and ocr_proc is not None and ocr_port is not None:
             try:
                 _wait_ready(ocr_proc, ocr_port, timeout=config.MCP_START_TIMEOUT_SEC)
             except Exception:
-                stop_mcp()
+                stop_ocr_mcp()
                 return False
-        if need_st and st_proc is not None and st_port is not None:
-            try:
-                _wait_ready(st_proc, st_port, timeout=config.MCP_START_TIMEOUT_SEC)
-            except Exception:
-                with _lock:
-                    _stop_proc(_structure_proc)
-                    _structure_proc = None
-                    _structure_port = None
         return is_mcp_running()
     finally:
         with _lock:
@@ -362,10 +353,111 @@ def start_mcp(*, include_structure: bool = True) -> bool:
 
 
 
+def ensure_ocr_mcp() -> bool:
+    """
+    函数名: ensure_ocr_mcp
+    作用: OCR 未运行则懒启动；已运行则直接返回。
+    输入: 无。
+    输出:
+        bool: OCR MCP 是否就绪。
+    """
+    if is_mcp_running():
+        return True
+    return start_ocr_mcp()
+
+
+
+def start_structure_mcp() -> bool:
+    """
+    函数名: start_structure_mcp
+    作用: 只启动 PP-StructureV3 MCP 槽（不依赖 OCR）；已存活则直接返回。
+    输入: 无。
+    输出:
+        bool: Structure MCP 是否就绪。
+    """
+    global _structure_proc, _structure_port, _starting
+    _wait_not_starting()
+    st_proc = None
+    st_port = None
+    need_st = False
+    with _lock:
+        if _structure_alive_unlocked():
+            return True
+        _starting = True
+        # 中文注释: 只清 Structure 槽，OCR 常驻不受影响
+        _stop_proc(_structure_proc)
+        _structure_proc = None
+        _structure_port = None
+        used = {_ocr_port} if _ocr_port is not None else set()
+        st_port = pick_free_mcp_port(preferred=config.MCP_PREFERRED_STRUCTURE_PORT, used=used)
+        st_proc = _spawn("PP-StructureV3", st_port)
+        _structure_proc = st_proc
+        _structure_port = st_port
+        need_st = True
+    try:
+        if need_st and st_proc is not None and st_port is not None:
+            try:
+                _wait_ready(st_proc, st_port, timeout=config.MCP_START_TIMEOUT_SEC)
+            except Exception:
+                stop_structure_mcp()
+                return False
+        return is_structure_mcp_running()
+    finally:
+        with _lock:
+            _starting = False
+
+
+
+def start_mcp(*, include_structure: bool = True) -> bool:
+    """
+    函数名: start_mcp
+    作用: 兼容入口：启动 OCR；include_structure 时再独立启动 Structure（T7 顶栏仍走此函数）。
+    输入:
+        include_structure (bool): True 时再拉起 Structure 进程。
+    输出:
+        bool: OCR MCP 是否就绪。
+    """
+    ok = start_ocr_mcp()
+    if ok and include_structure:
+        start_structure_mcp()
+    return ok
+
+
+
+def stop_ocr_mcp() -> None:
+    """
+    函数名: stop_ocr_mcp
+    作用: 只结束 OCR MCP 子进程并清空 OCR 端口记录（进程退出 / 启动失败用）。
+    输入: 无。
+    输出: 无。
+    """
+    global _ocr_proc, _ocr_port
+    with _lock:
+        _stop_proc(_ocr_proc)
+        _ocr_proc = None
+        _ocr_port = None
+
+
+
+def stop_structure_mcp() -> None:
+    """
+    函数名: stop_structure_mcp
+    作用: 只结束 Structure MCP 子进程并清空 Structure 端口记录；OCR 槽保持不变。
+    输入: 无。
+    输出: 无。
+    """
+    global _structure_proc, _structure_port
+    with _lock:
+        _stop_proc(_structure_proc)
+        _structure_proc = None
+        _structure_port = None
+
+
+
 def stop_mcp() -> None:
     """
     函数名: stop_mcp
-    作用: 结束 paddleocr-mcp 子进程并清空端口记录。
+    作用: 结束 OCR 与 Structure 两个 paddleocr-mcp 子进程（进程退出用，不是 job 释放）。
     输入: 无。
     输出: 无。
     """
@@ -383,17 +475,17 @@ def stop_mcp() -> None:
 def ensure_mcp_started(*, include_structure: bool = False) -> bool:
     """
     函数名: ensure_mcp_started
-    作用: 若 MCP 未运行则启动（PaddleOcr 懒加载）。
+    作用: 兼容入口：确保 OCR 已启动；include_structure 时再独立拉起 Structure（T3 将拆掉连起 OCR）。
     输入:
         include_structure (bool): 是否同时拉起 Structure。
     输出:
         bool: OCR MCP 是否就绪。
     """
-    if is_mcp_running():
-        if include_structure:
-            return start_mcp(include_structure=True)
-        return True
-    return start_mcp(include_structure=include_structure)
+    if not ensure_ocr_mcp():
+        return False
+    if include_structure:
+        start_structure_mcp()
+    return is_mcp_running()
 
 
 
@@ -414,6 +506,21 @@ def _write_temp_jpg(img) -> Path:
         path.unlink(missing_ok=True)
         raise RuntimeError("无法写出临时 jpg")
     return path
+
+
+
+def _prepare_mcp_image(img) -> tuple[Any, int]:
+    """
+    函数名: _prepare_mcp_image
+    作用: 送 MCP 前按短边 2048 等比缩小（不放大），并给出检测长边上限=当前图 max 边。
+    输入:
+        img: BGR ndarray。
+    输出:
+        tuple: (预处理后的图, text_det_limit_side_len)；limit 等于送出图长边，避免再缩到 960。
+    """
+    scaled = scale_min_side(img, config.OCR_PRESCALE_MIN_SIDE)
+    height, width = scaled.shape[:2]
+    return scaled, max(int(width), int(height))
 
 
 
@@ -488,11 +595,13 @@ def call_ocr_mcp(img) -> dict[str, Any]:
         dict: OCR JSON。
     """
     from paddle_ocr.runtime.postprocess import OcrMcpToStringJson
-    if not ensure_mcp_started(include_structure=False):
+    if not ensure_ocr_mcp():
         return {"ok": False, "message": config.MSG_NOT_READY, "mode": "fast", "engine": "ocr"}
     url = ocr_mcp_url()
     if not url:
         return {"ok": False, "message": config.MSG_NOT_READY, "mode": "fast", "engine": "ocr"}
+    # 中文注释：先短边预处理再写 jpg；检测上限用送出图长边，不再传 960
+    img, det_limit = _prepare_mcp_image(img)
     path = _write_temp_jpg(img)
     try:
         raw = _run_async(_call_tool_async(url, "ocr", {
@@ -502,6 +611,8 @@ def call_ocr_mcp(img) -> dict[str, Any]:
             "runtime_params": {
                 "use_doc_orientation_classify": False,
                 "use_doc_unwarping": False,
+                "text_det_limit_side_len": det_limit,
+                "text_det_limit_type": config.DEFAULT_TEXT_DET_LIMIT_TYPE,
             },
         }))
     except Exception:
@@ -525,11 +636,14 @@ def call_structure_mcp(img, *, mode: str = "fast") -> dict[str, Any]:
         dict: OCR JSON。
     """
     from paddle_ocr.runtime.postprocess import MarkdownToOcrJson
-    if not ensure_mcp_started(include_structure=True):
+    # TODO(T5): runner 会先 daemon.structure.ensure；此处继续懒启动以免直接调 callee 时未起。callee 禁止 stop。
+    if not start_structure_mcp():
         return {"ok": False, "message": config.MSG_NOT_READY, "mode": mode, "engine": "structure"}
     url = structure_mcp_url()
     if not url:
         return {"ok": False, "message": config.MSG_NOT_READY, "mode": mode, "engine": "structure"}
+    # 中文注释：先短边预处理再写 jpg；检测上限用送出图长边，不再传 960
+    img, det_limit = _prepare_mcp_image(img)
     path = _write_temp_jpg(img)
     try:
         raw = _run_async(_call_tool_async(url, "pp_structurev3", {
@@ -545,6 +659,8 @@ def call_structure_mcp(img, *, mode: str = "fast") -> dict[str, Any]:
                 "use_formula_recognition": False,
                 "use_chart_recognition": False,
                 "use_region_detection": False,
+                "text_det_limit_side_len": det_limit,
+                "text_det_limit_type": config.DEFAULT_TEXT_DET_LIMIT_TYPE,
             },
         }))
     except Exception:

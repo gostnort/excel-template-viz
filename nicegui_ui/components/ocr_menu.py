@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import re
 from typing import Any
 
 from nicegui import run, ui
@@ -411,10 +412,30 @@ def _show_preview_dialog(
     dialog.open()
 
 
+def _ocr_status_message(label: str, kind: str) -> str:
+    """
+    函数名: _ocr_status_message
+    作用: 按事件 kind 拼 OCR 进度文案（OCR / 版面表格 / 多模态校对；无 Gemma）
+    输入:
+        label (str): 字段 Input_label
+        kind (str): runner 回调的事件 kind
+    输出:
+        str: 通知文案；未知 kind 返回 ""
+    """
+    from paddle_ocr.job.events import DAEMON_OCR_ENSURE, STATUS_HINTS
+    hint = STATUS_HINTS.get(kind)
+    if not hint:
+        return ""
+    # 中文注释: 冷启动 OCR daemon 用固定文案，不带字段名
+    if kind == DAEMON_OCR_ENSURE:
+        return hint
+    return f"正在识别 {label}: {hint}"
+
+
 def run_ocr(session, label: str, input_element: Any = None) -> None:
     """
     函数名: run_ocr
-    作用: 对 field_images 中已缓存并裁切的图片执行 PaddleOCR
+    作用: 对 field_images 中已缓存并裁切的图片发出 job.ocr.request（run_ocr_job）
     输入:
         session: 当前用户会话
         label (str): 当前字段的 Input_label
@@ -431,37 +452,29 @@ def run_ocr(session, label: str, input_element: Any = None) -> None:
         input_element.disable()
     client = input_element.client if input_element else ui.context.client
     is_ghost = label == GHOST_OCR_LABEL
-
     async def process():
         """
         函数名: process
-        作用: 后台执行 OCR；单条 ongoing 通知随 OcrStage 更新，完成后 dismiss
+        作用: 后台执行 job.ocr.request；单条 ongoing 通知随事件 kind 更新，完成后 dismiss
         输入: 无
         输出: 无
         """
-        from paddle_ocr.main import OcrStage, PaddleOcr
-
+        from paddle_ocr.main import run_ocr_job
         loop = asyncio.get_running_loop()
         progress_notify = [None]
-        last_stage = [None]
-        stage_messages = {
-            OcrStage.FAST_OCR: f"正在识别 {label}: 快速 OCR 特征提取",
-            OcrStage.SEMANTIC_CHECK: f"正在识别 {label}: 语义检查中…",
-            OcrStage.GEMMA_REFINE: f"正在识别 {label}: Gemma 视觉纠错",
-            OcrStage.STRUCTURE_REFINE: f"正在识别 {label}: PP-StructureV3 版面精修",
-        }
-
+        last_kind = [None]
+        # 中文注释: 关闭进行中通知
         def dismiss_progress() -> None:
             with client:
                 if progress_notify[0] is not None:
                     progress_notify[0].dismiss()
                     progress_notify[0] = None
-
-        def show_stage(code: OcrStage) -> None:
-            message = stage_messages.get(code)
-            if not message or last_stage[0] == code:
+        # 中文注释: 按事件 kind 更新同一条 ongoing 通知（无 Gemma）
+        def show_stage(kind: str) -> None:
+            message = _ocr_status_message(label, kind)
+            if not message or last_kind[0] == kind:
                 return
-            last_stage[0] = code
+            last_kind[0] = kind
             with client:
                 if progress_notify[0] is None:
                     progress_notify[0] = ui.notification(
@@ -469,10 +482,9 @@ def run_ocr(session, label: str, input_element: Any = None) -> None:
                     )
                 else:
                     progress_notify[0].message = message
-
-        def on_status(code: OcrStage) -> None:
-            loop.call_soon_threadsafe(show_stage, code)
-
+        # 中文注释: 推理线程把 kind 投递回 UI 循环
+        def on_status(kind: str) -> None:
+            loop.call_soon_threadsafe(show_stage, kind)
         try:
             with client:
                 progress_notify[0] = ui.notification(
@@ -481,7 +493,7 @@ def run_ocr(session, label: str, input_element: Any = None) -> None:
                     type="ongoing",
                 )
             result = await run.io_bound(
-                lambda: PaddleOcr(pic_bytes, rectangle, status_callback=on_status),
+                lambda: run_ocr_job(pic_bytes, rectangle, status_callback=on_status),
             )
             dismiss_progress()
             with client:
@@ -490,8 +502,6 @@ def run_ocr(session, label: str, input_element: Any = None) -> None:
                     session.field_images[label]["ocr_status"] = "failed"
                     return
                 if is_ghost:
-                    import re
-
                     display_text = json.dumps(result, ensure_ascii=False, indent=2)
                     display_text = re.sub(r"(?<![}\]])\s*,\n\s+", ", ", display_text)
                     hint = "识别完成，请在输入框确认或修改后点击空白处填入"
@@ -531,5 +541,4 @@ def run_ocr(session, label: str, input_element: Any = None) -> None:
                     sync_model_runtime_ui(client)
             except Exception:
                 sync_model_runtime_ui()
-
     asyncio.create_task(process())

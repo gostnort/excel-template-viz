@@ -8,18 +8,19 @@ from pathlib import Path
 from typing import Any, Callable
 
 from paddle_ocr import config
-from paddle_ocr.engines.pp_structure.backend import GetStructureBackend, StructureRefine
+from paddle_ocr.engines.pp_ocr.backend import GetFieldStripBackend
+from paddle_ocr.engines.pp_structure.backend import GetStructureBackend
 from paddle_ocr.gate.hardware_probe import AcceleratorAvailable, detect_accelerator
-from paddle_ocr.gate.memory_guard import RefineTier, init_refine_path
-from paddle_ocr.gate.semantic_gate import HasOcrSemanticProblem
+from paddle_ocr.gate.lm_similarity import lm_similarity_score as _lm_similarity_score
+from paddle_ocr.gate.semantic_gate import semantic_judge as _semantic_judge
 from paddle_ocr.models_catalog import required_models_present
+from paddle_ocr.runtime.image_decode import CropBoxError, ImageDecodeError, load_for_ocr
 
 
 class OcrStage(IntEnum):
     IDLE = 0b000
     FAST_OCR = 0b001
     SEMANTIC_CHECK = 0b010
-    GEMMA_REFINE = 0b011
     STRUCTURE_REFINE = 0b100
 
 
@@ -28,68 +29,106 @@ Rectangle = tuple[int, int, int, int] | None
 OcrTask = tuple[PicInput, Rectangle]
 
 
-
-def _unload_lm_studio() -> None:
-    """卸载当前 LM Studio 模型（sequential 档：Structure 推理前释放显存）。"""
-    try:
-        from llm_lmstudio.models import unload_model
-        unload_model()
-    except Exception:
-        pass
-
-
-
 def PaddleOcr(
     pic: PicInput,
     rectangle: Rectangle = None,
     status_callback: Callable[[OcrStage], None] = None,
 ) -> dict[str, Any]:
-    """One picture + optional OpenCV ROI → string*/table* JSON (no HealthCheck).
-
-    Pipeline:
-      fast (PP-OCRv6 细条 / PP-StructureV3 整图表格) → RefineTier() →
-        none(<4GB)            → 返回 fast；
-        gemma_only(4-10GB)    → 语义检查 → 有问题则 Pic2Str 视觉纠错；
-        sequential(10-14GB)   → 语义检查 → 有问题则 卸载 LM Studio → PP-StructureV3；
-        both_resident(≥14GB)  → 语义检查 → 有问题则 PP-StructureV3（可常驻）；
-      无问题 → 返回 fast。
-      已走 Structure 的 fast 不再重复精修，改为视觉纠错。
     """
-    if status_callback: status_callback(OcrStage.FAST_OCR)
+    函数名: PaddleOcr
+    作用: 解码裁切后只跑 PP-OCRv6 字段 OCR；不读表、不 judge、不 Structure、不 RefineTier。
+    输入:
+        pic (bytes|Path|str): 图片。
+        rectangle (tuple|None): OpenCV ROI (x, y, w, h)；None 表示整图。
+        status_callback (Callable|None): 可选阶段回调；T2 仅 FAST_OCR。
+    输出:
+        dict: engine="ocr" 的 string* JSON。返回后不停 OCR daemon。
+    """
+    if status_callback:
+        status_callback(OcrStage.FAST_OCR)
+    # 中文注释: 解码并按 ROI 裁切；失败不启动 MCP
     try:
-        fast = GetStructureBackend().Run(pic, rectangle, mode="fast")
+        img = load_for_ocr(pic, rectangle)
+    except ImageDecodeError:
+        return {"ok": False, "message": config.MSG_BAD_IMAGE, "mode": "fast", "engine": "ocr"}
+    except CropBoxError:
+        return {"ok": False, "message": config.MSG_BAD_CROP, "mode": "fast", "engine": "ocr"}
     except Exception:
-        return {"ok": False, "message": config.MSG_INFER_FAIL, "mode": "fast"}
-    if not fast.get("ok"):
-        return fast
-    tier = RefineTier()
-    if tier == "none":
-        return fast
-    if status_callback: status_callback(OcrStage.SEMANTIC_CHECK)
-    if not HasOcrSemanticProblem(fast):
-        return fast
-    if tier == "gemma_only" or fast.get("engine") == "structure":
-        from paddle_ocr.gate.gemma_vision_correct import GemmaVisionCorrect
-        if status_callback: status_callback(OcrStage.GEMMA_REFINE)
-        try:
-            return GemmaVisionCorrect(pic, rectangle, fast)
-        except Exception:
-            out = dict(fast)
-            out["message"] = config.MSG_LLM_PARTIAL
-            return out
-    if tier == "sequential":
-        _unload_lm_studio()
-    if status_callback: status_callback(OcrStage.STRUCTURE_REFINE)
-    try:
-        refined = StructureRefine(pic, rectangle, draft=fast)
-    except Exception:
-        refined = None
-    if refined and refined.get("ok"):
-        return refined
-    out = dict(fast)
-    out["message"] = config.MSG_LLM_PARTIAL
-    return out
+        return {"ok": False, "message": config.MSG_BAD_IMAGE, "mode": "fast", "engine": "ocr"}
+    # 中文注释: FieldStripBackend 内经 ensure_ocr_mcp 懒启动后只调 call_ocr_mcp；返回不停 OCR
+    return GetFieldStripBackend().Run(img)
 
+
+def PpStructure(
+    pic: PicInput,
+    rectangle: Rectangle = None,
+    status_callback: Callable[[OcrStage], None] = None,
+) -> dict[str, Any]:
+    """
+    函数名: PpStructure
+    作用: 解码裁切后只跑 PP-StructureV3；不调 PaddleOcr、不 judge、不按 HasTableGrid 分流字段 OCR。
+    输入:
+        pic (bytes|Path|str): 图片。
+        rectangle (tuple|None): OpenCV ROI (x, y, w, h)；None 表示整图。
+        status_callback (Callable|None): 可选阶段回调；T3 仅 STRUCTURE_REFINE。
+    输出:
+        dict: engine="structure" 的 JSON。返回后不停 Structure daemon。
+    """
+    # T5: list runner 在 finally 里 stop_structure_mcp；本 callee 禁止 stop。
+    if status_callback:
+        status_callback(OcrStage.STRUCTURE_REFINE)
+    # 中文注释: 懒启动与 MCP 调用在 StructureBackend.Run；无网格细条也走 Structure
+    return GetStructureBackend().Run(pic, rectangle, mode="structure")
+
+
+def semantic_judge(draft: dict[str, Any]) -> dict[str, Any]:
+    """
+    函数名: semantic_judge
+    作用: LLM 只做语义通顺判定；不 OCR、不 Structure、不 load_model。出错或未加载 keep_draft。
+    输入:
+        draft (dict): OCR 草稿 JSON（string*/table*）。
+    输出:
+        dict: fluent / keep_draft / has_problem；可选 reason。
+    """
+    return _semantic_judge(draft)
+
+
+def lm_similarity_score(
+    pic: PicInput,
+    rectangle: Rectangle,
+    engine_draft: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    函数名: lm_similarity_score
+    作用: 第 3 步 callee：按 JSON 字段/单元格打 0–100 分，仅低分采纳 proposed；不改引擎草稿副本。
+    输入:
+        pic (bytes|Path|str|ndarray): 图片。
+        rectangle (tuple|None): OpenCV ROI (x, y, w, h)。
+        engine_draft (dict): paddleocr-mcp 引擎 JSON。
+    输出:
+        dict: result / lm_draft / lm_scores / lm_adopted。
+    """
+    return _lm_similarity_score(pic, rectangle, engine_draft)
+
+
+def run_ocr_job(
+    pic: PicInput,
+    rectangle: Rectangle = None,
+    status_callback: Callable[[str], None] = None,
+) -> dict[str, Any]:
+    """
+    函数名: run_ocr_job
+    作用: job.ocr.request 入口：BOOT 选模板后按事件表调度 callee；Structure 在 finally 释放，不停 OCR。
+    输入:
+        pic (bytes|Path|str|ndarray): 图片。
+        rectangle (tuple|None): OpenCV ROI (x, y, w, h)；None 表示整图。
+        status_callback (Callable|None): 按事件 kind 字符串回调（无 Gemma 文案）。
+    输出:
+        dict: OCR 或 Structure JSON，并带 engine_draft / lm_draft / lm_scores / lm_adopted；解码失败 ok=False。
+    """
+    # 中文注释: 延后导入 runner，避免 job.runner 与 main 循环依赖
+    from paddle_ocr.job.runner import run_ocr_job as _run_ocr_job
+    return _run_ocr_job(pic, rectangle, status_callback=status_callback)
 
 
 def PaddleOcrTasks(tasks: list[OcrTask]) -> list[dict[str, Any]]:
@@ -117,7 +156,6 @@ def EnsureModels() -> tuple[bool, str]:
     输出:
         tuple[bool, str]: (fast 模型是否就绪, 状态消息)。
     """
-    init_refine_path()
     report = HealthCheck()
     if not (report.get("ok") and required_models_present()):
         from paddle_ocr.scripts.download_models import download_models
@@ -135,41 +173,12 @@ def EnsureModels() -> tuple[bool, str]:
 
 
 
-def _warm_for_tier(tier: str) -> None:
-    """按档位在启动时预加载常驻引擎（CLI / 服务启动阶段扛冷启动成本）。"""
-    if tier == "none":
-        return
-    try:
-        from llm_lmstudio.config import load_user_config
-        from llm_lmstudio.models import load_model
-        name = str(load_user_config().get("model") or "").strip()
-        if name:
-            load_model(name, remember=True)
-    except Exception:
-        pass
-    if tier == "both_resident":
-        import threading
-        try:
-            def _warm():
-                try:
-                    GetStructureBackend().warm()
-                except Exception:
-                    pass
-            threading.Thread(target=_warm, daemon=True).start()
-        except Exception:
-            pass
-
-
-
 def main(argv: list[str] | None = None) -> int:
-    """CLI gate: 硬件探测 → 内存分级 → EnsureModels → 按档预热 → one PaddleOcr on sample."""
+    """CLI gate: 硬件探测 → EnsureModels → one PaddleOcr on sample（不按档预热 Structure / 不 load_model）。"""
     if argv is None:
         argv = sys.argv[1:]
     if argv:
         print(f"usage: python paddle_ocr/main.py  (ignored args: {argv!r})")
-    init_refine_path()
-    tier = RefineTier()
-    print(f"精修档位: {tier}")
     if detect_accelerator() == "gpu" and not AcceleratorAvailable():
         print("检测到 NVIDIA GPU，但当前 paddle 为 CPU 版。")
         print("如需 GPU 加速 PP-OCRv6 / PP-StructureV3，请运行: python paddle_ocr/scripts/install_backend.py")
@@ -177,7 +186,6 @@ def main(argv: list[str] | None = None) -> int:
     print(message)
     if not ok:
         return 1
-    _warm_for_tier(tier)
     sample = config.SAMPLE_IMAGE
     if not sample.is_file():
         print(f"缺少样图: {sample}")

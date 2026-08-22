@@ -29,20 +29,16 @@ MCP_START_TIMEOUT_SEC = 600
 DEFAULT_OCR_VERSION = "PP-OCRv6"
 DEFAULT_OCR_DET_MODEL = "PP-OCRv6_medium_det"
 DEFAULT_OCR_REC_MODEL = "PP-OCRv6_medium_rec"
-# Full-page cap: only downscale when long side > limit (limit_type=max). Never upscale.
-DEFAULT_TEXT_DET_LIMIT_SIDE_LEN = 960
+# 大图预处理（送 MCP 之前）：min(w,h)>2048 时等比缩小到短边==2048；短边<=2048 不放大。
+OCR_PRESCALE_MIN_SIDE = 2048
+# MCP 检测：type=max，limit=送出图的长边（预处理之后）。禁止再传 960，以免 2048 短边被二次压扁。
 DEFAULT_TEXT_DET_LIMIT_TYPE = "max"
 # PaddlePaddle 3.3.x + oneDNN/PIR crash on CPU; keep mkldnn off until framework fix.
 DEFAULT_ENABLE_MKLDNN = False
-# 内存分级精修：fast=PP-OCRv6；精修=PP-StructureV3（不再加载 PaddleOCR-VL）。
-#   < 4GB                  → 仅 fast。
-#   4GB ≤ budget < 10GB    → LM Studio 语义检查 + 视觉纠错。
-#   10GB ≤ budget < 14GB   → 语义检查 → 卸载 LM Studio → PP-StructureV3。
-#   budget ≥ 14GB          → 语义检查的同时可常驻 Structure。
-# StructureV3 可 CPU 推理，10GB+ 档不再要求 GPU。
-REFINE_MIN_RAM_GB = 4
-REFINE_STRUCTURE_MIN_GB = 10
-REFINE_BOTH_RESIDENT_MIN_GB = 14
+# 低内存跑 Structure：只 warn，不按档位分叉、不跳过事件表。
+STRUCTURE_LOW_MEMORY_GB = 10
+# 第 3 步：仅当 LM 分低于此阈值才采纳 proposed（不是超时；禁止逐字打分）。
+SIMILARITY_ADOPT_BELOW = 35
 
 MSG_OK = "识别完成。"
 MSG_EMPTY = "未识别到文字，请调整选区或重新拍照。"
@@ -53,6 +49,7 @@ MSG_NOT_READY = "OCR 组件未就绪，请重新运行 install.bat 并完成 OCR
 MSG_MODEL_MISSING = "OCR 模型未就绪，请运行 install.bat 或 python paddle_ocr/main.py 后重试。"
 MSG_HEALTH_OK = "OCR 引擎就绪。"
 MSG_LLM_PARTIAL = "识别完成（快速结果，精修未生效）。"
+MSG_STRUCTURE_LOW_MEMORY = "内存偏低，仍继续版面/表格识别。"
 MSG_GEMMA_VISION = "识别完成（Gemma4 视觉纠错）。"
 
 

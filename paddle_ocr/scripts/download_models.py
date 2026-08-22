@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from paddle_ocr import config
-from paddle_ocr.gate.memory_guard import init_refine_path
 from paddle_ocr.models_catalog import prune_vl_official_models, required_models_present
 
 
@@ -24,7 +23,6 @@ def download_models() -> tuple[bool, str]:
     config.MODELS_DIR.mkdir(parents=True, exist_ok=True)
     config.ensure_pdx_cache_env()
     config.INSTALL_LOG.parent.mkdir(parents=True, exist_ok=True)
-    init_refine_path()
     prune_vl_official_models()
     last_err: Exception | None = None
     for attempt in range(2):

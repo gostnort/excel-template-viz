@@ -1,4 +1,4 @@
-"""PP-StructureV3 via paddleocr-mcp HTTP：fast 表格 + 精修。"""
+"""PP-StructureV3 via paddleocr-mcp HTTP（PpStructure callee；不按网格分流字段 OCR）。"""
 
 from __future__ import annotations
 
@@ -6,12 +6,10 @@ import threading
 from typing import Any
 
 from paddle_ocr import config
-from paddle_ocr.engines.pp_ocr.backend import GetFieldStripBackend
-from paddle_ocr.mcp_runtime import call_structure_mcp, ensure_mcp_started, start_mcp, stop_mcp
+from paddle_ocr.mcp_runtime import call_structure_mcp, start_mcp, start_structure_mcp, stop_structure_mcp
 from paddle_ocr.runtime.image_decode import CropBoxError, ImageDecodeError, load_for_ocr
 from paddle_ocr.runtime.infer_lock import INFER_LOCK
 from paddle_ocr.runtime.postprocess import HasContent
-from paddle_ocr.runtime.table_grid import HasTableGrid
 
 
 _lock = threading.Lock()
@@ -44,20 +42,16 @@ class StructureBackend:
         return self._version
 
 
-    def _ensure_engine(self, *, structure: bool):
+    def _ensure_engine(self):
         """
         函数名: _ensure_engine
-        作用: 确保 OCR MCP 已启动；structure=True 时同时拉起 PP-StructureV3。
-        输入:
-            structure (bool): 是否启动 Structure 进程。
+        作用: 经 start_structure_mcp 懒启动 PP-StructureV3 daemon；不拉 OCR。
+        输入: 无。
         输出:
             Any: 就绪为 True；失败为 None。
         """
-        if structure:
-            ok = ensure_mcp_started(include_structure=True)
-        else:
-            ok = ensure_mcp_started(include_structure=False)
-        if ok:
+        # 中文注释: 未起则懒启动 Structure 槽；已起则 no-op。callee 不 stop（T5 runner finally 释放）。
+        if start_structure_mcp():
             self._engine = True
             return self._engine
         self._init_error = "import"
@@ -67,10 +61,11 @@ class StructureBackend:
     def warm(self) -> None:
         """
         函数名: warm
-        作用: 顶栏 / both_resident：先占端口再启动 paddleocr-mcp。
+        作用: 安装/顶栏预热：先占端口再启动 paddleocr-mcp（job 路径不按档常驻 Structure）。
         输入: 无。
         输出: 无。
         """
+        # T3/T7：预热不要再默认 start_mcp(include_structure=True) 常驻 Structure。
         start_mcp(include_structure=True)
 
 
@@ -91,21 +86,6 @@ class StructureBackend:
         return {"ok": True, "message": config.MSG_HEALTH_OK, "version": ver}
 
 
-    def _use_field_ocr(self, img, rectangle: tuple[int, int, int, int] | None) -> bool:
-        """
-        函数名: _use_field_ocr
-        作用: 有裁剪且无表格网格时走细条 PP-OCRv6，否则走 Structure。
-        输入:
-            img: 已裁剪 BGR ndarray。
-            rectangle (tuple|None): 原始 ROI；None 表示整图。
-        输出:
-            bool: True=走字段 OCR。
-        """
-        if rectangle is None:
-            return False
-        return not HasTableGrid(img)
-
-
     def Run(
         self,
         pic,
@@ -115,13 +95,13 @@ class StructureBackend:
     ) -> dict[str, Any]:
         """
         函数名: Run
-        作用: 解码图片后按网格路由到 PP-OCRv6 或 PP-StructureV3 MCP。
+        作用: 解码裁切后只调 PP-StructureV3 MCP；不按 HasTableGrid 分流字段 OCR。
         输入:
             pic: bytes/Path/str/ndarray。
             rectangle (tuple|None): OpenCV ROI (x,y,w,h)。
-            mode (str): fast 或 structure。
+            mode (str): fast 或 structure（仅写入 JSON，不改引擎）。
         输出:
-            dict: §3.3 JSON。
+            dict: §3.3 JSON，engine="structure"。
         """
         ver = self._package_version()
         try:
@@ -132,12 +112,9 @@ class StructureBackend:
             return {"ok": False, "message": config.MSG_BAD_CROP, "version": ver, "mode": mode, "engine": "structure"}
         except Exception:
             return {"ok": False, "message": config.MSG_BAD_IMAGE, "version": ver, "mode": mode, "engine": "structure"}
-        if mode == "fast" and self._use_field_ocr(img, rectangle):
-            result = GetFieldStripBackend().Run(img)
-            result["version"] = ver
-            return result
+        # 中文注释: 一律 Structure MCP；网格分流由 T5 list runner BOOT 负责
         with INFER_LOCK:
-            engine = self._ensure_engine(structure=True)
+            engine = self._ensure_engine()
             if engine is None:
                 return {"ok": False, "message": config.MSG_NOT_READY, "version": ver, "mode": mode, "engine": "structure"}
             try:
@@ -171,12 +148,12 @@ def GetStructureBackend() -> StructureBackend:
 def ResetStructureBackend() -> None:
     """
     函数名: ResetStructureBackend
-    作用: 结束 paddleocr-mcp 子进程并清空单例。
+    作用: 结束 Structure MCP 子进程并清空单例（不停 OCR）。
     输入: 无。
     输出: 无。
     """
     global _instance
-    stop_mcp()
+    stop_structure_mcp()
     with _lock:
         _instance = None
 

@@ -39,6 +39,7 @@ def main() -> int:
     except Exception as exc:
         print(f"预热 predict 失败（模型可能仍在下载）: {exc!r}", flush=True)
     finally:
+        # 安装预热结束：双杀 OCR+Structure（不是 job 的 Structure.release；T5 再改生命周期）
         stop_mcp()
     ok = required_models_present()
     print(f"PP-OCRv6 模型就绪: {ok}", flush=True)

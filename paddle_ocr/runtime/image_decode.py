@@ -189,6 +189,51 @@ def prepare_for_predict(img: np.ndarray) -> np.ndarray:
 
 
 
+def min_side_target_size(width: int, height: int, min_side: int) -> tuple[int, int]:
+    """
+    函数名: min_side_target_size
+    作用: 计算短边预处理后的整数宽高：短边大于阈值则等比缩到短边==阈值；否则原尺寸（不放大）。
+    输入:
+        width (int): 原图宽（像素）。
+        height (int): 原图高（像素）。
+        min_side (int): 短边目标上限（config.OCR_PRESCALE_MIN_SIDE=2048）。
+    输出:
+        tuple[int, int]: (new_width, new_height)。
+    """
+    w = int(width)
+    h = int(height)
+    limit = int(min_side)
+    # 中文注释：短边未超过阈值则原样返回，裁剪细条也不会被放大
+    if w <= 0 or h <= 0 or min(w, h) <= limit:
+        return (w, h)
+    scale = limit / float(min(w, h))
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+    return (new_w, new_h)
+
+
+
+def scale_min_side(img: np.ndarray, min_side: int) -> np.ndarray:
+    """
+    函数名: scale_min_side
+    作用: 对 BGR ndarray 做短边预处理：仅缩小、不放大；小图原样返回同一数组。
+    输入:
+        img (np.ndarray): BGR 图，shape 为 (H, W, C) 或 (H, W)。
+        min_side (int): 短边目标上限（config.OCR_PRESCALE_MIN_SIDE=2048）。
+    输出:
+        np.ndarray: 预处理后的图；无需缩放时返回入参本身。
+    """
+    height, width = img.shape[:2]
+    new_w, new_h = min_side_target_size(int(width), int(height), int(min_side))
+    if new_w == int(width) and new_h == int(height):
+        return img
+    # 中文注释：缩小用 INTER_AREA；写出前保持连续，避免 PaddleX 读到非连续缓冲
+    import cv2
+    resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    return np.ascontiguousarray(resized)
+
+
+
 def load_for_ocr(
     pic: bytes | Path | str | np.ndarray,
     rectangle: tuple[int, int, int, int] | None,

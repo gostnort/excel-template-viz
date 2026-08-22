@@ -1,11 +1,8 @@
-"""LM Studio 语义门禁：逐单元判定 fast 草稿是否有语义问题，短路转精修。"""
+"""LM Studio 语义门禁：semantic_judge 只判定草稿通顺与否；不启动 MCP、不调 OCR/Structure。"""
 
 from __future__ import annotations
 
 from typing import Any
-
-from paddle_ocr import config
-from paddle_ocr.gate.memory_guard import RefinePathEnabled
 
 
 
@@ -125,21 +122,41 @@ def HasOcrSemanticProblem(fast_result: dict[str, Any]) -> bool:
 
 
 
-def ShouldTryStructure(fast: dict[str, Any]) -> bool:
+def semantic_judge(draft: dict[str, Any]) -> dict[str, Any]:
     """
-    函数名: ShouldTryStructure
-    作用: RefinePathEnabled 且 fast 存在语义问题时才调 PP-StructureV3 精修。
-        坏图/坏选区/引擎未就绪/模型缺失等 fast 已失败的状态直接返回 False。
+    函数名: semantic_judge
+    作用: 只判断 OCR 草稿是否通顺；不通顺才由事件表决定是否 Structure。不启动 MCP、不调 PaddleOcr/PpStructure、不 load_model。
     输入:
-        fast (dict): fast 路径返回的 §3.3 JSON。
+        draft (dict): OCR 草稿 JSON（含 string*/table*）。
     输出:
-        bool: True=应尝试 PP-StructureV3 精修；False=直接返回 fast。
+        dict: fluent (bool)、keep_draft (bool)、has_problem (bool)、可选 reason。LM 未加载、导入失败或判定异常时 keep_draft（fluent=True，不视为有问题）。
     """
-    if not RefinePathEnabled():
-        return False
-    msg = str(fast.get("message") or "")
-    if msg in (config.MSG_BAD_IMAGE, config.MSG_BAD_CROP, config.MSG_NOT_READY, config.MSG_MODEL_MISSING):
-        return False
-    if not fast.get("ok"):
-        return False
-    return HasOcrSemanticProblem(fast)
+    keep_draft = {"fluent": True, "keep_draft": True, "has_problem": False}
+    # 中文注释: 只查询是否已加载；失败或未加载则 keep_draft，禁止 load_model
+    try:
+        from llm_lmstudio.models import is_model_loaded
+        if not is_model_loaded():
+            keep_draft["reason"] = "lm_not_loaded"
+            return keep_draft
+    except Exception:
+        keep_draft["reason"] = "lm_unavailable"
+        return keep_draft
+    # 中文注释: 逐单元 run_judgment；导入失败或任一判定异常视为通顺（keep_draft）
+    try:
+        from llm_lmstudio.backend import get_backend
+        from llm_lmstudio.judgment import run_judgment
+        backend = get_backend()
+        for _unit_id, text in iter_all_judge_units(draft):
+            spec = _build_ocr_judgment_spec(text)
+            result = run_judgment(backend, spec)
+            if _ocr_semantic_to_bool(result.verdict):
+                return {
+                    "fluent": False,
+                    "keep_draft": False,
+                    "has_problem": True,
+                    "reason": str(getattr(result, "reason", "") or ""),
+                }
+    except Exception:
+        keep_draft["reason"] = "judge_error"
+        return keep_draft
+    return {"fluent": True, "keep_draft": True, "has_problem": False}
