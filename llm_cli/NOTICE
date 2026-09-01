@@ -1,0 +1,11 @@
+llm_cli Agent / Workflow runtime is adapted from:
+
+  awslabs/quark-agents
+  https://github.com/awslabs/quark-agents
+
+licensed under MIT No Attribution (see LICENSE in this directory).
+Copyright Amazon.com, Inc. or its affiliates.
+
+This adaptation replaces litellm with the in-tree LM Studio provider
+(llm_cli/lm_studio). Google search / Chrome DevTools MCP live in the
+sibling mcp_chrome package, not in quark-agents.

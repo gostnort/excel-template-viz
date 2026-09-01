@@ -1,4 +1,5 @@
 llm_lmstudio/user.toml
+llm_cli/lm_studio/user.toml
 *.py[cod]
 .venv/
 
