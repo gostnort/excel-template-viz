@@ -209,7 +209,7 @@ uv sync --project bootup
 4. **导出与打印**：「另存为」生成 `exports/{template_id}/` 下带时间戳的 xlsx；可在浏览器内预览打印区域并打印，无需安装 Excel。
 5. **可扩展**：TOML 支持 `regex` 规范化粘贴内容、**`determiner` 多分隔符（如 `\r\n` 与 `\t` 数组支持）拆分**、`[[sources]]` 连接 Google Sheet；可选 **LM Studio**（`llm_lmstudio/`）作 OCR 语义纠正与向导推理，**PaddleOCR**（`paddle_ocr/`）作 PP-OCRv6 / PP-StructureV3 识别管线。
 
-业务逻辑集中在 `app/`；界面在 `nicegui_ui/`。结构依赖图见 `plans/codegraph.html` 与 `plans/CODEGRAPH_OVERVIEW.md`。
+业务逻辑集中在 `app/`；界面在 `nicegui_ui/`。
 
 更细的设计说明：
 
