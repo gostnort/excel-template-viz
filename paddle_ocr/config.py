@@ -39,6 +39,10 @@ DEFAULT_ENABLE_MKLDNN = False
 STRUCTURE_LOW_MEMORY_GB = 10
 # 第 3 步：仅当 LM 分低于此阈值才采纳 proposed（不是超时；禁止逐字打分）。
 SIMILARITY_ADOPT_BELOW = 35
+# PDF2MD：渲染 DPI；抽出文本去空白后少于此字符数视为图片/扫描页。
+PDF2MD_RENDER_DPI = 150
+PDF2MD_TEXT_CHAR_MIN = 80
+PDF2MD_PAGE_NAME = "{stem}_p{page:04d}.md"
 
 MSG_OK = "识别完成。"
 MSG_EMPTY = "未识别到文字，请调整选区或重新拍照。"
@@ -51,6 +55,12 @@ MSG_HEALTH_OK = "OCR 引擎就绪。"
 MSG_LLM_PARTIAL = "识别完成（快速结果，精修未生效）。"
 MSG_STRUCTURE_LOW_MEMORY = "内存偏低，仍继续版面/表格识别。"
 MSG_GEMMA_VISION = "识别完成（Gemma4 视觉纠错）。"
+MSG_PDF2MD_OK = "PDF 已转为 Markdown。"
+MSG_PDF2MD_PARTIAL = "部分页面转换失败。"
+MSG_PDF2MD_BAD_FILE = "无法读取 PDF 文件。"
+MSG_PDF2MD_PAGE_OK = "本页已写出。"
+MSG_PDF2MD_PAGE_FAIL = "本页转换失败。"
+MSG_PDF2MD_EMPTY_FALLBACK = "本页无可用文本，改走版面识别。"
 
 
 def _cudnn_loadable() -> bool:

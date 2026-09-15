@@ -175,7 +175,9 @@ uv sync --project bootup
 
 ### 可选：PaddleOCR（`paddle_ocr/`）
 
+- 独立说明（MCP 安装、每个公开函数怎么跑）：[`paddle_ocr/README.md`](paddle_ocr/README.md)
 - 对外 API：`paddle_ocr.main.PaddleOcr(pic, rectangle)` → `string*` / `table*` JSON
+- PDF → 每页 Markdown：`PaddleOcr_PDF2MDs(FilePath, OutputPath=".")`（默认写到 PDF 所在目录）；CLI：`python -m paddle_ocr.pdf2md --input <pdf> [--output <dir>]`
 - NiceGUI「输入」页字段右键菜单：**拍照** / **OCR**（`nicegui_ui/components/ocr_menu.py`）
 - 安装门禁：`python paddle_ocr/main.py`（健康检查、缺模型下载、样图试跑）
 - 设计规格：`docs/embed_paddle_ocr.md`

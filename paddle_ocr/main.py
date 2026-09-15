@@ -14,6 +14,7 @@ from paddle_ocr.gate.hardware_probe import AcceleratorAvailable, detect_accelera
 from paddle_ocr.gate.lm_similarity import lm_similarity_score as _lm_similarity_score
 from paddle_ocr.gate.semantic_gate import semantic_judge as _semantic_judge
 from paddle_ocr.models_catalog import required_models_present
+from paddle_ocr.pdf2md.api import PaddleOcr_PDF2MDs
 from paddle_ocr.runtime.image_decode import CropBoxError, ImageDecodeError, load_for_ocr
 
 

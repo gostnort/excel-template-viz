@@ -16,6 +16,7 @@ dependencies = [
     "tomlkit>=0.13",
     "Pillow>=10.0",
     "cryptography",
+    "playwright>=1.49",
 ]
 
 [project.optional-dependencies]
@@ -25,6 +26,7 @@ ocr = [
     "pillow-heif>=0.16",
     "beautifulsoup4>=4.12",
     "psutil>=5.9.0",
+    "pypdfium2>=4.30",
 ]
 ocr-gpu = [
     "paddleocr-mcp[local]>=0.8.5,<1.0",
@@ -33,6 +35,7 @@ ocr-gpu = [
     "pillow-heif>=0.16",
     "beautifulsoup4>=4.12",
     "psutil>=5.9.0",
+    "pypdfium2>=4.30",
 ]
 
 [dependency-groups]

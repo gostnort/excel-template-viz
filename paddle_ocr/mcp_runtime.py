@@ -670,3 +670,46 @@ def call_structure_mcp(img, *, mode: str = "fast") -> dict[str, Any]:
     result = MarkdownToOcrJson(raw, mode=mode)
     result["engine"] = "structure"
     return result
+
+
+
+def call_structure_markdown(img) -> str:
+    """
+    函数名: call_structure_markdown
+    作用: 把图发给 PP-StructureV3 MCP 工具 pp_structurev3，返回 simple Markdown 原文（不拆 JSON）。
+    输入:
+        img: BGR ndarray。
+    输出:
+        str: MCP 返回的 markdown 文本。
+    """
+    if not start_structure_mcp():
+        raise RuntimeError(config.MSG_NOT_READY)
+    url = structure_mcp_url()
+    if not url:
+        raise RuntimeError(config.MSG_NOT_READY)
+    # 中文注释：与 call_structure_mcp 同一套 jpg / simple 参数，但不走 MarkdownToOcrJson
+    img, det_limit = _prepare_mcp_image(img)
+    path = _write_temp_jpg(img)
+    try:
+        raw = _run_async(_call_tool_async(url, "pp_structurev3", {
+            "input_data": str(path.resolve()),
+            "output_mode": "simple",
+            "file_type": "image",
+            "return_images": False,
+            "runtime_params": {
+                "use_doc_orientation_classify": False,
+                "use_doc_unwarping": False,
+                "use_textline_orientation": False,
+                "use_seal_recognition": False,
+                "use_formula_recognition": False,
+                "use_chart_recognition": False,
+                "use_region_detection": False,
+                "text_det_limit_side_len": det_limit,
+                "text_det_limit_type": config.DEFAULT_TEXT_DET_LIMIT_TYPE,
+            },
+        }))
+    except Exception as exc:
+        raise RuntimeError(config.MSG_INFER_FAIL) from exc
+    finally:
+        path.unlink(missing_ok=True)
+    return str(raw or "")

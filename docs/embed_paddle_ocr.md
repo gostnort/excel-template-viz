@@ -371,6 +371,31 @@ def PaddleOcrTasks(
 
 失败策略：某一任务 `ok=false` 时仍继续后续任务；调用方按索引处理各 `message`。
 
+### 3.9 PDF 端口：`PaddleOcr_PDF2MDs(FilePath, OutputPath)`
+
+独立于 §3.1 图进 JSON。不改 `PaddleOcr` / `PpStructure`。外部程序可单独调用；不依赖 NiceGUI / LM Studio。
+
+```python
+PaddleOcr_PDF2MDs(FilePath, OutputPath=".") -> dict
+```
+
+| 项 | 约定 |
+|----|------|
+| `FilePath` | PDF 路径 |
+| `OutputPath` | Markdown **目录**。默认 `"."`（及空串）= **PDF 所在目录**，不是进程 cwd |
+| 每页文件 | `{stem}_p{page:04d}.md`（页码从 1） |
+| 文字页 | pypdfium2 抽出可复制文本 → Markdown（不 OCR、不启 Structure） |
+| 图片/扫描页 | 渲染后 PP-StructureV3 MCP，**保留 Markdown 原文** |
+| 返回 | `ok` / `message` / `output_dir` / `pages`（每项含 `page` / `kind` / `path` / `ok` / `message`） |
+
+某页失败仍写其它页；总 `ok` 仅在全部页成功时为 True。有图片页时才启动 Structure MCP，任务结束释放。
+
+独立 CLI（不改 `python paddle_ocr/main.py` 门禁）：
+
+```text
+python -m paddle_ocr.pdf2md --input <pdf> [--output <dir>]
+```
+
 ---
 
 ## 4. `main.py` 门面
