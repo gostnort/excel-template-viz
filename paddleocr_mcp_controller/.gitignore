@@ -1,0 +1,14 @@
+# paddleocr_mcp_controller gitignore
+models/
+.venv/
+__pycache__/
+*.pyc
+.uv-cache/
+dist/
+build/
+*.egg-info/
+.install_profile
+# 中文注释: 测试用 PDF 与 PaddleOcr_PDF2MDs 同名输出文件夹不入库
+*.pdf
+temp/
+*_p[0-9][0-9][0-9][0-9].md

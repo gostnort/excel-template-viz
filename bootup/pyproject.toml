@@ -22,6 +22,7 @@ dependencies = [
 [project.optional-dependencies]
 ocr = [
     "paddleocr-mcp[local-cpu]>=0.8.5,<1.0",
+    "paddleocr-mcp-controller",
     "opencv-python-headless>=4.8",
     "pillow-heif>=0.16",
     "beautifulsoup4>=4.12",
@@ -60,3 +61,5 @@ explicit = true
 
 [tool.uv.sources]
 paddlepaddle-gpu = { index = "paddle-cu129" }
+# 中文注释: controller 走本地路径安装（CPU only），相对 bootup/pyproject.toml
+paddleocr-mcp-controller = { path = "../paddleocr_mcp_controller" }

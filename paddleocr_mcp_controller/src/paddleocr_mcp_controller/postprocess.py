@@ -1,0 +1,264 @@
+"""Convert PPStructure HTML / parsing blocks into PaddleOcr JSON pieces."""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+
+def HtmlTableToRows(html: str) -> list[dict[str, Any]]:
+    """Parse PPStructure `pred_html` into [{row, cells}, ...].
+
+    colspan/rowspan: cell text is kept once in the first spanned slot;
+    extra covered slots are not invented (row length follows visible <td>s).
+    """
+    if not html or not str(html).strip():
+        return []
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(str(html), "html.parser")
+    rows: list[dict[str, Any]] = []
+    for i, tr in enumerate(soup.find_all("tr"), start=1):
+        cells: list[str] = []
+        for td in tr.find_all(["td", "th"]):
+            cells.append(td.get_text(strip=True))
+        rows.append({"row": i, "cells": cells})
+    return rows
+
+
+def _block_label(block: Any) -> str:
+    if isinstance(block, dict):
+        return str(block.get("block_label") or block.get("label") or "")
+    return str(getattr(block, "block_label", None) or getattr(block, "label", "") or "")
+
+
+def _block_content(block: Any) -> str:
+    if isinstance(block, dict):
+        return str(block.get("block_content") or block.get("content") or "")
+    return str(getattr(block, "block_content", None) or getattr(block, "content", "") or "")
+
+
+def _block_bbox_y(block: Any) -> float:
+    """Sort key: top of block bbox if present, else 0."""
+    box = None
+    if isinstance(block, dict):
+        box = block.get("block_bbox") or block.get("bbox") or block.get("coordinate")
+    else:
+        box = getattr(block, "block_bbox", None) or getattr(block, "bbox", None)
+    if box is None:
+        return 0.0
+    try:
+        if hasattr(box, "tolist"):
+            box = box.tolist()
+        if isinstance(box, (list, tuple)) and len(box) >= 2:
+            if isinstance(box[0], (list, tuple)):
+                return float(min(p[1] for p in box))
+            return float(box[1])
+    except Exception:
+        return 0.0
+    return 0.0
+
+
+def StructureResultToJson(raw: Any, *, mode: str = "fast") -> dict[str, Any]:
+    """Map one PPStructureV3 result object/dict to PaddleOcr JSON (string*/table*)."""
+    from paddleocr_mcp_controller import config
+    data = _unwrap_structure(raw)
+    strings: list[str] = []
+    tables: list[list[dict[str, Any]]] = []
+    blocks = data.get("parsing_res_list") or []
+    if isinstance(blocks, list) and blocks:
+        ordered = sorted(enumerate(blocks), key=lambda pair: (_block_bbox_y(pair[1]), pair[0]))
+        for _, block in ordered:
+            label = _block_label(block).lower()
+            content = _block_content(block)
+            if "table" in label:
+                rows = HtmlTableToRows(content)
+                if rows:
+                    tables.append(rows)
+                    continue
+                fallback = content.strip()
+                if fallback and not fallback.startswith("<html") and not fallback.startswith("<table"):
+                    strings.append(fallback)
+                continue
+            else:
+                text = content.strip()
+                if text.startswith("<html") or text.startswith("<table"):
+                    continue
+                if text:
+                    strings.append(text)
+    if not tables:
+        for item in data.get("table_res_list") or []:
+            html = ""
+            if isinstance(item, dict):
+                html = str(item.get("pred_html") or "")
+            else:
+                html = str(getattr(item, "pred_html", "") or "")
+            rows = HtmlTableToRows(html)
+            if rows:
+                tables.append(rows)
+    if not strings and not tables:
+        ocr = data.get("overall_ocr_res") or {}
+        if isinstance(ocr, dict):
+            texts = ocr.get("rec_texts") or []
+            joined = "\n".join(str(t) for t in texts if str(t).strip())
+            if joined:
+                strings.append(joined)
+    out: dict[str, Any] = {"ok": True, "mode": mode}
+    for i, s in enumerate(strings, start=1):
+        out[f"string{i}"] = s
+    for i, rows in enumerate(tables, start=1):
+        out[f"table{i}"] = rows
+    if not strings and not tables:
+        out["message"] = config.MSG_EMPTY
+    else:
+        out["message"] = config.MSG_OK
+    return out
+
+
+def _unwrap_structure(raw: Any) -> dict[str, Any]:
+    if raw is None:
+        return {}
+    if isinstance(raw, list):
+        if not raw:
+            return {}
+        raw = raw[0]
+    if isinstance(raw, dict):
+        if "res" in raw and isinstance(raw["res"], dict):
+            return raw["res"]
+        return raw
+    if hasattr(raw, "json"):
+        j = raw.json
+        if callable(j):
+            try:
+                j = j()
+            except TypeError:
+                pass
+        if isinstance(j, dict):
+            if "res" in j and isinstance(j["res"], dict):
+                return j["res"]
+            return j
+    return {}
+
+
+def HasContent(result: dict[str, Any]) -> bool:
+    """True if any string* or non-empty table* rows exist."""
+    for key, val in result.items():
+        if key.startswith("string") and str(val).strip():
+            return True
+        if key.startswith("table") and isinstance(val, list) and len(val) > 0:
+            return True
+    return False
+
+
+def OcrMcpToStringJson(raw: Any) -> dict[str, Any]:
+    """
+    函数名: OcrMcpToStringJson
+    作用: 把 paddleocr-mcp ocr 工具的 detailed JSON / 纯文本映射为 string1 JSON。
+    输入:
+        raw: MCP 返回的字符串或 dict。
+    输出:
+        dict: fast JSON。
+    """
+    from paddleocr_mcp_controller import config
+    text = ""
+    if isinstance(raw, dict):
+        if str(raw.get("error") or "").strip():
+            return {"ok": True, "mode": "fast", "engine": "ocr", "message": config.MSG_EMPTY}
+        text = str(raw.get("text") or "").strip()
+        if not text:
+            lines = raw.get("text_lines") or []
+            parts = []
+            for line in lines:
+                if isinstance(line, dict):
+                    parts.append(str(line.get("text") or "").strip())
+                else:
+                    parts.append(str(line).strip())
+            text = "\n".join(p for p in parts if p)
+    else:
+        payload = str(raw or "").strip()
+        if payload.startswith("{") or payload.startswith("["):
+            try:
+                parsed = json.loads(payload)
+            except Exception:
+                parsed = None
+            if isinstance(parsed, dict):
+                return OcrMcpToStringJson(parsed)
+        if payload in ("No text detected", "No document content detected"):
+            payload = ""
+        text = payload
+    out: dict[str, Any] = {"ok": True, "mode": "fast", "engine": "ocr"}
+    if text:
+        out["string1"] = text
+        out["message"] = config.MSG_OK
+    else:
+        out["message"] = config.MSG_EMPTY
+    return out
+
+
+def MarkdownToOcrJson(markdown: str, *, mode: str = "fast") -> dict[str, Any]:
+    """
+    函数名: MarkdownToOcrJson
+    作用: 把 PP-StructureV3 MCP 的 markdown/HTML 拆成 string* / table*。
+    输入:
+        markdown (str): MCP 返回的 markdown 或内嵌 HTML。
+        mode (str): fast 或 structure。
+    输出:
+        dict: JSON。
+    """
+    import re
+    from paddleocr_mcp_controller import config
+    payload = str(markdown or "").strip()
+    if payload in ("No document content detected", "No text detected"):
+        return {"ok": True, "mode": mode, "engine": "structure", "message": config.MSG_EMPTY}
+    strings: list[str] = []
+    tables: list[list[dict[str, Any]]] = []
+    rest = payload
+    for html in re.findall(r"<table[\s\S]*?</table>", payload, flags=re.I):
+        rows = HtmlTableToRows(html)
+        if rows:
+            tables.append(rows)
+        rest = rest.replace(html, "\n")
+    pending: list[list[str]] = []
+    for line in rest.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("|") and stripped.count("|") >= 2:
+            cells = [c.strip() for c in stripped.strip("|").split("|")]
+            if cells and all(c and set(c) <= set("-: ") for c in cells):
+                continue
+            pending.append(cells)
+            continue
+        if pending:
+            tables.append([{"row": i, "cells": row} for i, row in enumerate(pending, start=1)])
+            pending = []
+        text = _html_to_plain(stripped)
+        if text:
+            strings.append(text)
+    if pending:
+        tables.append([{"row": i, "cells": row} for i, row in enumerate(pending, start=1)])
+    out: dict[str, Any] = {"ok": True, "mode": mode, "engine": "structure"}
+    for i, s in enumerate(strings, start=1):
+        out[f"string{i}"] = s
+    for i, rows in enumerate(tables, start=1):
+        out[f"table{i}"] = rows
+    if not strings and not tables:
+        out["message"] = config.MSG_EMPTY
+    else:
+        out["message"] = config.MSG_OK
+    return out
+
+
+def _html_to_plain(fragment: str) -> str:
+    """
+    函数名: _html_to_plain
+    作用: 去掉 div/html 包装，留下可读文本；非 HTML 原样返回。
+    输入:
+        fragment (str): 一行 markdown 或 HTML 碎片。
+    输出:
+        str: 纯文本。
+    """
+    text = str(fragment or "").strip()
+    if not text:
+        return ""
+    if "<" not in text:
+        return text
+    from bs4 import BeautifulSoup
+    return BeautifulSoup(text, "html.parser").get_text(separator="\n", strip=True)

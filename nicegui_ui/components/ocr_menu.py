@@ -96,7 +96,7 @@ def _preview_data_url(image_bytes: bytes) -> tuple[str, int, int]:
         tuple[str, int, int]: data_url, width, height
     """
     import cv2
-    from paddle_ocr.runtime.image_decode import decode_image
+    from paddleocr_mcp_controller.image_decode import decode_image
 
     try:
         bgr = decode_image(image_bytes)
@@ -422,7 +422,7 @@ def _ocr_status_message(label: str, kind: str) -> str:
     输出:
         str: 通知文案；未知 kind 返回 ""
     """
-    from paddle_ocr.job.events import DAEMON_OCR_ENSURE, STATUS_HINTS
+    from paddleocr_mcp_controller.job import DAEMON_OCR_ENSURE, STATUS_HINTS
     hint = STATUS_HINTS.get(kind)
     if not hint:
         return ""
@@ -459,7 +459,7 @@ def run_ocr(session, label: str, input_element: Any = None) -> None:
         输入: 无
         输出: 无
         """
-        from paddle_ocr.main import run_ocr_job
+        from paddleocr_mcp_controller import run_ocr_job
         loop = asyncio.get_running_loop()
         progress_notify = [None]
         last_kind = [None]

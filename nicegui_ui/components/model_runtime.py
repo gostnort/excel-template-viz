@@ -219,11 +219,9 @@ def release_all_models_sync() -> None:
     except Exception:
         pass
     try:
-        # T1：进程退出双杀；ResetStructureBackend 只杀 Structure 并清单例
-        from paddle_ocr.mcp_runtime import stop_mcp
+        # T1：进程退出双杀；controller 无 Structure 单例，stop_mcp 即足够
+        from paddleocr_mcp_controller import stop_mcp
         stop_mcp()
-        from paddle_ocr.engines.pp_structure.backend import ResetStructureBackend
-        ResetStructureBackend()
     except Exception:
         pass
 

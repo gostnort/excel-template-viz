@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "paddleocr-mcp-controller"
+version = "0.1.0"
+description = "Thin controller over paddleocr-mcp: run_ocr_job + PaddleOcr_PDF2MDs (CPU only)."
+requires-python = ">=3.10,<3.12"
+dependencies = [
+    "paddleocr-mcp[local-cpu]>=0.8.5,<1.0",
+    "pypdfium2>=4.30",
+    "pypdf>=4.0",
+    "pdfplumber>=0.10",
+    "opencv-python-headless>=4.8",
+    "pillow-heif>=0.16",
+    "beautifulsoup4>=4.12",
+    "fastmcp>=2.0",
+]
+
+[project.scripts]
+paddleocr-mcp-install = "paddleocr_mcp_controller.install:main"
+paddleocr-pdf2md = "paddleocr_mcp_controller.pdf2md:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/paddleocr_mcp_controller"]
