@@ -39,8 +39,15 @@ DEFAULT_ENABLE_MKLDNN = False
 # 第 3 步：仅当 LM 分低于此阈值才采纳 proposed。
 SIMILARITY_ADOPT_BELOW = 35
 # PDF2MD：渲染 DPI；抽出文本去空白后少于此字符数视为图片/扫描页。
+# 150 用于文本页/OCR 页/矢量轮廓页（分支3）；表格页单独用更低的 DPI（见下）。
 PDF2MD_RENDER_DPI = 150
+# 表格页（分支1 矢量表格 + 分支3 chart）渲染 DPI；低于文本页以削减像素量、加速 Structure。
+PDF2MD_TABLE_RENDER_DPI = 110
 PDF2MD_TEXT_CHAR_MIN = 80
+# Opt2：表格页并行 Structure 工作进程数；0/1 走单进程串行回退。
+PDF2MD_PARALLEL_WORKERS = max(1, (os.cpu_count() or 2) // 2)
+# Opt2：Structure MCP 池端口分配基址；池内第 i 个 server 用 base+i（仍经 pick_free_mcp_port 校验空闲）。
+STRUCTURE_MCP_PORT_BASE = 18090
 # 分支2 嵌入图过滤：短边小于此像素的图（mask/装饰）跳过不送 OCR/Structure。
 PDF2MD_IMAGE_MIN_SIDE = 16
 PDF2MD_PAGE_NAME = "{stem}_p{page:04d}.md"

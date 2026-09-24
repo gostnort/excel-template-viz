@@ -7,12 +7,18 @@ Per-page routing in _convert_one_page (three branches):
 
 1. has_native and not has_images:
    - _page_has_vector_table(pdfplumber) detects vector-drawn table grids.
-   - Vector table + HasTableGrid(render) -> PP-StructureV3 (markdown table).
-   - Otherwise -> pypdfium2 native text -> Markdown (no OCR, no Structure).
+   - Opt4: vector_table True -> render at PDF2MD_TABLE_RENDER_DPI and go
+     STRAIGHT to PP-StructureV3 (no HasTableGrid confirmation, no false-neg
+     fallback to text). Otherwise -> pypdfium2 native text -> Markdown.
 2. has_images: pdfplumber text + images interleaved by top; each image ->
    HasTableGrid -> Structure (chart) / OCR (textimg).
 3. not has_native and not has_images: render whole page -> HasTableGrid ->
-   Structure (chart) / OCR (textimg).
+   Structure (chart, at PDF2MD_TABLE_RENDER_DPI) / OCR (textimg).
+
+Opt2: PaddleOcr_PDF2MDs classifies all pages first (cheap), renders table
+pages in the main process, then dispatches them to a multiprocessing pool
+of K resident Structure MCP servers (K ports). Text/OCR pages stay serial.
+Page order is preserved by collecting results keyed by page index.
 """
 
 from __future__ import annotations
@@ -24,7 +30,7 @@ from typing import Any
 
 from paddleocr_mcp_controller import config
 from paddleocr_mcp_controller.mcp_runtime import (
-    stop_structure_mcp,
+    start_structure_pool,
 )
 
 
@@ -373,6 +379,28 @@ def _ocr_image_markdown(img: Any) -> str:
     return "\n\n".join(parts)
 
 
+def _structure_result_to_markdown(result: Any) -> str:
+    """
+    函数名: _structure_result_to_markdown
+    作用: 把 call_structure_mcp(on_port) 的结果 dict 拼成 markdown 字符串（string* 段落 + table* 表格）。
+    输入:
+        result (dict): Structure MCP 返回的 JSON。
+    输出:
+        str: 拼接后的 markdown；ok=False 或无内容返回空串。
+    """
+    if not isinstance(result, dict) or not result.get("ok"):
+        return ""
+    parts: list[str] = []
+    for key, val in result.items():
+        if key.startswith("string") and isinstance(val, str) and val.strip():
+            parts.append(val.strip())
+        elif key.startswith("table") and isinstance(val, list):
+            md = _table_rows_to_markdown(val)
+            if md:
+                parts.append(md)
+    return "\n\n".join(parts)
+
+
 def _structure_image_markdown(img: Any) -> str:
     """
     函数名: _structure_image_markdown
@@ -384,18 +412,7 @@ def _structure_image_markdown(img: Any) -> str:
     """
     from paddleocr_mcp_controller.mcp_runtime import call_structure_mcp
     result = call_structure_mcp(img, mode="structure")
-    if not isinstance(result, dict) or not result.get("ok"):
-        return ""
-    parts: list[str] = []
-    for key, val in result.items():
-        if key.startswith("string") and isinstance(val, str) and val.strip():
-            parts.append(val.strip())
-        elif key.startswith("table") and isinstance(val, list):
-            # 把 table 行渲染成 markdown 表格
-            md = _table_rows_to_markdown(val)
-            if md:
-                parts.append(md)
-    return "\n\n".join(parts)
+    return _structure_result_to_markdown(result)
 
 
 def _table_rows_to_markdown(rows: list[dict[str, Any]]) -> str:
@@ -446,10 +463,19 @@ def _text_to_markdown(raw: str) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
-def _render_page_bgr(page: Any) -> Any:
-    """render PDF page to OpenCV BGR ndarray at PDF2MD_RENDER_DPI."""
+def _render_page_bgr(page: Any, *, dpi: int | None = None) -> Any:
+    """
+    函数名: _render_page_bgr
+    作用: 把 PDF 页渲染为 OpenCV BGR ndarray；默认用 PDF2MD_RENDER_DPI，表格页传更低的 PDF2MD_TABLE_RENDER_DPI。
+    输入:
+        page: pypdfium2 PdfPage。
+        dpi (int|None): 渲染 DPI；None 用 config.PDF2MD_RENDER_DPI。
+    输出:
+        ndarray: BGR 连续数组。
+    """
     import numpy as np
-    scale = float(config.PDF2MD_RENDER_DPI) / 72.0
+    target_dpi = int(dpi) if dpi is not None else int(config.PDF2MD_RENDER_DPI)
+    scale = target_dpi / 72.0
     bitmap = page.render(scale=scale)
     try:
         arr = np.asarray(bitmap.to_numpy())
@@ -516,6 +542,48 @@ def _page_has_vector_table(plumber_page: Any) -> bool:
     return len(h_ys) >= 3 and len(v_xs) >= 3
 
 
+def _classify_page(
+    page: Any,
+    pdf_path: Path | None,
+    page_index: int,
+    fallback_cache: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """
+    函数名: _classify_page
+    作用: 对单页做轻量分支判定——抽原生文本、检测嵌入图、检测矢量表格网格；不渲染、不调 MCP。
+    输入:
+        page: pypdfium2 PdfPage。
+        pdf_path (Path|None): PDF 路径；None 则不做 pdfplumber 矢量检测。
+        page_index (int): 0-based 页码。
+        fallback_cache (dict|None): 回退 reader 缓存。
+    输出:
+        dict: native_text / has_native / has_images / vector_table / branch。
+            branch: 'text'(分支1 纯文本) / 'vector_table'(分支1 矢量表格,需 Structure) /
+                    'images'(分支2 嵌入图) / 'outline'(分支3 矢量轮廓,需渲染后判定)。
+    """
+    native_text = _extract_page_text_best(page, pdf_path, page_index, fallback_cache)
+    has_native = _compact_len(native_text) >= int(config.PDF2MD_TEXT_CHAR_MIN)
+    has_images = _page_has_images(page)
+    vector_table = False
+    if has_native and not has_images and pdf_path is not None:
+        pl_page = _pdfplumber_page(pdf_path, page_index, fallback_cache)
+        vector_table = _page_has_vector_table(pl_page)
+    # 分支归类
+    if has_native and not has_images:
+        branch = "vector_table" if vector_table else "text"
+    elif has_images:
+        branch = "images"
+    else:
+        branch = "outline"
+    return {
+        "native_text": native_text,
+        "has_native": has_native,
+        "has_images": has_images,
+        "vector_table": vector_table,
+        "branch": branch,
+    }
+
+
 def _resolve_output_dir(file_path: Path, output_path: str | Path | None) -> Path:
     """
     函数名: _resolve_output_dir
@@ -562,10 +630,11 @@ def _convert_one_page(
     write_page: bool,
     pdf_path: Path | None = None,
     fallback_cache: dict[str, Any] | None = None,
+    structure_md_override: str | None = None,
 ) -> dict[str, Any]:
     """
     函数名: _convert_one_page
-    作用: 三分支路由转换一页：纯文本页直接抽文本；有嵌入图页按位置交错文本块与各图(网格→Structure/无网格→OCR)；矢量轮廓页渲染整页后按网格判断走 Structure 或 OCR。
+    作用: 三分支路由转换一页：纯文本页直接抽文本；有嵌入图页按位置交错文本块与各图(网格→Structure/无网格→OCR)；矢量轮廓页渲染整页后按网格判断走 Structure 或 OCR。Opt4: 分支1 矢量表格命中后直接渲染(表格DPI)送 Structure，不再做 HasTableGrid 二次确认。Opt3: 表格页用 PDF2MD_TABLE_RENDER_DPI。
     输入:
         page: PdfPage。
         page_no (int): 1-based 页码。
@@ -576,10 +645,18 @@ def _convert_one_page(
         write_page (bool): True -> 写每页 .md；False -> 只返回 markdown。
         pdf_path (Path|None): PDF 路径，用于文本回退与 pdfplumber 取图。
         fallback_cache (dict|None): 回退 reader 缓存，跨页复用。
+        structure_md_override (str|None): 并行池已预算好的 Structure markdown；非 None 时直接用作 chart 页结果，跳过渲染+Structure。
     输出:
         dict: page / kind / path / ok / message / markdown。
     """
     page_index = page_no - 1
+    # Opt2: 池已预算好表格页 markdown -> 直接落 chart 结果，跳过分支判定与渲染
+    if structure_md_override is not None:
+        kind = "chart"
+        md = str(structure_md_override)
+        structure_used[0] = True
+        message = config.MSG_PDF2MD_PAGE_OK
+        return _finalize_page_result(page_no, kind, md, message, write_page, output_dir, stem)
     # 原生文本（pypdfium2 + 回退）；分支判断与分支1/2 文本来源共用
     native_text = _extract_page_text_best(page, pdf_path, page_index, fallback_cache)
     has_native = _compact_len(native_text) >= int(config.PDF2MD_TEXT_CHAR_MIN)
@@ -596,20 +673,16 @@ def _convert_one_page(
             pl_page = _pdfplumber_page(pdf_path, page_index, fallback_cache)
             vector_table = _page_has_vector_table(pl_page)
         if vector_table:
-            # 渲染整页 -> HasTableGrid 确认 -> Structure 或回退文本
+            # Opt4: 信任矢量表格检测器，渲染(表格DPI)后直接送 Structure，不再做 HasTableGrid 二次确认
+            kind = "chart"
+            structure_used[0] = True
+            took_structure = True
             try:
-                img = _render_page_bgr(page)
+                img = _render_page_bgr(page, dpi=config.PDF2MD_TABLE_RENDER_DPI)
             except Exception:
                 img = None
-            if img is not None and _classify_image_grid(img) == "chart":
-                kind = "chart"
-                structure_used[0] = True
-                took_structure = True
+            if img is not None:
                 md = _structure_image_markdown(img)
-            else:
-                # 矢量几何命中但渲染网格未确认 -> 回退原生抽文本
-                md = _text_to_markdown(native_text)
-                kind = "text"
         else:
             md = _text_to_markdown(native_text)
             kind = "text"
@@ -634,7 +707,7 @@ def _convert_one_page(
     elif not has_native and not has_images:
         kind = "textimg"
         try:
-            img = _render_page_bgr(page)
+            img = _render_page_bgr(page, dpi=config.PDF2MD_TABLE_RENDER_DPI)
         except Exception:
             return {
                 "page": page_no,
@@ -651,7 +724,32 @@ def _convert_one_page(
         else:
             ocr_used[0] = True
             md = _ocr_image_markdown(img)
-    # 合并模式：不写每页文件，只返回 markdown 文本
+    return _finalize_page_result(page_no, kind, md, message, write_page, output_dir, stem)
+
+
+def _finalize_page_result(
+    page_no: int,
+    kind: str,
+    md: str,
+    message: str,
+    write_page: bool,
+    output_dir: Path,
+    stem: str,
+) -> dict[str, Any]:
+    """
+    函数名: _finalize_page_result
+    作用: 把单页 markdown 按 write_page 决定写文件或仅返回；统一收尾避免分支重复代码。
+    输入:
+        page_no (int): 1-based 页码。
+        kind (str): 页类型 text/chart/mixed/textimg。
+        md (str): 页 markdown。
+        message (str): 状态消息。
+        write_page (bool): True 写文件，False 仅返回。
+        output_dir (Path): 输出目录。
+        stem (str): PDF stem。
+    输出:
+        dict: page / kind / path / ok / message / markdown。
+    """
     if not write_page:
         return {
             "page": page_no,
@@ -767,6 +865,90 @@ def _process_one_image(
     return _ocr_image_markdown(img)
 
 
+# Opt2: multiprocessing worker 模块级全局（每个 worker 进程独立，spawn 后由 initializer 填充）
+_W_DOC: Any = None
+_W_PDF_PATH: str = ""
+
+
+def _worker_init(pdf_path_str: str) -> None:
+    """
+    函数名: _worker_init
+    作用: multiprocessing worker 进程初始化——打开一次 PDF 供该 worker 后续多页复用。
+    输入:
+        pdf_path_str (str): PDF 绝对路径字符串。
+    输出: 无。
+    """
+    global _W_DOC, _W_PDF_PATH
+    import pypdfium2 as pdfium
+    _W_PDF_PATH = pdf_path_str
+    _W_DOC = pdfium.PdfDocument(pdf_path_str)
+
+
+def _worker_structure_one(page_index: int, port: int) -> tuple[int, str]:
+    """
+    函数名: _worker_structure_one
+    作用: multiprocessing worker——渲染指定页（表格 DPI）并向指定端口的 Structure server 发 HTTP，返回 (page_index, markdown)。
+    输入:
+        page_index (int): 0-based 页码。
+        port (int): 该 worker 本次调用的 Structure MCP server 端口。
+    输出:
+        tuple[int, str]: (page_index, markdown)。
+    """
+    global _W_DOC
+    from paddleocr_mcp_controller.mcp_runtime import call_structure_mcp_on_port
+    if _W_DOC is None:
+        return (page_index, "")
+    try:
+        page = _W_DOC[page_index]
+    except Exception:
+        return (page_index, "")
+    try:
+        img = _render_page_bgr(page, dpi=config.PDF2MD_TABLE_RENDER_DPI)
+    except Exception:
+        return (page_index, "")
+    # fresh worker process -> no running loop -> asyncio.run 路径，安全
+    result = call_structure_mcp_on_port(int(port), img, mode="structure")
+    return (page_index, _structure_result_to_markdown(result))
+
+
+def _dispatch_structure_parallel(
+    pdf_path: Path,
+    page_indices: list[int],
+    ports: list[int],
+) -> dict[int, str]:
+    """
+    函数名: _dispatch_structure_parallel
+    作用: 用 multiprocessing.Pool 把表格页并行分发到 K 个 Structure MCP server；按页码顺序收集结果。K<=1 或单页时走串行回退。
+    输入:
+        pdf_path (Path): PDF 路径。
+        page_indices (list[int]): 需要 Structure 的 0-based 页码列表。
+        ports (list[int]): Structure MCP 池端口列表。
+    输出:
+        dict[int, str]: {page_index: markdown}。
+    """
+    if not page_indices or not ports:
+        return {}
+    k = len(ports)
+    # 单 worker / 单页 -> 串行回退（仍在主进程渲染+HTTP，复用池端口）
+    if k <= 1 or len(page_indices) <= 1:
+        out: dict[int, str] = {}
+        port = int(ports[0])
+        for pi in page_indices:
+            out[pi] = _worker_structure_one(pi, port)[1]
+        return out
+    # 轮询分配端口，保证 K 个 server 负载均衡
+    tasks = [(pi, int(ports[i % k])) for i, pi in enumerate(page_indices)]
+    import multiprocessing
+    ctx = multiprocessing.get_context("spawn")
+    pool = ctx.Pool(k, initializer=_worker_init, initargs=(str(pdf_path),))
+    try:
+        raw_results = pool.starmap(_worker_structure_one, tasks)
+    finally:
+        pool.close()
+        pool.join()
+    return {pi: md for pi, md in raw_results}
+
+
 def PaddleOcr_PDF2MDs(FilePath, OutputPath=None, multipages=True) -> dict[str, Any]:
     """
     函数名: PaddleOcr_PDF2MDs
@@ -794,8 +976,49 @@ def PaddleOcr_PDF2MDs(FilePath, OutputPath=None, multipages=True) -> dict[str, A
         except Exception:
             return {"ok": False, "message": config.MSG_PDF2MD_BAD_FILE, "output_dir": str(out_dir), "pages": []}
         n = _page_count(doc)
+        # Opt2 Phase1: 廉价分类所有页（不渲染不调 MCP）
+        plans = [_classify_page(doc[index], src, index, fallback_cache) for index in range(n)]
+        # Opt2 Phase2: 识别需要 Structure 的整页——分支1 矢量表格 + 分支3 chart
+        structure_indices: list[int] = []
+        for index in range(n):
+            plan = plans[index]
+            if plan["branch"] == "vector_table":
+                structure_indices.append(index)
+            elif plan["branch"] == "outline":
+                # 分支3：渲染(表格DPI)+HasTableGrid 判定 chart/textimg
+                try:
+                    img = _render_page_bgr(doc[index], dpi=config.PDF2MD_TABLE_RENDER_DPI)
+                except Exception:
+                    img = None
+                if img is not None and _classify_image_grid(img) == "chart":
+                    structure_indices.append(index)
+        # Opt2 Phase3: 并行 Structure（K 个常驻 server）
+        pool_results: dict[int, str] = {}
+        if structure_indices:
+            k = max(1, min(len(structure_indices), int(config.PDF2MD_PARALLEL_WORKERS)))
+            try:
+                ports = start_structure_pool(k)
+            except Exception:
+                ports = []
+            if ports:
+                try:
+                    pool_results = _dispatch_structure_parallel(src, structure_indices, ports)
+                except Exception:
+                    pool_results = {}
+                structure_used[0] = bool(pool_results)
+            else:
+                # 池启动失败 -> 串行回退用单例 Structure
+                for pi in structure_indices:
+                    try:
+                        img = _render_page_bgr(doc[pi], dpi=config.PDF2MD_TABLE_RENDER_DPI)
+                        pool_results[pi] = _structure_image_markdown(img)
+                    except Exception:
+                        pool_results[pi] = ""
+                structure_used[0] = bool(pool_results)
+        # Opt2 Phase4: 按页码顺序产出 markdown（表格页用池预算结果 override，其余走 _convert_one_page）
         for index in range(n):
             page = doc[index]
+            override = pool_results.get(index)
             pages.append(_convert_one_page(
                 page,
                 page_no=index + 1,
@@ -806,13 +1029,12 @@ def PaddleOcr_PDF2MDs(FilePath, OutputPath=None, multipages=True) -> dict[str, A
                 write_page=bool(multipages),
                 pdf_path=src,
                 fallback_cache=fallback_cache,
+                structure_md_override=override,
             ))
     finally:
         _close_pdf(doc)
         _close_fallback_cache(fallback_cache)
-        # OCR 子进程按 controller 既定约定懒启动常驻，这里不 stop
-        if structure_used[0]:
-            stop_structure_mcp()
+        # Opt1: 不在此 stop Structure；保持常驻跨 PDF 复用（热启动）。UI 退出时由 stop_mcp 收尾。
     if not pages:
         return {"ok": False, "message": config.MSG_PDF2MD_BAD_FILE, "output_dir": str(out_dir), "pages": []}
     all_ok = all(bool(item.get("ok")) for item in pages)

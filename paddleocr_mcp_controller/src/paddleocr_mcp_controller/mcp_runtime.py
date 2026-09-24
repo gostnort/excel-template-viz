@@ -1,7 +1,18 @@
 """paddleocr-mcp HTTP subprocess: pick port, spawn, call tool, stop.
 
 Simplified: no threading lock, no daemon, no _starting flag.
-Each run_ocr_job / PaddleOcr_PDF2MDs starts/stops MCP subprocess on demand.
+
+Opt1 (daemon): Structure MCP subprocess is kept RESIDENT across PDF jobs —
+PaddleOcr_PDF2MDs no longer calls stop_structure_mcp() in its finally block.
+The warm Structure daemon is reused by the next PDF (no ~40-50s respawn).
+Explicit shutdown is the caller's responsibility (UI calls stop_mcp() on
+app exit via nicegui_ui/components/model_runtime.py:release_all_models_sync).
+OCR MCP stays lazy-started and resident as before.
+
+Opt2 (parallel pool): start_structure_pool(k) spawns k Structure MCP
+subprocesses on k distinct ports, kept resident across jobs like the single
+daemon. Multiprocessing workers call call_structure_mcp_on_port(port, img)
+which uses a per-worker fresh asyncio loop (safe inside a fresh process).
 """
 
 from __future__ import annotations
@@ -25,6 +36,8 @@ _ocr_proc: subprocess.Popen | None = None
 _ocr_port: int | None = None
 _structure_proc: subprocess.Popen | None = None
 _structure_port: int | None = None
+# Opt2: Structure MCP 池——(proc, port) 元组列表；与单例 _structure_proc 互斥使用。
+_structure_pool: list[tuple[subprocess.Popen, int]] = []
 
 
 def _port_free(port: int) -> bool:
@@ -282,9 +295,75 @@ def stop_structure_mcp() -> None:
 
 
 def stop_mcp() -> None:
-    """stop both OCR and Structure MCP subprocesses."""
+    """stop both OCR and Structure MCP subprocesses (single + pool)."""
     stop_ocr_mcp()
     stop_structure_mcp()
+    stop_structure_pool()
+
+
+def _pool_alive() -> bool:
+    """True if any Structure pool subprocess is alive."""
+    for proc, _port in _structure_pool:
+        if proc.poll() is None and _port_open(_port):
+            return True
+    return False
+
+
+def start_structure_pool(k: int) -> list[int]:
+    """
+    函数名: start_structure_pool
+    作用: 启动 k 个 PP-StructureV3 MCP 子进程（各占独立端口）并保持常驻；已存活则补齐到 k 个。返回端口列表。
+    输入:
+        k (int): 池大小；<=0 视为 1。
+    输出:
+        list[int]: 池中各 server 的监听端口（顺序即池内索引）。
+    """
+    if k <= 0:
+        k = 1
+    # 清理已死掉的槽位，保留存活槽位以复用（Opt1 常驻）
+    alive: list[tuple[subprocess.Popen, int]] = []
+    for proc, port in _structure_pool:
+        if proc.poll() is None and _port_open(port):
+            alive.append((proc, port))
+        else:
+            _stop_proc(proc)
+    _structure_pool.clear()
+    _structure_pool.extend(alive)
+    # 补齐到 k 个
+    used: set[int] = set()
+    if _ocr_port is not None:
+        used.add(_ocr_port)
+    for _proc, port in _structure_pool:
+        used.add(port)
+    while len(_structure_pool) < k:
+        idx = len(_structure_pool)
+        preferred = config.STRUCTURE_MCP_PORT_BASE + idx
+        port = pick_free_mcp_port(preferred=preferred, used=used)
+        proc = _spawn("PP-StructureV3", port)
+        _structure_pool.append((proc, port))
+        used.add(port)
+        try:
+            _wait_ready(proc, port, timeout=config.MCP_START_TIMEOUT_SEC)
+        except Exception:
+            stop_structure_pool()
+            raise
+    return [port for _proc, port in _structure_pool]
+
+
+def stop_structure_pool() -> None:
+    """stop all Structure pool subprocesses and clear the pool."""
+    for proc, _port in _structure_pool:
+        _stop_proc(proc)
+    _structure_pool.clear()
+
+
+def pool_structure_urls() -> list[str]:
+    """return /mcp URLs for all pool servers (alive ones only)."""
+    urls: list[str] = []
+    for _proc, port in _structure_pool:
+        if _port_open(port):
+            urls.append(f"http://{config.MCP_HOST}:{port}/mcp")
+    return urls
 
 
 def _write_temp_jpg(img) -> Path:
@@ -462,3 +541,45 @@ def call_structure_markdown(img) -> str:
     finally:
         path.unlink(missing_ok=True)
     return str(raw or "")
+
+
+def call_structure_mcp_on_port(port: int, img, *, mode: str = "structure") -> dict[str, Any]:
+    """
+    函数名: call_structure_mcp_on_port
+    作用: 向指定端口上的 PP-StructureV3 MCP server 发送图片（用于 multiprocessing worker，不依赖单例 _structure_proc）。
+    输入:
+        port (int): 目标 Structure MCP server 监听端口。
+        img: BGR ndarray。
+        mode (str): fast 或 structure。
+    输出:
+        dict: OCR JSON。
+    """
+    from paddleocr_mcp_controller.postprocess import MarkdownToOcrJson
+    url = f"http://{config.MCP_HOST}:{int(port)}/mcp"
+    img, det_limit = _prepare_mcp_image(img)
+    path = _write_temp_jpg(img)
+    try:
+        raw = _run_async(_call_tool_async(url, "pp_structurev3", {
+            "input_data": str(path.resolve()),
+            "output_mode": "simple",
+            "file_type": "image",
+            "return_images": False,
+            "runtime_params": {
+                "use_doc_orientation_classify": False,
+                "use_doc_unwarping": False,
+                "use_textline_orientation": False,
+                "use_seal_recognition": False,
+                "use_formula_recognition": False,
+                "use_chart_recognition": False,
+                "use_region_detection": False,
+                "text_det_limit_side_len": det_limit,
+                "text_det_limit_type": config.DEFAULT_TEXT_DET_LIMIT_TYPE,
+            },
+        }))
+    except Exception:
+        return {"ok": False, "message": config.MSG_INFER_FAIL, "mode": mode, "engine": "structure"}
+    finally:
+        path.unlink(missing_ok=True)
+    result = MarkdownToOcrJson(raw, mode=mode)
+    result["engine"] = "structure"
+    return result
