@@ -30,7 +30,10 @@ from typing import Any
 
 from paddleocr_mcp_controller import config
 from paddleocr_mcp_controller.mcp_runtime import (
-    start_structure_pool,
+    acquire_structure_workers,
+    begin_job,
+    end_job,
+    release_structure_workers,
 )
 
 
@@ -914,39 +917,84 @@ def _worker_structure_one(page_index: int, port: int) -> tuple[int, str]:
 def _dispatch_structure_parallel(
     pdf_path: Path,
     page_indices: list[int],
-    ports: list[int],
+    k_max: int,
 ) -> dict[int, str]:
     """
     函数名: _dispatch_structure_parallel
-    作用: 用 multiprocessing.Pool 把表格页并行分发到 K 个 Structure MCP server；按页码顺序收集结果。K<=1 或单页时走串行回退。
+    作用: 从动态池获取 k 个 worker 端口，用 multiprocessing.Pool 把表格页并行分发到对应端口的 Structure server；按页码顺序收集结果。k<=1 或单页时走串行回退。完成后释放所有 worker。
     输入:
         pdf_path (Path): PDF 路径。
         page_indices (list[int]): 需要 Structure 的 0-based 页码列表。
-        ports (list[int]): Structure MCP 池端口列表。
+        k_max (int): 期望并行度上限（实际取 min(k_max, len(page_indices), PDF2MD_PARALLEL_WORKERS)）。
     输出:
         dict[int, str]: {page_index: markdown}。
     """
-    if not page_indices or not ports:
+    if not page_indices:
         return {}
-    k = len(ports)
-    # 单 worker / 单页 -> 串行回退（仍在主进程渲染+HTTP，复用池端口）
-    if k <= 1 or len(page_indices) <= 1:
-        out: dict[int, str] = {}
-        port = int(ports[0])
-        for pi in page_indices:
-            out[pi] = _worker_structure_one(pi, port)[1]
-        return out
-    # 轮询分配端口，保证 K 个 server 负载均衡
-    tasks = [(pi, int(ports[i % k])) for i, pi in enumerate(page_indices)]
-    import multiprocessing
-    ctx = multiprocessing.get_context("spawn")
-    pool = ctx.Pool(k, initializer=_worker_init, initargs=(str(pdf_path),))
+    # 中文注释: 动态池获取 k 个 worker（端口）；失败回退串行单例 Structure
+    k = max(1, min(int(k_max), len(page_indices), int(config.PDF2MD_PARALLEL_WORKERS)))
     try:
-        raw_results = pool.starmap(_worker_structure_one, tasks)
+        ports = acquire_structure_workers(k)
+    except Exception:
+        ports = []
+    if not ports:
+        # 中文注释: 池获取失败 -> 串行回退用单例 Structure（仍走 call_structure_mcp）
+        out: dict[int, str] = {}
+        for pi in page_indices:
+            try:
+                img = _render_page_bgr_safe(pdf_path, pi)
+                if img is None:
+                    out[pi] = ""
+                    continue
+                out[pi] = _structure_image_markdown(img)
+            except Exception:
+                out[pi] = ""
+        return out
+    try:
+        # 单 worker / 单页 -> 串行回退（仍在主进程渲染+HTTP，复用已获取端口）
+        if k <= 1 or len(page_indices) <= 1:
+            out2: dict[int, str] = {}
+            port = int(ports[0])
+            for pi in page_indices:
+                out2[pi] = _worker_structure_one(pi, port)[1]
+            return out2
+        # 轮询分配端口，保证 k 个 server 负载均衡
+        tasks = [(pi, int(ports[i % k])) for i, pi in enumerate(page_indices)]
+        import multiprocessing
+        ctx = multiprocessing.get_context("spawn")
+        pool = ctx.Pool(k, initializer=_worker_init, initargs=(str(pdf_path),))
+        try:
+            raw_results = pool.starmap(_worker_structure_one, tasks)
+        finally:
+            pool.close()
+            pool.join()
+        return {pi: md for pi, md in raw_results}
     finally:
-        pool.close()
-        pool.join()
-    return {pi: md for pi, md in raw_results}
+        # 中文注释: 释放动态池 worker
+        release_structure_workers(ports)
+
+
+def _render_page_bgr_safe(pdf_path: Path, page_index: int) -> Any:
+    """
+    函数名: _render_page_bgr_safe
+    作用: 串行回退时按页码渲染 PDF 页为 BGR ndarray；失败返回 None。
+    输入:
+        pdf_path (Path): PDF 路径。
+        page_index (int): 0-based 页码。
+    输出:
+        ndarray|None: 渲染结果；失败 None。
+    """
+    try:
+        doc = _open_pdf(pdf_path)
+    except Exception:
+        return None
+    try:
+        page = doc[page_index]
+        return _render_page_bgr(page, dpi=config.PDF2MD_TABLE_RENDER_DPI)
+    except Exception:
+        return None
+    finally:
+        _close_pdf(doc)
 
 
 def PaddleOcr_PDF2MDs(FilePath, OutputPath=None, multipages=True) -> dict[str, Any]:
@@ -970,6 +1018,8 @@ def PaddleOcr_PDF2MDs(FilePath, OutputPath=None, multipages=True) -> dict[str, A
     ocr_used = [False]
     fallback_cache: dict[str, Any] = {}
     pages: list[dict[str, Any]] = []
+    # 中文注释: 登记 job -> 跨进程注册表 refcount+1（pdf2md 串行等待先于本进程的 pdf2md pid）；try/finally 保证 end_job 一定执行
+    begin_job("pdf2md")
     try:
         try:
             doc = _open_pdf(src)
@@ -992,29 +1042,15 @@ def PaddleOcr_PDF2MDs(FilePath, OutputPath=None, multipages=True) -> dict[str, A
                     img = None
                 if img is not None and _classify_image_grid(img) == "chart":
                     structure_indices.append(index)
-        # Opt2 Phase3: 并行 Structure（K 个常驻 server）
+        # Opt2 Phase3: 并行 Structure（动态池获取/释放 worker）
         pool_results: dict[int, str] = {}
         if structure_indices:
             k = max(1, min(len(structure_indices), int(config.PDF2MD_PARALLEL_WORKERS)))
             try:
-                ports = start_structure_pool(k)
+                pool_results = _dispatch_structure_parallel(src, structure_indices, k)
             except Exception:
-                ports = []
-            if ports:
-                try:
-                    pool_results = _dispatch_structure_parallel(src, structure_indices, ports)
-                except Exception:
-                    pool_results = {}
-                structure_used[0] = bool(pool_results)
-            else:
-                # 池启动失败 -> 串行回退用单例 Structure
-                for pi in structure_indices:
-                    try:
-                        img = _render_page_bgr(doc[pi], dpi=config.PDF2MD_TABLE_RENDER_DPI)
-                        pool_results[pi] = _structure_image_markdown(img)
-                    except Exception:
-                        pool_results[pi] = ""
-                structure_used[0] = bool(pool_results)
+                pool_results = {}
+            structure_used[0] = bool(pool_results)
         # Opt2 Phase4: 按页码顺序产出 markdown（表格页用池预算结果 override，其余走 _convert_one_page）
         for index in range(n):
             page = doc[index]
@@ -1034,7 +1070,8 @@ def PaddleOcr_PDF2MDs(FilePath, OutputPath=None, multipages=True) -> dict[str, A
     finally:
         _close_pdf(doc)
         _close_fallback_cache(fallback_cache)
-        # Opt1: 不在此 stop Structure；保持常驻跨 PDF 复用（热启动）。UI 退出时由 stop_mcp 收尾。
+        # 中文注释: intra-job resident：本 PDF job 结束即 end_job；refcount 归零（无其它活跃 job）则 unload 树杀所有 MCP 子进程
+        end_job()
     if not pages:
         return {"ok": False, "message": config.MSG_PDF2MD_BAD_FILE, "output_dir": str(out_dir), "pages": []}
     all_ok = all(bool(item.get("ok")) for item in pages)

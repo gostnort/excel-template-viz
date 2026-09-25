@@ -1,18 +1,26 @@
 """paddleocr-mcp HTTP subprocess: pick port, spawn, call tool, stop.
 
-Simplified: no threading lock, no daemon, no _starting flag.
+Residency model: intra-job resident, unload when all active jobs drain.
+- A module-level refcount (_active_jobs) tracks active jobs; each run_ocr_job
+  call and each PaddleOcr_PDF2MDs call counts as one job (begin_job/end_job).
+- While refcount > 0, all MCP subprocesses stay resident (no per-call restart).
+- When refcount reaches 0, unload_mcp() stops ALL MCP subprocesses (singleton
+  OCR, singleton Structure, Structure dynamic pool) AND tree-kills them so
+  paddleocr-mcp child processes do not linger. stop_mcp() (app exit) calls
+  unload_mcp() too.
 
-Opt1 (daemon): Structure MCP subprocess is kept RESIDENT across PDF jobs —
-PaddleOcr_PDF2MDs no longer calls stop_structure_mcp() in its finally block.
-The warm Structure daemon is reused by the next PDF (no ~40-50s respawn).
-Explicit shutdown is the caller's responsibility (UI calls stop_mcp() on
-app exit via nicegui_ui/components/model_runtime.py:release_all_models_sync).
-OCR MCP stays lazy-started and resident as before.
-
-Opt2 (parallel pool): start_structure_pool(k) spawns k Structure MCP
-subprocesses on k distinct ports, kept resident across jobs like the single
-daemon. Multiprocessing workers call call_structure_mcp_on_port(port, img)
-which uses a per-worker fresh asyncio loop (safe inside a fresh process).
+Concurrent OCR model (Opt2 dynamic pool):
+- acquire_structure_worker(port) returns a port: reuse an idle server, else
+  spawn a new one up to config.PDF2MD_PARALLEL_WORKERS, else wait for one to
+  free (with timeout) or reuse the least-busy. release_structure_worker(port)
+  marks it free. The pool persists across jobs while refcount > 0 (warm) and is
+  torn down only at refcount 0.
+- run_ocr_job acquires a pool worker, sends its single image via
+  call_structure_mcp_on_port(port, img), then releases the worker. Concurrent
+  run_ocr_job calls use different servers.
+- PaddleOcr_PDF2MDs acquires k workers (ports), dispatches table pages to a
+  multiprocessing Pool that calls call_structure_mcp_on_port(port, img), then
+  releases the workers.
 """
 
 from __future__ import annotations
@@ -24,6 +32,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -36,8 +45,41 @@ _ocr_proc: subprocess.Popen | None = None
 _ocr_port: int | None = None
 _structure_proc: subprocess.Popen | None = None
 _structure_port: int | None = None
-# Opt2: Structure MCP 池——(proc, port) 元组列表；与单例 _structure_proc 互斥使用。
-_structure_pool: list[tuple[subprocess.Popen, int]] = []
+# Opt2: Structure MCP 动态池——_PoolWorker 列表；refcount>0 期间常驻，refcount=0 时整体卸载。
+_structure_pool: list["_PoolWorker"] = []
+# 中文注释: refcount 跨 job 计数（run_ocr_job 与 PaddleOcr_PDF2MDs 各计一个）；run.io_bound 线程池调用，需线程安全。
+_active_jobs: int = 0
+_job_lock = threading.Lock()
+# 中文注释: 动态池 acquire/release 用 Condition 等待空闲 worker。
+_pool_lock = threading.Lock()
+_pool_cond = threading.Condition(_pool_lock)
+# 中文注释: 跨进程注册表状态——本进程登记的 pid 与 job kind；signal/atexit 用它做幂等清理。
+_my_registry_pid: int | None = None
+_my_registry_kind: str | None = None
+_signal_cleaned: bool = False
+
+
+
+class _PoolWorker:
+    """
+    函数名: _PoolWorker
+    作用: 动态 Structure 池的单个 worker——持有子进程、端口、忙碌标志；owned=True 表示本进程 spawn（有 proc），False 表示采纳自其它进程（仅知 port/server_pid）。
+    输入:
+        proc (subprocess.Popen|None): paddleocr-mcp 子进程；采纳时为 None。
+        port (int): 监听端口。
+        server_pid (int): server 子进程 pid（采纳或 spawn 都有）。
+        owned (bool): True=本进程 spawn，False=采纳自其它进程。
+    输出: 无。
+    """
+
+    __slots__ = ("proc", "port", "busy", "server_pid", "owned")
+
+    def __init__(self, proc: subprocess.Popen | None, port: int, server_pid: int = 0, owned: bool = True) -> None:
+        self.proc = proc
+        self.port = int(port)
+        self.busy = False
+        self.server_pid = int(server_pid) if server_pid else (proc.pid if proc is not None else 0)
+        self.owned = bool(owned)
 
 
 def _port_free(port: int) -> bool:
@@ -168,14 +210,69 @@ def _wait_ready(proc: subprocess.Popen, port: int, *, timeout: int) -> None:
 
 
 def _stop_proc(proc: subprocess.Popen | None) -> None:
-    """terminate subprocess, kill on timeout."""
+    """
+    函数名: _stop_proc
+    作用: 终止子进程并杀整棵进程树（paddleocr-mcp 可能 spawn 子进程，单 terminate 只杀直系子导致残留）。
+    输入:
+        proc (subprocess.Popen|None): 目标子进程；None 直接返回。
+    输出: 无。
+    """
     if proc is None:
         return
     if proc.poll() is not None:
         return
+    # 中文注释: 先尝试树杀——Windows 用 taskkill /T /F，其它平台优先 psutil，再退回 process group
+    _tree_kill(proc)
     try:
-        proc.terminate()
         proc.wait(timeout=8)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def _tree_kill(proc: subprocess.Popen) -> None:
+    """
+    函数名: _tree_kill
+    作用: 杀掉以 proc.pid 为根的整棵进程树；Windows 走 taskkill /T /F，其它平台优先 psutil，再退回 killpg。
+    输入:
+        proc (subprocess.Popen): 目标子进程。
+    输出: 无。
+    """
+    pid = proc.pid
+    try:
+        if sys.platform == "win32":
+            # 中文注释: Windows 用 taskkill /T /F 杀整树，不依赖 pywin32
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                timeout=15,
+            )
+            return
+        # 中文注释: 非 Windows：优先 psutil 递归杀子
+        try:
+            import psutil
+            parent = psutil.Process(pid)
+            for child in parent.children(recursive=True):
+                try:
+                    child.kill()
+                except Exception:
+                    pass
+            parent.kill()
+            return
+        except Exception:
+            pass
+        # 中文注释: 最后退回 process group kill
+        import os
+        import signal
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
     except Exception:
         try:
             proc.kill()
@@ -295,75 +392,408 @@ def stop_structure_mcp() -> None:
 
 
 def stop_mcp() -> None:
-    """stop both OCR and Structure MCP subprocesses (single + pool)."""
+    """stop both OCR and Structure MCP subprocesses (single + pool), tree-kill."""
+    unload_mcp()
+
+
+def _signal_cleanup(signum: int | None = None, frame: Any = None) -> None:
+    """
+    函数名: _signal_cleanup
+    作用: signal/atexit 回调——幂等调用 release_job 清理本进程注册表条目；避免 Ctrl-C 后注册表残留。重入保护。
+    输入:
+        signum (int|None): 信号编号；atexit 调用时为 None。
+        frame: 信号帧；忽略。
+    输出: 无。
+    """
+    global _signal_cleaned, _my_registry_pid
+    if _signal_cleaned:
+        return
+    _signal_cleaned = True
+    pid_to_release = _my_registry_pid
+    if pid_to_release is not None:
+        try:
+            from paddleocr_mcp_controller import mcp_registry
+            mcp_registry.release_job(int(pid_to_release))
+        except Exception:
+            pass
+        _my_registry_pid = None
+    # 中文注释: signal 触发时重新抛出默认行为（SIGINT/SIGTERM），保证进程退出
+    if signum is not None:
+        try:
+            import signal
+            # 恢复默认处理并重抛
+            signal.signal(signum, signal.SIG_DFL)
+            if sys.platform == "win32":
+                # Windows: SIGTERM 没有，SIGINT 直接退出
+                raise KeyboardInterrupt
+            else:
+                import os
+                os.kill(os.getpid(), signum)
+        except Exception:
+            raise KeyboardInterrupt if signum == 2 else SystemExit(0)
+
+
+def _install_signal_cleanup() -> None:
+    """
+    函数名: _install_signal_cleanup
+    作用: 注册 SIGINT/SIGTERM 与 atexit 回调到 _signal_cleanup；幂等。
+    输入: 无。
+    输出: 无。
+    """
+    global _signal_cleaned
+    if _signal_cleaned:
+        return
+    try:
+        import signal
+        import atexit
+        # 中文注释: 仅注册一次；signal handler 仅在主线程有效
+        atexit.register(_signal_cleanup, None, None)
+        try:
+            signal.signal(signal.SIGINT, _signal_cleanup)
+        except (ValueError, OSError):
+            pass
+        try:
+            signal.signal(signal.SIGTERM, _signal_cleanup)
+        except (ValueError, OSError):
+            pass
+    except Exception:
+        pass
+
+
+def begin_job(kind: str = "ocr") -> None:
+    """
+    函数名: begin_job
+    作用: 登记一个活跃 job——跨进程注册表 refcount+1、登记本进程 pid；pdf2md 还要等待先于自己登记的 pdf2md pid 全部退出（跨进程串行）。本地 _active_jobs 同步+1。
+    输入:
+        kind (str): "pdf2md" 或 "ocr"；pdf2md 触发串行等待。
+    输出: 无。
+    """
+    global _active_jobs, _my_registry_pid, _my_registry_kind
+    from paddleocr_mcp_controller import mcp_registry
+    # 中文注释: 跨进程登记 -> refcount+1；pdf2md 返回先于本进程的存活 pdf2md pid
+    my_pid, prior_pids = mcp_registry.register_job(kind)
+    _my_registry_pid = my_pid
+    _my_registry_kind = kind
+    # 注册 signal/atexit 清理（幂等）
+    _install_signal_cleanup()
+    # 中文注释: pdf2md 跨进程串行：等待先于自己登记的 pdf2md pid 全部退出
+    if kind == "pdf2md" and prior_pids:
+        mcp_registry.wait_for_pids(prior_pids)
+    with _job_lock:
+        _active_jobs += 1
+
+
+def end_job() -> None:
+    """
+    函数名: end_job
+    作用: 注销一个活跃 job——跨进程注册表 refcount-1、移除本进程 pid；refcount 归零则树杀所有注册的 server 并清空注册表，同时卸载本地 owned worker。本地 _active_jobs 同步-1。全局 refcount>0 时：杀本进程单例（OCR/Structure 单例是 per-process，不共享，必须杀否则本进程退出后变孤儿），但保留 owned pool worker（留给其它进程经注册表采纳），仅清本地池引用。
+    输入: 无。
+    输出: 无。
+    """
+    global _active_jobs, _my_registry_pid, _my_registry_kind
+    from paddleocr_mcp_controller import mcp_registry
+    with _job_lock:
+        _active_jobs -= 1
+        local_zero = (_active_jobs <= 0)
+        if local_zero:
+            _active_jobs = 0
+    # 中文注释: 跨进程注销；若全局 refcount 归零，release_job 会树杀所有注册的 server
+    pid_to_release = _my_registry_pid
+    global_refcount = -1
+    if pid_to_release is not None:
+        try:
+            global_refcount = int(mcp_registry.release_job(int(pid_to_release)))
+        except Exception:
+            global_refcount = -1
+    _my_registry_pid = None
+    _my_registry_kind = None
+    # 中文注释: 本地无活跃 job：全局 refcount 归零 -> 整体卸载（单例+池）；>0 -> 仅杀本进程单例（per-process，不共享），owned pool worker 留给其它进程采纳
+    if local_zero:
+        if global_refcount <= 0:
+            unload_mcp()
+        else:
+            # 全局仍有活跃 job：单例是 per-process，本进程退出前必须杀，否则变孤儿
+            stop_ocr_mcp()
+            stop_structure_mcp()
+            # owned pool worker 不杀——留给其它进程经注册表采纳；仅清本地池引用
+            with _pool_cond:
+                _structure_pool.clear()
+                _pool_cond.notify_all()
+
+
+def unload_mcp() -> None:
+    """
+    函数名: unload_mcp
+    作用: 强制整体卸载——停 OCR 单例、Structure 单例、Structure 动态池，全部树杀，确保无残留 python/paddleocr-mcp。
+    输入: 无。
+    输出: 无。
+    """
     stop_ocr_mcp()
     stop_structure_mcp()
     stop_structure_pool()
 
 
+def active_jobs() -> int:
+    """return current refcount (mainly for diagnostics/tests)."""
+    with _job_lock:
+        return _active_jobs
+
+
 def _pool_alive() -> bool:
     """True if any Structure pool subprocess is alive."""
-    for proc, _port in _structure_pool:
-        if proc.poll() is None and _port_open(_port):
+    for w in _structure_pool:
+        if w.proc.poll() is None and _port_open(w.port):
             return True
     return False
+
+
+def _reap_dead_workers_locked() -> None:
+    """drop dead pool workers (caller holds _pool_cond)."""
+    alive: list["_PoolWorker"] = []
+    for w in _structure_pool:
+        # 中文注释: owned worker 靠 proc.poll()；采纳 worker 靠端口探测
+        if w.proc is not None:
+            is_alive = (w.proc.poll() is None) and _port_open(w.port)
+        else:
+            is_alive = _port_open(w.port)
+        if is_alive:
+            alive.append(w)
+        else:
+            # 中文注释: 仅 owned worker 需要 _stop_proc；采纳 worker 不归本进程管
+            if w.owned:
+                _stop_proc(w.proc)
+    _structure_pool.clear()
+    _structure_pool.extend(alive)
+
+
+def _spawn_pool_worker_locked() -> "_PoolWorker":
+    """
+    函数名: _spawn_pool_worker_locked
+    作用: 在已持 _pool_cond 的前提下新建一个 Structure MCP worker 并等就绪；失败抛异常。端口避开 OCR/已用。仅本地 spawn，不登记注册表（注册表路径走 adopt_or_spawn_servers）。
+    输入: 无（读模块全局）。
+    输出:
+        _PoolWorker: 新建并就绪的 worker。
+    """
+    used: set[int] = set()
+    if _ocr_port is not None:
+        used.add(_ocr_port)
+    if _structure_port is not None:
+        used.add(_structure_port)
+    for w in _structure_pool:
+        used.add(w.port)
+    idx = len(_structure_pool)
+    preferred = config.STRUCTURE_MCP_PORT_BASE + idx
+    port = pick_free_mcp_port(preferred=preferred, used=used)
+    proc = _spawn("PP-StructureV3", port)
+    try:
+        _wait_ready(proc, port, timeout=config.MCP_START_TIMEOUT_SEC)
+    except Exception:
+        _stop_proc(proc)
+        raise
+    w = _PoolWorker(proc, port, server_pid=proc.pid, owned=True)
+    _structure_pool.append(w)
+    return w
 
 
 def start_structure_pool(k: int) -> list[int]:
     """
     函数名: start_structure_pool
-    作用: 启动 k 个 PP-StructureV3 MCP 子进程（各占独立端口）并保持常驻；已存活则补齐到 k 个。返回端口列表。
+    作用: 兼容旧接口——确保动态池至少有 k 个存活 worker 并全部标记忙碌返回端口；调用方需用 release_structure_workers 释放。
     输入:
-        k (int): 池大小；<=0 视为 1。
+        k (int): 期望池大小；<=0 视为 1。
     输出:
-        list[int]: 池中各 server 的监听端口（顺序即池内索引）。
+        list[int]: 拿到的 worker 监听端口列表。
     """
     if k <= 0:
         k = 1
-    # 清理已死掉的槽位，保留存活槽位以复用（Opt1 常驻）
-    alive: list[tuple[subprocess.Popen, int]] = []
-    for proc, port in _structure_pool:
-        if proc.poll() is None and _port_open(port):
-            alive.append((proc, port))
-        else:
-            _stop_proc(proc)
-    _structure_pool.clear()
-    _structure_pool.extend(alive)
-    # 补齐到 k 个
-    used: set[int] = set()
-    if _ocr_port is not None:
-        used.add(_ocr_port)
-    for _proc, port in _structure_pool:
-        used.add(port)
-    while len(_structure_pool) < k:
-        idx = len(_structure_pool)
-        preferred = config.STRUCTURE_MCP_PORT_BASE + idx
-        port = pick_free_mcp_port(preferred=preferred, used=used)
-        proc = _spawn("PP-StructureV3", port)
-        _structure_pool.append((proc, port))
-        used.add(port)
-        try:
-            _wait_ready(proc, port, timeout=config.MCP_START_TIMEOUT_SEC)
-        except Exception:
-            stop_structure_pool()
-            raise
-    return [port for _proc, port in _structure_pool]
+    return acquire_structure_workers(k)
 
 
 def stop_structure_pool() -> None:
-    """stop all Structure pool subprocesses and clear the pool."""
-    for proc, _port in _structure_pool:
-        _stop_proc(proc)
-    _structure_pool.clear()
+    """stop all owned Structure pool subprocesses (tree-kill) and clear the pool; adopted workers are left alive (managed by registry)."""
+    with _pool_cond:
+        for w in _structure_pool:
+            # 中文注释: 仅 owned worker 本进程树杀；采纳 worker 由注册表统一树杀
+            if w.owned:
+                _stop_proc(w.proc)
+        _structure_pool.clear()
+        _pool_cond.notify_all()
 
 
 def pool_structure_urls() -> list[str]:
     """return /mcp URLs for all pool servers (alive ones only)."""
     urls: list[str] = []
-    for _proc, port in _structure_pool:
-        if _port_open(port):
-            urls.append(f"http://{config.MCP_HOST}:{port}/mcp")
+    for w in _structure_pool:
+        if _port_open(w.port):
+            urls.append(f"http://{config.MCP_HOST}:{w.port}/mcp")
     return urls
+
+
+def acquire_structure_worker(*, timeout: float = float(config.MCP_START_TIMEOUT_SEC)) -> int:
+    """
+    函数名: acquire_structure_worker
+    作用: 从动态 Structure 池取一个空闲 worker 端口；无空闲且未达上限则通过跨进程注册表采纳/新建；已满则等待释放，超时回退复用任一存活 worker。
+    输入:
+        timeout (float): 等待空闲 worker 的最长时间（秒）。
+    输出:
+        int: 拿到的 worker 监听端口。
+    """
+    deadline = time.time() + timeout
+    with _pool_cond:
+        while True:
+            # 中文注释: 1) 复用空闲且存活的 worker
+            for w in _structure_pool:
+                if not w.busy and w.proc is not None and w.proc.poll() is None and _port_open(w.port):
+                    w.busy = True
+                    return w.port
+            # 中文注释: 1b) 复用空闲且存活的采纳 worker（无 proc，靠端口探测）
+            for w in _structure_pool:
+                if not w.busy and w.proc is None and _port_open(w.port):
+                    w.busy = True
+                    return w.port
+            # 中文注释: 2) 清理已死 worker
+            _reap_dead_workers_locked()
+            # 中文注释: 3) 未达上限则通过注册表采纳/新建（跨进程共享）
+            if len(_structure_pool) < int(config.PDF2MD_PARALLEL_WORKERS):
+                port = _adopt_or_spawn_via_registry_locked()
+                if port is not None:
+                    return port
+            # 中文注释: 4) 已满 -> 等待释放
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                # 超时回退：强制复用第一个存活 worker
+                for w in _structure_pool:
+                    if w.proc is not None and w.proc.poll() is None and _port_open(w.port):
+                        w.busy = True
+                        return w.port
+                    if w.proc is None and _port_open(w.port):
+                        w.busy = True
+                        return w.port
+                raise RuntimeError("structure pool acquire timeout")
+            _pool_cond.wait(timeout=remaining)
+
+
+def _adopt_or_spawn_via_registry_locked() -> int | None:
+    """
+    函数名: _adopt_or_spawn_via_registry_locked
+    作用: 调用跨进程注册表采纳/新建一个 server，加入本地池并标记忙碌；返回端口；失败返回 None。调用方持 _pool_cond。
+    输入: 无。
+    输出:
+        int|None: 端口；失败 None。
+    """
+    try:
+        from paddleocr_mcp_controller import mcp_registry
+        # 释放 _pool_cond 期间调用注册表（注册表内部有自己的跨进程锁，避免嵌套锁等待）
+        _pool_cond.release()
+        try:
+            entries = mcp_registry.adopt_or_spawn_servers(1)
+        finally:
+            _pool_cond.acquire()
+        if not entries:
+            return None
+        e = entries[0]
+        port = int(e["port"])
+        server_pid = int(e.get("server_pid", 0))
+        owned = bool(e.get("owned", 0))
+        # 避免重复加入本地池
+        for w in _structure_pool:
+            if w.port == port:
+                w.busy = True
+                return port
+        # 中文注释: owned=True -> 本进程 spawn，proc 由 _spawn_pool_worker_locked 持有；这里 owned 来自注册表 spawn，proc 用 None（生命周期由注册表 tree-kill 管理）
+        w = _PoolWorker(None, port, server_pid=server_pid, owned=owned)
+        w.busy = True
+        _structure_pool.append(w)
+        return port
+    except Exception:
+        # 注册表路径失败 -> 回退本地 spawn（并登记注册表）
+        try:
+            w = _spawn_pool_worker_locked()
+            w.busy = True
+            _register_local_spawn_locked(w)
+            return w.port
+        except Exception:
+            return None
+
+
+def _register_local_spawn_locked(worker: "_PoolWorker") -> None:
+    """
+    函数名: _register_local_spawn_locked
+    作用: 把本地 spawn 的 worker 登记到跨进程注册表（best-effort），供其它进程采纳。调用方持 _pool_cond。
+    输入:
+        worker (_PoolWorker): 本地 spawn 的 worker。
+    输出: 无。
+    """
+    try:
+        from paddleocr_mcp_controller import mcp_registry
+        import os as _os
+        _pool_cond.release()
+        try:
+            with mcp_registry.acquire_lock():
+                data = mcp_registry._read_registry()
+                data.setdefault("servers", [])
+                data["servers"].append({
+                    "port": int(worker.port),
+                    "server_pid": int(worker.server_pid),
+                    "owner_pid": _os.getpid(),
+                })
+                mcp_registry._write_registry(data)
+        finally:
+            _pool_cond.acquire()
+    except Exception:
+        pass
+
+
+def release_structure_worker(port: int) -> None:
+    """
+    函数名: release_structure_worker
+    作用: 释放指定端口对应的 worker（标记空闲并唤醒等待者）。
+    输入:
+        port (int): 之前 acquire 返回的端口。
+    输出: 无。
+    """
+    with _pool_cond:
+        for w in _structure_pool:
+            if w.port == int(port):
+                w.busy = False
+                break
+        _pool_cond.notify_all()
+
+
+def acquire_structure_workers(k: int, *, timeout: float = float(config.MCP_START_TIMEOUT_SEC)) -> list[int]:
+    """
+    函数名: acquire_structure_workers
+    作用: 一次性获取 k 个 worker 端口；部分失败时回滚已获取的。k<=0 视为 1。
+    输入:
+        k (int): 需要的 worker 数。
+        timeout (float): 单次 acquire 超时。
+    输出:
+        list[int]: k 个端口。
+    """
+    if k <= 0:
+        k = 1
+    ports: list[int] = []
+    try:
+        for _ in range(k):
+            ports.append(acquire_structure_worker(timeout=timeout))
+    except Exception:
+        release_structure_workers(ports)
+        raise
+    return ports
+
+
+def release_structure_workers(ports) -> None:
+    """
+    函数名: release_structure_workers
+    作用: 批量释放 worker 端口；None/空安全。
+    输入:
+        ports (Iterable[int]|None): acquire 返回的端口列表。
+    输出: 无。
+    """
+    if not ports:
+        return
+    for p in ports:
+        release_structure_worker(int(p))
 
 
 def _write_temp_jpg(img) -> Path:

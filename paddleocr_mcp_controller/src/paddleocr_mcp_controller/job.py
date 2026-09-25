@@ -18,11 +18,13 @@ from paddleocr_mcp_controller.image_decode import (
 )
 from paddleocr_mcp_controller.lm_similarity import VisionFn, lm_similarity_score
 from paddleocr_mcp_controller.mcp_runtime import (
+    acquire_structure_worker,
+    begin_job,
     call_ocr_mcp,
-    call_structure_mcp,
+    call_structure_mcp_on_port,
+    end_job,
     ensure_ocr_mcp,
-    start_structure_mcp,
-    stop_structure_mcp,
+    release_structure_worker,
 )
 from paddleocr_mcp_controller.table_grid import HasTableGrid
 
@@ -105,7 +107,8 @@ def run_ocr_job(
     函数名: run_ocr_job
     作用: 处理一张图：解码 -> HasTableGrid 路由 -> PaddleOcr 或 PpStructure；
         若 vision_fn 不为 None 则跑 LM 相似度校对（分低于阈值才采纳 proposed）。
-        Structure 子进程在本 job 结束时停止；OCR 子进程按需懒启动。
+        Structure 子进程在 refcount>0 期间常驻（Opt1），并发请求用动态池不同 worker（Opt2）；
+        refcount 归零时由 end_job 触发 unload_mcp 整体卸载（树杀所有 MCP 子进程）。
     输入:
         pic (bytes|Path|str|ndarray): 图片。
         rectangle (tuple|None): OpenCV ROI (x, y, w, h)；None 表示整图。
@@ -115,16 +118,20 @@ def run_ocr_job(
         dict: OCR 或 Structure JSON，并带 engine_draft / lm_draft / lm_scores / lm_adopted；
             解码失败 ok=False。
     """
+    # 中文注释: 登记 job -> 跨进程注册表 refcount+1（ocr 不串行等待）；try/finally 保证 end_job 一定执行
+    begin_job("ocr")
     # 中文注释: 1) 解码裁切
     _emit(status_callback, JOB_DECODE)
     try:
         img = load_for_ocr(pic, rectangle)
     except CropBoxError:
+        end_job()
         return _attach_job_bag(
             {"ok": False, "message": config.MSG_BAD_CROP, "mode": "fast", "engine": "ocr"},
             engine_draft=None, lm_draft=None, lm_scores={}, lm_adopted=[],
         )
     except (ImageDecodeError, Exception):
+        end_job()
         return _attach_job_bag(
             {"ok": False, "message": config.MSG_BAD_IMAGE, "mode": "fast", "engine": "ocr"},
             engine_draft=None, lm_draft=None, lm_scores={}, lm_adopted=[],
@@ -132,26 +139,30 @@ def run_ocr_job(
     # 中文注释: 2) 表格启发式路由
     _emit(status_callback, JOB_DETECT_TABLE)
     has_table = bool(HasTableGrid(img))
-    structure_started = False
     result: dict[str, Any] = {}
     engine_draft: Any = None
     lm_draft: Any = None
     lm_scores: dict[str, int] = {}
     lm_adopted: list[str] = []
+    # 中文注释: Opt2: Structure 走动态池 worker（并发请求用不同端口）；finally 释放
+    acquired_port: int | None = None
     try:
         if has_table:
-            # 中文注释: 有表 -> PP-StructureV3
+            # 中文注释: 有表 -> PP-StructureV3，从动态池取一个 worker
             _emit(status_callback, DAEMON_STRUCTURE_ENSURE)
-            if not start_structure_mcp():
+            try:
+                acquired_port = acquire_structure_worker()
+            except Exception:
+                acquired_port = None
+            if acquired_port is None:
                 return _attach_job_bag(
                     {"ok": False, "message": config.MSG_NOT_READY, "mode": "structure", "engine": "structure"},
                     engine_draft=None, lm_draft=None, lm_scores={}, lm_adopted=[],
                 )
-            structure_started = True
             _emit(status_callback, INFER_STRUCTURE)
-            result = call_structure_mcp(img, mode="structure")
+            result = call_structure_mcp_on_port(acquired_port, img, mode="structure")
         else:
-            # 中文注释: 无表 -> PP-OCRv6
+            # 中文注释: 无表 -> PP-OCRv6（OCR 单例，refcount>0 期间常驻）
             _emit(status_callback, DAEMON_OCR_ENSURE)
             if not ensure_ocr_mcp():
                 return _attach_job_bag(
@@ -180,6 +191,7 @@ def run_ocr_job(
             lm_adopted=lm_adopted,
         )
     finally:
-        # 中文注释: 本 job 若拉起过 Structure 则只 stop_structure_mcp；OCR 按需懒启动
-        if structure_started:
-            stop_structure_mcp()
+        # 中文注释: 释放池 worker；end_job -> refcount-1，归零则 unload_mcp 树杀所有子进程
+        if acquired_port is not None:
+            release_structure_worker(acquired_port)
+        end_job()
