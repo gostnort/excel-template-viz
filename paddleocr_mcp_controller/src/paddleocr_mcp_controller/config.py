@@ -9,7 +9,10 @@ from pathlib import Path
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_ROOT.parents[1]
-MODELS_DIR = PACKAGE_ROOT / "models"
+# 中文注释: 默认 models 落在源码树内（独立跑 / editable 时 PACKAGE_ROOT 即源码根）
+_DEFAULT_MODELS_DIR = PACKAGE_ROOT / "models"
+# 中文注释: 用户可用此环境变量把 models 指到任意位置，解耦 models 与包安装位置
+MODELS_ENV = "PADDLEOCR_MCP_MODELS_DIR"
 SAMPLE_IMAGE = PROJECT_ROOT / "test" / "ocr_sample.jpg"
 INSTALL_LOG = PACKAGE_ROOT / "install.log"
 
@@ -80,16 +83,31 @@ def resolve_device() -> str:
     return DEFAULT_DEVICE
 
 
+def resolve_models_dir() -> Path:
+    """
+    函数名: resolve_models_dir
+    作用: 解析 models 目录；优先 PADDLEOCR_MCP_MODELS_DIR，次选 PADDLE_PDX_CACHE_HOME，回退源码树默认值。解耦 models 与包安装位置，支持跨机器复制即用。
+    输入: 无。
+    输出:
+        Path: models 目录路径（不保证已存在）。
+    """
+    env = os.environ.get(MODELS_ENV) or os.environ.get(PDX_CACHE_ENV)
+    if env:
+        return Path(env).expanduser()
+    return _DEFAULT_MODELS_DIR
+
+
 def ensure_pdx_cache_env() -> Path:
     """
     函数名: ensure_pdx_cache_env
-    作用: 把 PaddleX 模型缓存指到 paddleocr_mcp_controller/models，并压低 paddle 日志。MCP 子进程继承环境。
+    作用: 把 PaddleX 模型缓存指到 resolve_models_dir()，并压低 paddle 日志。MCP 子进程继承环境。
     输入: 无。
     输出:
         Path: 缓存目录。
     """
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    os.environ.setdefault(PDX_CACHE_ENV, str(MODELS_DIR))
+    models = resolve_models_dir()
+    models.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault(PDX_CACHE_ENV, str(models))
     os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
     os.environ.setdefault("GLOG_minloglevel", "3")
     os.environ.setdefault("GLOG_logtostderr", "0")

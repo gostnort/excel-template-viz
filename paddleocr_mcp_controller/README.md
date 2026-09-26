@@ -55,6 +55,32 @@ uv run python -c "from paddleocr_mcp_controller import HealthCheck, EnsureModels
 
 `HealthCheck` 返回 `{"ok": True, ...}` 即 paddleocr-mcp 可导入;`EnsureModels` 返回 `(True, ...)` 即权重就绪。
 
+### 1.4 跨机器部署 / models 复用
+
+`models/` 是纯 Paddle 推理权重(可移植),跨机器复制即可复用,不必重新下载。models 路径由 `resolve_models_dir()` 解析,顺序:
+
+1. 环境变量 `PADDLEOCR_MCP_MODELS_DIR`(显式指定,任意位置)
+2. 环境变量 `PADDLE_PDX_CACHE_HOME`(paddleocr-mcp 自带 cache 变量)
+3. 源码树内 `src/paddleocr_mcp_controller/models/`(默认,独立跑 / editable 时即此)
+
+**复制即用(推荐)**:把整个 `paddleocr_mcp_controller/`(含 `src/.../models/`、`pyproject.toml`、`uv.lock`)拷到新机器同结构位置,**不带 `.venv`**;新机器:
+
+```text
+cd paddleocr_mcp_controller
+uv sync
+uv run paddleocr-pdf2md --input 你的.pdf
+```
+
+`uv sync` 重建虚拟环境并自动装 `paddleocr-mcp[local-cpu]`(新机器没有也由 uv 装上);独立跑时 uv 把根项目按 editable 装,`resolve_models_dir()` 回退到源码树内已复制的 `models/`,**不重下权重**。
+
+**models 放包外(可选)**:若想让 models 与源码分离、或多机共享一份,把 `models/` 挪到任意位置,设一次环境变量即可,源码树里不必留权重:
+
+```text
+setx PADDLEOCR_MCP_MODELS_DIR "E:\shared\paddleocr-models"
+```
+
+此变量优先级最高,运行时缓存、`EnsureModels` 健康检查、下载三条路统一指向它,不再依赖包的安装位置。
+
 ---
 
 ## 二、运行
@@ -160,5 +186,5 @@ if __name__ == "__main__":
 | `src/paddleocr_mcp_controller/postprocess.py` | Markdown → string*/table* JSON |
 | `src/paddleocr_mcp_controller/lm_similarity.py` | LM 评分(可插拔 `vision_fn`) |
 | `src/paddleocr_mcp_controller/models_catalog.py` | 模型管理 + prune VL |
-| `models/` | 本地权重(不进 git) |
+| `models/` | 本地权重(不进 git);路径可由 `PADDLEOCR_MCP_MODELS_DIR` 覆盖,见 1.4 |
 | `temp/mcp_registry.json` | 跨进程注册表(运行时生成,不进 git) |

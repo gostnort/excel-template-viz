@@ -89,8 +89,8 @@ def warm_models() -> tuple[bool, str]:
     输出:
         tuple[bool, str]: (ready, message).
     """
-    config.MODELS_DIR.mkdir(parents=True, exist_ok=True)
     config.ensure_pdx_cache_env()
+    models = config.resolve_models_dir()
     prune_vl_official_models()
     last_err: Exception | None = None
     import numpy as np
@@ -116,7 +116,7 @@ def warm_models() -> tuple[bool, str]:
                     call_structure_mcp(page, mode="fast")
             prune_vl_official_models()
             if required_models_present():
-                ok_msg = f"required models ready under {config.MODELS_DIR}"
+                ok_msg = f"required models ready under {models}"
                 _append_log(ok_msg)
                 stop_mcp()
                 return True, ok_msg

@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 
-from paddleocr_mcp_controller.config import MODELS_DIR
+from paddleocr_mcp_controller.config import resolve_models_dir
 
-
-OFFICIAL_MODELS_ROOT = MODELS_DIR / "official_models"
 
 # paddleocr-mcp local：PP-OCRv6 medium（fast 细条）。Structure 其余权重由首次 predict 拉取。
 REQUIRED_OFFICIAL_MODELS: frozenset[str] = frozenset({
@@ -24,30 +23,44 @@ VL_OFFICIAL_MODELS: frozenset[str] = frozenset({
 })
 
 
+def _official_root() -> Path:
+    """
+    函数名: _official_root
+    作用: 返回当前解析的 models 目录下的 official_models 子目录。
+    输入: 无。
+    输出:
+        Path: official_models 目录路径（不保证已存在）。
+    """
+    return resolve_models_dir() / "official_models"
+
+
 def models_dir_nonempty() -> bool:
-    if not MODELS_DIR.is_dir():
+    models = resolve_models_dir()
+    if not models.is_dir():
         return False
-    for path in MODELS_DIR.rglob("*"):
+    for path in models.rglob("*"):
         if path.is_file():
             return True
     return False
 
 
 def required_models_present() -> bool:
-    if not OFFICIAL_MODELS_ROOT.is_dir():
+    root = _official_root()
+    if not root.is_dir():
         return False
     for name in REQUIRED_OFFICIAL_MODELS:
-        if not (OFFICIAL_MODELS_ROOT / name).is_dir():
+        if not (root / name).is_dir():
             return False
     return True
 
 
 def list_vl_official_models() -> list[str]:
     """official_models/ 下已知 VL 目录名。"""
-    if not OFFICIAL_MODELS_ROOT.is_dir():
+    root = _official_root()
+    if not root.is_dir():
         return []
     found: list[str] = []
-    for path in OFFICIAL_MODELS_ROOT.iterdir():
+    for path in root.iterdir():
         if path.is_dir() and path.name in VL_OFFICIAL_MODELS:
             found.append(path.name)
     return sorted(found)
@@ -62,8 +75,9 @@ def prune_vl_official_models() -> list[str]:
         list[str]: 被删除的目录名列表。
     """
     removed: list[str] = []
+    root = _official_root()
     for name in list_vl_official_models():
-        target = OFFICIAL_MODELS_ROOT / name
+        target = root / name
         shutil.rmtree(target, ignore_errors=True)
         removed.append(name)
     return removed
