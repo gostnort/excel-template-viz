@@ -15,7 +15,7 @@
 ```text
 cd paddleocr_mcp_controller
 uv sync
-paddleocr-mcp-install
+uv run paddleocr-mcp-install
 ```
 
 - `uv sync`:装 `paddleocr-mcp[local-cpu]` + `paddlepaddle`(CPU 版) + 全部依赖(`pypdfium2` / `pypdf` / `pdfplumber` / `opencv-python-headless` / `pillow-heif` / `beautifulsoup4` / `fastmcp`)。
@@ -45,7 +45,7 @@ ocr = [
 paddleocr-mcp-controller = { path = "../paddleocr_mcp_controller" }
 ```
 
-在主项目里 `uv sync --extra ocr` 即可,无需再单独进 controller 目录。首次使用仍需跑一次 `paddleocr-mcp-install` 下载权重。
+在主项目里 `uv sync --extra ocr` 即可,无需再单独进 controller 目录。首次使用仍需跑一次 `uv run paddleocr-mcp-install` 下载权重(已复制 models 的机器跳过,见 1.4)。
 
 ### 1.3 安装校验
 
@@ -73,6 +73,8 @@ uv run paddleocr-pdf2md --input 你的.pdf
 
 `uv sync` 重建虚拟环境并自动装 `paddleocr-mcp[local-cpu]`(新机器没有也由 uv 装上);独立跑时 uv 把根项目按 editable 装,`resolve_models_dir()` 回退到源码树内已复制的 `models/`,**不重下权重**。
 
+> 新机器**无需**再跑 `paddleocr-mcp-install`——`uv sync` 已装好 paddleocr-mcp,models 已复制就位。想校验可跑 `uv run paddleocr-mcp-install --no-warm`(只 prune VL + HealthCheck,不重下)或 `uv run python -c "from paddleocr_mcp_controller import EnsureModels; print(EnsureModels())"`。
+
 **models 放包外(可选)**:若想让 models 与源码分离、或多机共享一份,把 `models/` 挪到任意位置,设一次环境变量即可,源码树里不必留权重:
 
 ```text
@@ -87,16 +89,17 @@ setx PADDLEOCR_MCP_MODELS_DIR "E:\shared\paddleocr-models"
 
 ### 2.1 命令行(CLI)
 
-两个 console script(`pyproject.toml` 已注册):
+两个 console script(`pyproject.toml` 已注册)。venv 未激活时用 `uv run` 前缀(跨机器复制部署即此情形):
 
 ```text
 # PDF → 每页 Markdown(默认)
-paddleocr-pdf2md --input D:\docs\scan.pdf
-paddleocr-pdf2md --input scan.pdf --output D:\out
-paddleocr-pdf2md --input scan.pdf --no-multipages   # 合并成一个 {stem}.md
+uv run paddleocr-pdf2md --input D:\docs\scan.pdf
+uv run paddleocr-pdf2md --input scan.pdf --output D:\out
+uv run paddleocr-pdf2md --input scan.pdf --no-multipages   # 合并成一个 {stem}.md
 
-# 一键安装
-paddleocr-mcp-install [--no-warm]
+# 全新机器首次:下载权重 + prune VL + HealthCheck(已复制 models 的机器跳过此步,见 1.4)
+uv run paddleocr-mcp-install
+uv run paddleocr-mcp-install --no-warm   # 只 prune + HealthCheck,不重下
 ```
 
 `--output` 规则:`None`/空 → PDF 同名文件夹;`.` → PDF 所在目录;其它 → 该目录。
