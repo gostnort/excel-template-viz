@@ -75,6 +75,51 @@ def get_model(model_key: str) -> dict[str, Any] | None:
 
 
 
+_CTX_WARN = 65536
+
+
+def instance_runtime_notice(model_key: str | None = None) -> str:
+    """
+    函数名: instance_runtime_notice
+    作用: 配置的上下文上限过大或 Parallel>1 时提示；不把上限误当成当前 prompt
+    输入:
+        model_key (str | None): 空则用 user.toml 的 model
+    输出:
+        str: 警告；无需提示则为空
+    """
+    key = str(model_key or load_user_config().get("model") or "").strip()
+    info = get_model(key) if key else None
+    if not info:
+        return ""
+    instances = info.get("loaded_instances") or []
+    if not isinstance(instances, list) or not instances:
+        return ""
+    first = instances[0]
+    cfg = first.get("config") if isinstance(first, dict) else None
+    if not isinstance(cfg, dict):
+        return ""
+    try:
+        ctx_n = int(cfg.get("context_length") or 0)
+    except (TypeError, ValueError):
+        ctx_n = 0
+    try:
+        par_n = int(cfg.get("parallel") or 1)
+    except (TypeError, ValueError):
+        par_n = 1
+    bits: list[str] = []
+    if ctx_n > _CTX_WARN:
+        bits.append(f"max context_length={ctx_n} (configured cap, not this prompt)")
+    if par_n > 1:
+        bits.append(f"parallel={par_n} KV slots")
+    if not bits:
+        return ""
+    return (
+        "note: LM Studio " + ", ".join(bits) +
+        ". Q4 KV can keep a 32k-64k working window on 12GB; 180k is only worth it if you really fill it. "
+        "Parallel slots each keep their own KV — raise that when sub-agents actually run concurrently."
+    )
+
+
 def model_context_limit(model_key: str | None = None) -> int | None:
     """
     函数名: model_context_limit

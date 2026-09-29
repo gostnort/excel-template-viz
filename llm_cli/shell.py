@@ -15,7 +15,7 @@ from llm_cli.prompts import MAIN_SYSTEM
 
 try:
     from llm_cli.lm_studio import LmStudioError, get_backend, load_model, load_user_config
-    from llm_cli.lm_studio.models import loaded_models_from, model_context_limit
+    from llm_cli.lm_studio.models import has_vision, instance_runtime_notice, loaded_models_from, model_context_limit
     from llm_cli.lm_studio.placement import multi_load_notice
 except ImportError as exc:
     get_backend = None
@@ -24,6 +24,8 @@ except ImportError as exc:
     load_model = None
     model_context_limit = None
     loaded_models_from = None
+    instance_runtime_notice = None
+    has_vision = None
     multi_load_notice = None
     _IMPORT_ERR = str(exc)
 else:
@@ -122,6 +124,33 @@ def _emit_multi_load(current: str, loaded: list[str] | None = None, *, via_print
         emit_system(text)
 
 
+def _emit_vision_mcp_note(model: str, *, via_print: bool = False) -> None:
+    """
+    函数名: _emit_vision_mcp_note
+    作用: 视觉模型上不要让 LM Studio 托管 MCP Tools，prompt eval 会极慢
+    输入:
+        model (str): 当前模型 key
+        via_print (bool): 握手时用 print
+    输出: 无
+    """
+    key = str(model or "").strip()
+    if not key or has_vision is None:
+        return
+    try:
+        if not has_vision(key):
+            return
+    except Exception:
+        return
+    text = (
+        f"note: {key} has vision. LM Studio Chat with full MCP schemas is still slow. "
+        "This CLI does not attach those schemas to /v1/chat/completions."
+    )
+    if via_print:
+        print(text, flush=True)
+        return
+    emit_system(text)
+
+
 def print_banner(info: BootInfo | None = None, *, provider: str = "lm_studio", model: str = "") -> None:
     """
     函数名: print_banner
@@ -179,6 +208,11 @@ def handshake() -> BootInfo:
     if len(loaded_names) >= 2:
         detail = f"{detail} · {len(loaded_names)} models loaded"
         _emit_multi_load(model, loaded_names, via_print=True)
+    if instance_runtime_notice is not None:
+        note = instance_runtime_notice(model)
+        if note:
+            print(note, flush=True)
+    _emit_vision_mcp_note(model, via_print=True)
     return BootInfo(
         cwd=str(Path.cwd()),
         session=f"session_{uuid.uuid4()}",
@@ -203,7 +237,7 @@ def cmd_help() -> None:
         "\n".join(
             [
                 "Commands:",
-                "  health         Probe provider (url / model / loaded)",
+                "  health         Probe LM Studio, MCP ready, Playwright / Bing",
                 "  load [model]   Load weights (default: lm_studio/user.toml)",
                 "  ask <text>     Main Agent.run (tools / max_turns / >>)",
                 "  agents         List nested agents (main / worker / compress)",
@@ -251,7 +285,29 @@ def cmd_health() -> None:
         f"message={report.message}",
     ]
     emit_system("\n".join(lines))
+    if instance_runtime_notice is not None:
+        note = instance_runtime_notice(str(cfg.get("model") or report.model or ""))
+        if note:
+            emit_system(note)
+    _emit_vision_mcp_note(str(cfg.get("model") or report.model or ""))
     _emit_multi_load(str(cfg.get("model") or report.model or ""), loaded_names)
+    try:
+        from llm_cli.lm_studio.mcp_ready import probe_mcp_ready
+        ready = probe_mcp_ready(force=True)
+        emit_system(f"mcp_ready all_ok={ready.get('all_ok')} skipped={ready.get('skipped')}")
+        for warn in ready.get("warnings") or []:
+            emit_system(f"warning: {warn}")
+        checks = ready.get("checks") if isinstance(ready.get("checks"), dict) else {}
+        for key, row in checks.items():
+            if isinstance(row, dict):
+                emit_system(f"  {key}: ok={row.get('ok')} {row.get('detail')}")
+    except Exception as exc:
+        emit_system(f"mcp ready: probe failed ({exc})")
+    try:
+        from mcp_playwright.session import probe_playwright
+        emit_system(str(probe_playwright().get("message") or "playwright: unknown"))
+    except Exception as exc:
+        emit_system(f"playwright: probe failed ({exc})")
 
 
 def cmd_load(model_name: str) -> None:
@@ -425,7 +481,7 @@ def cmd_agents() -> None:
         "\n".join(
             [
                 f"main={agent.name} thinking_policy={agent.thinking_policy}",
-                "worker=ask_worker (thinking=after_tools)",
+                "worker=ask_worker (wikipedia_lookup, read_local_file, web_search/Bing)",
                 "compress=ask_worker pipeline (thinking=off, stateless)",
             ]
         )
@@ -618,10 +674,33 @@ def run_loop(info: BootInfo) -> None:
         _show_cursor()
 
 
+def _boot_mcp_ready() -> None:
+    """
+    函数名: _boot_mcp_ready
+    作用: 检测两个 MCP 就绪状态；未齐则每次警告。并探 Bing 用的自带 Chromium
+    输入: 无
+    输出: 无
+    """
+    try:
+        from llm_cli.lm_studio.mcp_ready import format_mcp_warnings, probe_mcp_ready
+        report = probe_mcp_ready(force=False)
+        for line in format_mcp_warnings(report):
+            print(line, flush=True)
+    except Exception as exc:
+        print(f"mcp ready: probe failed ({exc})", flush=True)
+    try:
+        from mcp_playwright.session import probe_playwright
+        pw = probe_playwright()
+        if not pw.get("ok"):
+            print(str(pw.get("message") or "playwright: down"), flush=True)
+    except Exception as exc:
+        print(f"playwright: probe failed ({exc})", flush=True)
+
+
 def main() -> int:
     """
     函数名: main
-    作用: 先打欢迎框，再握手 LM Studio，然后进入方框提示符
+    作用: 先打欢迎框，再握手 LM Studio 与 MCP 就绪检测，然后进入方框提示符
     输入: 无
     输出:
         int: 0
@@ -629,12 +708,18 @@ def main() -> int:
     apply_console_icon()
     print_boot(_preview_boot())
     info = handshake()
+    _boot_mcp_ready()
     try:
         run_loop(info)
     finally:
         try:
-            from mcp_chrome import close_session
-            close_session()
+            from mcp_playwright import close_session as close_playwright
+            close_playwright()
+        except Exception:
+            pass
+        try:
+            from mcp_desktop import close_session as close_desktop
+            close_desktop()
         except Exception:
             pass
     return 0

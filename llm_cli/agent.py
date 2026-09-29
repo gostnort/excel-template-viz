@@ -245,8 +245,8 @@ class Agent:
             for tc in tool_calls:
                 fn_spec = tc.get("function") or {}
                 self.on_tool(str(fn_spec.get("name") or ""))
-        with ThreadPoolExecutor() as pool:
-            rows = list(pool.map(lambda tc: _exec_tool(self.tools, tc), tool_calls))
+        # 中文注释: 顺序执行，避免工人再调 LLM 时被线程池挡住进度输出
+        rows = [_exec_tool(self.tools, tc) for tc in tool_calls]
         history.extend(rows)
 
 

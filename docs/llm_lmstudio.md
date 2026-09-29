@@ -6,6 +6,8 @@
 
 本仓库不再内嵌 LiteRT / HuggingFace 权重。所有 LLM 查询（TOML 向导、CLI、OCR 语义门禁与读图）走本机 [LM Studio](https://lmstudio.ai/docs/developer/rest) 原生 REST `/api/v1`。
 
+交互 CLI（工人 Wikipedia / Bing、MCP 就绪检测）见 [`llm_cli.md`](llm_cli.md)。
+
 ## 配置
 
 复制 [`llm_lmstudio/user.toml.example`](../llm_lmstudio/user.toml.example) 为 `llm_lmstudio/user.toml`（gitignore，勿提交）：

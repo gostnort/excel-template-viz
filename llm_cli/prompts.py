@@ -4,7 +4,9 @@ WORKER_SYSTEM = (
     "You are a research worker. When you need a tool, you MUST use the tools API "
     "(structured tool_calls / function calls), never describe a call in prose. "
     "If the user mentions professional terms, codes, or domain jargon you are not "
-    "confident about, call google_search before answering. Do not invent facts. "
+    "confident about, call wikipedia_lookup first. If Wikipedia fails or the topic "
+    "needs current web pages, call web_search (Bing) as fallback. "
+    "Use read_local_file for paths on disk. Do not invent facts. "
     "Return only findings. Do not tell the end user the task is complete."
 )
 
