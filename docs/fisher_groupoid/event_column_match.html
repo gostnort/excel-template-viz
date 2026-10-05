@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MLM 事件特征列对齐</title>
+  <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [["\\(", "\\)"]],
+        displayMath: [["\\[", "\\]"]],
+        processEscapes: true
+      }
+    };
+  </script>
+  <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+  <style>
+    :root {
+      --ink: #1a1a1a;
+      --muted: #555;
+      --line: #ccc;
+      --bg: #fafafa;
+      --card: #fff;
+      --code: #f3f3f3;
+    }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+      line-height: 1.65;
+    }
+    main {
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 32px 20px 80px;
+    }
+    h1, h2, h3 { line-height: 1.3; }
+    h1 { font-size: 1.7rem; margin-bottom: 0.4rem; }
+    h2 { margin-top: 2.2rem; border-bottom: 1px solid var(--line); padding-bottom: 0.3rem; }
+    h3 { margin-top: 1.4rem; }
+    .lead { color: var(--muted); margin-bottom: 1.5rem; }
+    code, pre {
+      font-family: Consolas, "Sarasa Mono SC", monospace;
+      background: var(--code);
+    }
+    code { padding: 0.1em 0.35em; font-size: 0.92em; }
+    pre {
+      padding: 12px 14px;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      background: var(--card);
+      font-size: 0.92rem;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 6px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #eee; }
+    .note {
+      border-left: 3px solid #333;
+      padding: 8px 12px;
+      background: #fff;
+      margin: 1rem 0;
+    }
+    .obj {
+      background: var(--card);
+      border: 1px solid var(--line);
+      padding: 12px 14px;
+      margin: 10px 0;
+    }
+    .muted { color: var(--muted); }
+    .glossary td:nth-child(1) { white-space: nowrap; font-family: Consolas, "Sarasa Mono SC", monospace; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>用 MLM 把表列变成向量再对齐</h1>
+  <p class="lead">
+    实现见 <code>fisher_groupoid/column_match.py</code>。
+    只用本地 BERT，不读表头字符串、不读外部字段映射文件。
+    先把格子洗成统一字面，再各列做成两个向量（内容长什么样、对整行贡献了什么），
+    日期列额外沿「年份跨度」方向挪一小步，最后用门禁决定谁配谁。
+  </p>
+
+  <h2>0. 术语从哪来、用线代怎么读</h2>
+  <p>
+    下文专有名词保持英文。本科线性代数里已经够用的运算只有：向量、内积 \(\langle u,v\rangle\)、长度 \(\|u\|\)、单位向量 \(u/\|u\|\)、
+    把 \(v\) 投到 \(u\) 上 \(\langle v,u\rangle u\)（\(u\) 已单位化）、再拿走这部分得到与 \(u\) 垂直的残差。
+    其余词是从别的课借来的绰号，下表给出出处和在本文中的具体意思。
+  </p>
+  <table class="glossary">
+    <tr>
+      <th>术语</th>
+      <th>出处</th>
+      <th>用本科线代怎么理解（本文用法）</th>
+    </tr>
+    <tr>
+      <td>BERT</td>
+      <td>自然语言处理。Devlin 等 2018，<em>Bidirectional Encoder Representations from Transformers</em>。</td>
+      <td>一个固定的函数：输入一段文字，输出 \(\mathbb{R}^{768}\) 里的一个向量。本文当黑盒用，不训练。</td>
+    </tr>
+    <tr>
+      <td>MLM</td>
+      <td>同上论文的训练任务 Masked Language Model：遮住一个词，让模型猜回去。</td>
+      <td>只说明我们用的是 BERT 这类编码器，不是聊天用的 LLM。配对过程不调用任何对话模型。</td>
+    </tr>
+    <tr>
+      <td>LLM</td>
+      <td>Large Language Model，生成式大语言模型。</td>
+      <td>本文不用。列出是为了和 MLM 区分。</td>
+    </tr>
+    <tr>
+      <td>token / pooled vector</td>
+      <td>NLP 习惯。token 是切词后的小块；pooling 是把许多小块合成一个。</td>
+      <td>句子被切成若干 token，每个有一个 768 维向量。把这些向量做算术平均，得到代表整句的一个向量。</td>
+    </tr>
+    <tr>
+      <td>unit</td>
+      <td>线性代数：单位化。</td>
+      <td>\(\mathrm{unit}(u)=u/\|u\|\)。只保留方向，去掉长短。零向量不除。</td>
+    </tr>
+    <tr>
+      <td>cosine</td>
+      <td>线性代数：两向量夹角的余弦。</td>
+      <td>\(\cos(a,b)=\langle a,b\rangle/(\|a\|\|b\|)\)。1 表示同向，0 表示垂直，−1 表示反向。用来当「像不像」的分数。</td>
+    </tr>
+    <tr>
+      <td>event sentence</td>
+      <td>本文用语。一行业务记录当成一件事。</td>
+      <td>把该行非空格子的字面用顿号串起来，得到一句给 BERT 的输入。不含列名。</td>
+    </tr>
+    <tr>
+      <td>value cloud</td>
+      <td>本文用语。cloud 只表示「一堆点的平均」。不是云计算。</td>
+      <td>一列里每个非空格子各做一个单位向量，再平均、再单位化。表示「这列内容长什么样」。</td>
+    </tr>
+    <tr>
+      <td>leave-one-out (LOO)</td>
+      <td>统计学交叉验证：拿掉一项再看差别。不是新几何。</td>
+      <td>整行句向量减去拿掉该列后的句向量，得到一个差向量。表示「这一列给整件事多带来了什么」。按行先单位化再平均，避免长句子把差变得特别大。</td>
+    </tr>
+    <tr>
+      <td>canonicalization</td>
+      <td>软件工程 / 数据清洗：把同一事实写成同一种标准形。</td>
+      <td>把 <code>1978/2/29</code>、<code>1978-03-01 00:00:00</code>、<code>19830101</code> 都改写成 <code>YYYY-MM-DD</code>。非法日期（如 1978-02-29）仍当字符串，不用 Python <code>datetime</code> 去验证闰年。</td>
+    </tr>
+    <tr>
+      <td>common mode</td>
+      <td>电路与信号处理：许多导线共享的那一段电压，叫共模。</td>
+      <td>所有日期字符串都共享的方向，例如「这是用连字符连起来的数字」。若把这个方向从每个日期向量里减掉，连「哪一年」的差别也会被削掉，所以本文不用。</td>
+    </tr>
+    <tr>
+      <td>projection / orthogonal</td>
+      <td>线性代数：正交投影。</td>
+      <td>把 \(v\) 投到单位向量 \(u\) 上是 \(\langle v,u\rangle u\)。\(v\) 减去它，得到与 \(u\) 垂直的部分。SDE 里要对时间方向做这一步，否则时间方向几乎和日期字面平行，挪了等于没挪。</td>
+    </tr>
+    <tr>
+      <td>collinear</td>
+      <td>线性代数：共线，一个向量是另一个的标量倍。</td>
+      <td>两个单位向量 cosine 接近 1，就是几乎共线。所有 <code>YYYY-MM-DD</code> 在 BERT 里都几乎共线，所以单靠字面很难分开「上报日」和「生效日」。</td>
+    </tr>
+    <tr>
+      <td>SDE</td>
+      <td>随机过程课：Stochastic Differential Equation，形如 \(dX=f\,dt+\sigma\,dW\)。本科常只见到常微分方程 ODE。</td>
+      <td>本文并不真的抽样布朗运动。只借用「沿某个力的方向走一小步」这个图：给日期向量加上与年份均值、年份标准差成比例的一项。代码是一次加法再单位化，不是微分方程求解器。</td>
+    </tr>
+    <tr>
+      <td>Langevin</td>
+      <td>统计物理：有摩擦的布朗运动，粒子被力拉着走，同时被随机碰撞搅动。</td>
+      <td>绰号。本文只用了「拉力」那一项（drift），没有加随机碰撞。drift 由该列年份的平均值和标准差决定。</td>
+    </tr>
+    <tr>
+      <td>renormalization / 穿衣</td>
+      <td>统计物理与量子场论：裸参数经过环境修正变成有效参数。Wilson 重整化群。</td>
+      <td>绰号。裸向量 = 格子字面的平均；穿衣 = 再叠上年份跨度信息。不是换模型、也不重新训练 BERT。</td>
+    </tr>
+    <tr>
+      <td>Euler step</td>
+      <td>本科常微分方程数值方法：\(x\leftarrow x+h f(x)\)。</td>
+      <td>只走一步：新向量 = 单位化(旧向量 + 系数 × 时间方向)。步长信息已经折进系数 \(\gamma,\beta\)。</td>
+    </tr>
+    <tr>
+      <td>temporal axis / epoch</td>
+      <td>时间轴；epoch 在天文学和地质学里表示「以某年为原点的时刻」。</td>
+      <td>用 BERT(<code>1978年</code>) 减 BERT(<code>2026年</code>) 得到一个 768 维方向，当作「更早 vs 更晚」。年份先减 2000 再除以 30，变成大约 \([-1,1]\) 的数，避免年份绝对值太大。</td>
+    </tr>
+    <tr>
+      <td>mean / std</td>
+      <td>本科概率统计：平均与标准差。</td>
+      <td>一列里各个年份对应的 \(\tau_i\) 的平均值 \(\bar\tau\)、标准差 \(\sigma_\tau\)。两行都是 2026 则 \(\sigma_\tau=0\)；从 1978 跨到 2030 则 \(\sigma_\tau\) 较大。</td>
+    </tr>
+    <tr>
+      <td>unique-slot</td>
+      <td>指派问题 / 匹配：一个源列最多占一个模板列。</td>
+      <td>贪心：分数最高的先挑。模板列被占用后别人不能再要。分数不够高、或两个模板列分数太接近，就空着不配。</td>
+    </tr>
+    <tr>
+      <td>floor / type_floor / margin</td>
+      <td>算法门限。margin 在假设检验里表示「要高出多少才算分得清」。</td>
+      <td>floor=0.5：最高分低于 0.5 不配。type_floor=0.5：次高分也过 0.5 才可能构成竞争。margin=0.08：最高分必须比这些竞争者至少高 0.08，否则视为分不清，不配。</td>
+    </tr>
+    <tr>
+      <td>rivals</td>
+      <td>本文用语：竞争者。</td>
+      <td>同一源列上，除最优模板列以外、分数 \(\ge 0.5\) 且与最优分差 &lt; 0.08 的那些列。</td>
+    </tr>
+    <tr>
+      <td>mutual nearest</td>
+      <td>匹配算法：A 的最近邻是 B，且 B 的最近邻是 A。</td>
+      <td>源列挑中模板列 \(d\) 之后，还要检查：在还没被占用的源列里，\(d\) 分数最高的必须是自己。</td>
+    </tr>
+    <tr>
+      <td>phi (\(\varphi\))</td>
+      <td>数学里常用映射符号。</td>
+      <td>一张字典：源列名 \(\mapsto\) 模板列名。例如 <code>ID → ID#</code>。</td>
+    </tr>
+    <tr>
+      <td>char_equiv</td>
+      <td>本文验收函数，不参与打分。</td>
+      <td>去掉 <code>#</code>、<code>_</code>、空格后看两个列名是否相同。只用来事后核对，例如 ID 与 ID# 算相同，issues 与 Recent Issue 算不同。</td>
+    </tr>
+  </table>
+
+  <h2>1. 样本表</h2>
+  <p>
+    源表 <code>docs/sample/执法堂业绩.xlsx</code>。
+    <code>sheet1</code> 列：ID, name, gender, dob。
+    <code>sheet2</code> 列：ID, Report_date, issues。
+    模板 <code>Input_sheet</code> 列：ID#, Name, Recent Issue, Report Date, Discipline, Effective_Date, Sign。
+  </p>
+  <p>
+    对齐目标按列语义：sheet2 的 Report_date 应对到模板 Report Date；issues 对 Recent Issue；ID 对 ID#。
+    模板没有性别列。Effective_Date 在模板里是单独一列，不应被 sheet2 占走。
+  </p>
+  <p>洗净后的日期字面：</p>
+  <table>
+    <tr><th>列</th><th>字面</th></tr>
+    <tr><td>sheet2 Report_date</td><td><code>1978-03-01</code>、<code>2030-01-01</code>、<code>2026-10-01</code>（空行不算）</td></tr>
+    <tr><td>模板 Report Date</td><td><code>1978-02-29</code>、<code>2026-01-31</code></td></tr>
+    <tr><td>模板 Effective_Date</td><td>两行都是 <code>2026-01-31</code></td></tr>
+    <tr><td>sheet1 dob</td><td><code>2026-01-31</code>、<code>1938-06-01</code>、<code>1983-01-01</code></td></tr>
+  </table>
+  <p>
+    注意两边日历日并不相同。不能靠「字符串相等」配对，只能靠向量方向是否接近。
+  </p>
+
+  <h2>2. 为什么分两步</h2>
+  <p>
+    Excel 把日期对象印成 <code>1978-03-01 00:00:00</code>，模板里另一列却是 <code>1978/02/29</code>。
+    BERT 会觉得所有「带 <code>00:00:00</code> 的日期」彼此极像，于是 Report_date 对 Effective_Date 的内容相似度假高到约 0.97，方向反了。
+  </p>
+  <p>
+    第一步只做减法：把日期字面统一成 <code>YYYY-MM-DD</code>；不要从向量里减掉「日期长什么样」那个共有方向
+    （减完 0.967 &gt; 0.947 会变成 0.598 &lt; 0.632）；门禁改为「只有分差小于 0.08 的高分才算真分不清」，
+    不再「两个日期都超过 0.5 就全部拒绝」。
+  </p>
+  <p>
+    洗净后方向已经对了（Report Date 0.834，Effective_Date 0.831），但只高 0.003，过不了 0.08。
+    第二步才给日期向量加上年份跨度，让「从 1978 跨到 2030」和「两行都是 2026」分开。
+  </p>
+
+  <h2>3. 输出对象 SheetColumnMatch</h2>
+  <p><code>match_source_to_template(src_sheet=...)</code> 一次建成。</p>
+  <div class="obj">
+    <ul>
+      <li><code>table</code>：每对（源列，模板列）的分数。</li>
+      <li><code>phi</code>：最终映射。</li>
+      <li><code>verify</code>：事后列名核对，不进入打分。</li>
+      <li><code>unmatched_src</code> / <code>unmatched_dst</code>：没配上的列。</li>
+    </ul>
+  </div>
+
+  <h2>4. 把格子写成标准日期</h2>
+  <p>
+    Excel 的日期对象用 <code>%Y-%m-%d</code> 打印；已经是字符串的，用正则改写。
+    接受 <code>YYYY-MM-DD</code>、<code>YYYY/M/D</code>、后面可带时刻、<code>YYYYMMDD</code>。
+    年 1900–2100、月 1–12、日 1–31，不做闰年检查，所以 <code>1978/02/29</code> 仍写成 <code>1978-02-29</code>。
+  </p>
+
+  <h2>5. 从格子到向量</h2>
+  <h3>5.1 一行合成一句</h3>
+  <p>第 \(r\) 行、列 \(\ell\) 的字面记为 \(x_{r\ell}\)。空值和 NULL 丢掉。用中文顿号连接。不写列名。</p>
+  \[
+    s_r = \mathrm{join}(\{x_{r\ell'}:\ x_{r\ell'}\neq\emptyset\}),\qquad
+    s_r^{-\ell} = \mathrm{join}(\{x_{r\ell'}:\ \ell'\neq\ell,\ x_{r\ell'}\neq\emptyset\}).
+  \]
+
+  <h3>5.2 句向量</h3>
+  <p>含汉字则用 <code>bert-base-chinese</code>，每个句子一个 768 维向量：该句所有内容 token 的算术平均。</p>
+  \[
+    v(s)=\frac{1}{|T|}\sum_{t\in T} h_t,\qquad
+    \mathrm{unit}(u)=\frac{u}{\|u\|_2}\quad(\|u\|_2 \lt 10^{-12}\ \text{则不除}).
+  \]
+
+  <h3>5.3 一列两个向量</h3>
+  <p>内容向量：该列每个非空格子各做一个单位向量，再平均。</p>
+  \[
+    u_\ell^{\mathrm{val}}
+    =\mathrm{unit}\!\left(
+      \frac{1}{|R_\ell|}\sum_{r\in R_\ell}\mathrm{unit}\big(v(x_{r\ell})\big)
+    \right).
+  \]
+  <p>贡献向量：整句减去拿掉该列后的句子，差向量按行单位化再平均。长短句的差不会因为句子更长就自动更大。</p>
+  \[
+    \Delta_{r\ell}=\mathrm{unit}\big(v(s_r)-v(s_r^{-\ell})\big),\qquad
+    u_\ell^{\mathrm{loo}}
+    =\mathrm{unit}\!\left(
+      \frac{1}{|R_\ell|}\sum_{r\in R_\ell}\Delta_{r\ell}
+    \right).
+  \]
+  <p>
+    贡献向量描述的是「这句话里拿掉一块之后方向怎么变」，不要再按日期字面方向去投影。
+    模板同一行里往往同时有两个日期，拿掉一个，另一个还在，所以单靠贡献向量几乎分不开 Report Date 和 Effective_Date。
+  </p>
+
+  <h2>6. 为什么不减「日期长什么样」</h2>
+  <p>
+    所有标准日期在 BERT 里几乎共线。若先求出日期字面的平均方向 \(e_{\mathrm{date}}\)，再对每个列向量做
+    \(u\leftarrow \mathrm{unit}(u-\langle u,e_{\mathrm{date}}\rangle e_{\mathrm{date}})\)，
+    减掉的不只是「连字符格式」，连哪一年的差别也被削薄，分数顺序会反掉。
+    这段投影已经从特征函数里删掉。
+  </p>
+
+  <h2>7. 日期列沿年份方向走一步</h2>
+  <p>
+    格子仍是字符串；另外从年份算出两个普通统计量。
+    Effective_Date 两行都是 2026，年份没有离散程度；Report Date 与 Report_date 从 1970 年代跨到 2020 年代，离散程度大。
+  </p>
+  \[
+    \tau_i=\frac{\mathrm{Year}_i-2000}{30},\qquad
+    \bar\tau=\mathrm{mean}_i\,\tau_i,\qquad
+    \sigma_\tau=\mathrm{std}_i\,\tau_i.
+  \]
+  <p>
+    时间方向先用「1978年」减「2026年」得到 \(e\)，再减去它在内容向量上的投影，得到与内容垂直的 \(e_\perp\)。
+    若不垂直，\(e\) 几乎顺着日期字面，加上去再单位化，向量几乎不动。
+  </p>
+  \[
+    e=\mathrm{unit}\big(v(\text{1978年})-v(\text{2026年})\big),\qquad
+    e_\perp=\mathrm{unit}\big(e-\langle e,u^{\mathrm{val}}\rangle u^{\mathrm{val}}\big).
+  \]
+  <p>只改内容向量，不改贡献向量：</p>
+  \[
+    \tilde u^{\mathrm{val}}
+    =\mathrm{unit}\big(u^{\mathrm{val}}+(\beta\sigma_\tau-\gamma\bar\tau)\,e_\perp\big),
+    \quad \gamma=0.25,\;\beta=0.45.
+  \]
+  <p>
+    \(\beta\sigma_\tau\) 让「年份散得开」的列沿 \(e_\perp\) 多走一些；钉在同一天的列 \(\sigma_\tau=0\)，只按平均值微移。
+    sheet1 的 dob（1938 / 1983 / 2026）同样散得开，因此也会靠近 Report Date。这是同一条加法的结果。
+  </p>
+
+  <h2>8. 一对列怎么打分</h2>
+  \[
+    \cos(a,b)=\mathrm{clip}\!\left(\frac{\langle a,b\rangle}{\|a\|_2\|b\|_2},-1,1\right)
+    \quad(\text{有一个是零向量则 }0).
+  \]
+  <p>普通列：内容相似度与贡献相似度各一半。两列都是日期：内容 0.7，贡献 0.3。</p>
+
+  <h2>9. 谁配谁</h2>
+  <table>
+    <tr><th>代码</th><th>默认</th><th>含义</th></tr>
+    <tr><td><code>floor</code></td><td>0.50</td><td>最高分低于此不配</td></tr>
+    <tr><td><code>type_floor</code></td><td>0.50</td><td>次高分过此才可能算竞争者</td></tr>
+    <tr><td><code>margin</code></td><td>0.08</td><td>最高分须至少高出竞争者这么多</td></tr>
+  </table>
+  <p>源列 \(\ell\) 的最高模板列记为 \(d^\star\)，最高分 \(S^\star\)。出现下面任一情况就不配：</p>
+  <ul>
+    <li>\(S^\star &lt; 0.5\)</li>
+    <li>另有模板列分数 \(\ge 0.5\)，且与 \(S^\star\) 的差小于 0.08</li>
+    <li>第二名与第一名的差小于 0.08</li>
+    <li>在尚未占用的源列里，\(d^\star\) 最认的不是 \(\ell\)</li>
+  </ul>
+  <p>
+    例：Name 0.65 与 Sign 0.63，差 0.02，视为分不清，name 不配。
+    合成表里若某列对 Effective_Date 0.80、对 Report Date 0.56，差 0.24，可以保留。
+  </p>
+
+  <h2>10. 实测：sheet1 → Input_sheet</h2>
+  <p>映射：ID → ID#，dob → Report Date。未匹配：name、gender。</p>
+  <table>
+    <tr>
+      <th></th><th>ID#</th><th>Name</th><th>Recent Issue</th><th>Report Date</th><th>Discipline</th><th>Effective_Date</th><th>Sign</th>
+    </tr>
+    <tr><th>ID</th><td><strong>0.72</strong></td><td>0.48</td><td>0.21</td><td>0.26</td><td>0.32</td><td>0.21</td><td>0.44</td></tr>
+    <tr><th>name</th><td>0.45</td><td>0.65</td><td>0.15</td><td>0.20</td><td>0.35</td><td>0.14</td><td>0.63</td></tr>
+    <tr><th>gender</th><td>0.41</td><td>0.44</td><td>0.45</td><td>0.29</td><td>0.44</td><td>0.25</td><td>0.52</td></tr>
+    <tr><th>dob</th><td>0.19</td><td>0.15</td><td>0.18</td><td><strong>0.78</strong></td><td>0.23</td><td>0.51</td><td>0.22</td></tr>
+  </table>
+  <div class="note">
+    <p>ID → ID#，列名核对通过。</p>
+    <p>name：Name 0.65 与 Sign 0.63，差不够 0.08，不配。</p>
+    <p>gender：最高 Sign 0.52，与次优差不够 0.08，不配。</p>
+    <p>dob → Report Date：两边年份都散得开；列名核对为假。模板没有「出生日期」这一列，算法只是把「有历史跨度的日期列」推到了同一个槽。</p>
+  </div>
+
+  <h2>11. 实测：sheet2 → Input_sheet</h2>
+  <p>映射：ID → ID#，issues → Recent Issue，Report_date → Report Date。源列全部配上。</p>
+  <table>
+    <tr>
+      <th></th><th>ID#</th><th>Name</th><th>Recent Issue</th><th>Report Date</th><th>Discipline</th><th>Effective_Date</th><th>Sign</th>
+    </tr>
+    <tr><th>ID</th><td><strong>0.60</strong></td><td>0.42</td><td>0.12</td><td>0.39</td><td>0.27</td><td>0.33</td><td>0.44</td></tr>
+    <tr><th>Report_date</th><td>0.26</td><td>0.24</td><td>0.09</td><td><strong>0.83</strong></td><td>0.33</td><td>0.73</td><td>0.29</td></tr>
+    <tr><th>issues</th><td>0.20</td><td>0.23</td><td><strong>0.74</strong></td><td>0.32</td><td>0.49</td><td>0.32</td><td>0.33</td></tr>
+  </table>
+  <div class="note">
+    <p>issues → Recent Issue：列名不同，正文几乎同一段话。</p>
+    <p>Report_date → Report Date：0.832 对 Effective_Date 0.728，差 0.104，超过 0.08。Effective_Date 不被占用。</p>
+  </div>
+
+  <h2>12. 代码入口</h2>
+  <pre>from fisher_groupoid.column_match import match_source_to_template
+
+s1 = match_source_to_template(src_sheet="sheet1")
+s2 = match_source_to_template(src_sheet="sheet2")
+print(s1.phi, s1.unmatched_src())
+print(s2.phi, s2.unmatched_src())</pre>
+  <p>回归：<code>test/pytest/test_column_event_match.py</code>。</p>
+</main>
+</body>
+</html>

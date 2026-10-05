@@ -43,6 +43,14 @@ models/*
 paddle_ocr/models/**
 !paddle_ocr/models/.gitkeep
 
+# BERT MLM weights (keep MLM_models/.gitkeep only)
+MLM_models/**
+!MLM_models/.gitkeep
+
+# FastText static vectors (keep fasttext_models/.gitkeep only)
+fasttext_models/**
+!fasttext_models/.gitkeep
+
 # llama-cpp wheel probe artifacts (manual install debugging)
 **/_wheel_probe*/
 
