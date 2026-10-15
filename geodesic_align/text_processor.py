@@ -70,6 +70,22 @@ class GeodesicEnd:
 
 
 
+
+@dataclass
+class TextAlignCache:
+    """一次文本对齐留下的列云和分类，供实验模块复用。"""
+
+    source_sheets: tuple[str, ...]
+    dest_sheet: str
+    src_clouds: list[TextCloud]
+    dst_clouds: list[TextCloud]
+    ends: list[GeodesicEnd]
+
+
+_latest_align: TextAlignCache | None = None
+
+
+
 def text_headers(headers: list[str], rows: list[dict[str, str]]) -> list[str]:
     """
     函数名: text_headers
@@ -182,15 +198,286 @@ def riemannian_log_map(mu: np.ndarray, point: np.ndarray) -> np.ndarray:
     """
     base = _unit(mu)
     other = _unit(point)
-    cosine = float(np.clip(np.dot(base, other), -1.0, 1.0))
-    theta = float(np.arccos(cosine))
+    packed = batch_riemannian_log(base, other.reshape(1, -1))
+    return packed[0]
+
+
+
+def _row_units(mat: np.ndarray) -> np.ndarray:
+    """
+    函数名: _row_units
+    作用: 按行单位化；范数低于 1e-12 的行原样保留
+    输入:
+        mat (np.ndarray): (P, D) 或 (D,)
+    输出:
+        np.ndarray
+    """
+    vecs = np.asarray(mat, dtype=np.float64)
+    single = vecs.ndim == 1
+    if single:
+        vecs = vecs.reshape(1, -1)
+    # 逐行范数与标量 _unit 使用同一条 numpy 范数
+    nrms = np.linalg.norm(vecs, axis=1, keepdims=True)
+    safe = np.maximum(nrms, 1e-12)
+    out = vecs / safe
+    tiny = nrms < 1e-12
+    if np.any(tiny):
+        out = np.where(tiny, vecs, out)
+    if single:
+        return out.reshape(-1)
+    return out
+
+
+
+def batch_riemannian_log(mu: np.ndarray, points: np.ndarray) -> np.ndarray:
+    """
+    函数名: batch_riemannian_log
+    作用: 一批球面点在同一 μ 处的对数映射
+    输入:
+        mu (np.ndarray): 切点
+        points (np.ndarray): (P, D) 或 (D,)
+    输出:
+        np.ndarray: (P, D)，每行模长是测地距离
+    """
+    base = _unit(mu)
+    others = _row_units(points)
+    if others.ndim == 1:
+        others = others.reshape(1, -1)
+    cosines = np.clip(others @ base, -1.0, 1.0)
+    theta = np.arccos(cosines)
+    sin_theta = np.sin(theta)
+    scale = np.empty_like(theta)
+    near = sin_theta < 1e-7
     # 极近时用泰勒展开，避免除以 sin(0)
-    sin_theta = float(np.sin(theta))
-    if sin_theta < 1e-7:
-        scale = 1.0 + (theta ** 2) / 6.0
-    else:
-        scale = theta / sin_theta
-    return scale * (other - cosine * base)
+    scale[near] = 1.0 + (theta[near] ** 2) / 6.0
+    far = ~near
+    scale[far] = theta[far] / sin_theta[far]
+    return scale[:, None] * (others - cosines[:, None] * base)
+
+
+
+def batch_parallel_transport(
+    mu_s: np.ndarray,
+    mu_d: np.ndarray,
+    vecs: np.ndarray,
+) -> np.ndarray | None:
+    """
+    函数名: batch_parallel_transport
+    作用: 沿同一条大圆把一批切向量从 μs 搬到 μd
+    输入:
+        mu_s (np.ndarray): 源点
+        mu_d (np.ndarray): 目标点
+        vecs (np.ndarray): (P, D) 或 (D,) 切向量
+    输出:
+        np.ndarray | None: (P, D)；对径时为 None
+    """
+    point = _unit(mu_s)
+    dest = _unit(mu_d)
+    cosine = float(np.dot(point, dest))
+    if cosine <= -1.0 + ANTIPODE_EPS:
+        return None
+    mat = np.asarray(vecs, dtype=np.float64)
+    if mat.ndim == 1:
+        mat = mat.reshape(1, -1)
+    # moved = v - (v·q)/(1+c) * (p+q)，再投到 q 的切空间
+    pole = (point + dest) / (1.0 + cosine)
+    coeff = mat @ dest
+    moved = mat - coeff[:, None] * pole
+    radial = moved @ dest
+    return moved - radial[:, None] * dest
+
+
+
+def batch_tangent_project(base: np.ndarray, vector: np.ndarray) -> np.ndarray:
+    """
+    函数名: batch_tangent_project
+    作用: 把一批向量投到对应单位点的切空间，v - (p·v)p
+    输入:
+        base (np.ndarray): (P, D) 球面上的点
+        vector (np.ndarray): (P, D) 待投影向量
+    输出:
+        np.ndarray: (P, D)
+    """
+    point = np.asarray(base, dtype=np.float64)
+    vec = np.asarray(vector, dtype=np.float64)
+    single = point.ndim == 1
+    if single:
+        point = point.reshape(1, -1)
+        vec = vec.reshape(1, -1)
+    # 调用方保证 base 已在球面上，投影不再逐行重归一化
+    dots = np.sum(point * vec, axis=-1, keepdims=True)
+    out = vec - dots * point
+    if single:
+        return out.reshape(-1)
+    return out
+
+
+
+def _draw_step_noise(
+    count: int,
+    dim: int,
+    basis: np.ndarray | None,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray | None, np.ndarray]:
+    """
+    函数名: _draw_step_noise
+    作用: 按粒子、步、子空间再环境的顺序一次取完高斯噪声，与逐粒子标量循环同一条随机流
+    输入:
+        count (int): 粒子数 P
+        dim (int): 隐向量维数 D
+        basis (np.ndarray | None): (k, D) 主切向基
+        rng (np.random.Generator): 随机源
+    输出:
+        tuple[np.ndarray | None, np.ndarray]: 子空间噪声 (步数, P, k)，环境噪声 (步数, P, D)
+    """
+    use_subspace = basis is not None and int(getattr(basis, "ndim", 0)) == 2 and int(basis.shape[0]) > 0
+    scale = 1.0 / np.sqrt(float(dim))
+    if count <= 0 or dim <= 0:
+        empty = np.zeros((SDE_STEPS, max(count, 0), max(dim, 0)), dtype=np.float64)
+        return None, empty
+    if not use_subspace:
+        packed = np.empty((count, SDE_STEPS, dim), dtype=np.float64)
+        rng.standard_normal(out=packed)
+        # 步放在第 0 轴，后面每步都是连续的 (P, D)
+        ambient = np.ascontiguousarray(np.moveaxis(packed, 1, 0))
+        ambient *= scale
+        return None, ambient
+    rank = int(basis.shape[0])
+    packed = np.empty((count, SDE_STEPS, rank + dim), dtype=np.float64)
+    rng.standard_normal(out=packed)
+    flipped = np.moveaxis(packed, 1, 0)
+    # 拆成两块连续数组，单步 (P, k) 与 (P, D) 都能直接做矩阵乘
+    sub = np.ascontiguousarray(flipped[:, :, :rank])
+    ambient = np.ascontiguousarray(flipped[:, :, rank:])
+    ambient *= scale
+    return sub, ambient
+
+
+
+def _sde_walk(
+    points: np.ndarray,
+    origins: np.ndarray,
+    basis: np.ndarray | None,
+    sub_noise: np.ndarray | None,
+    amb_noise: np.ndarray,
+    lam: float,
+    sigma: float,
+) -> np.ndarray:
+    """
+    函数名: _sde_walk
+    作用: 用已取好的噪声做 40 步批量 Euler–Maruyama，并投回球面
+    输入:
+        points (np.ndarray): (P, D) 已单位化的初值
+        origins (np.ndarray): (P, D) 各粒子要拉回的观测点
+        basis (np.ndarray | None): (k, D) 主切向基
+        sub_noise (np.ndarray | None): (步数, P, k)
+        amb_noise (np.ndarray): (步数, P, D)，已按 1/√D 缩放
+        lam (float): 阻尼
+        sigma (float): 扩散强度
+    输出:
+        np.ndarray: (P, D) 终点
+    """
+    state = np.array(points, dtype=np.float64, copy=True)
+    count = int(state.shape[0]) if state.ndim == 2 else 0
+    dim = int(state.shape[1]) if state.ndim == 2 else 0
+    if count == 0 or dim == 0:
+        return state
+    sqrt_dt = float(np.sqrt(SDE_DT))
+    pull_dt = -float(lam) * float(SDE_DT)
+    diffuse = float(sigma) * sqrt_dt
+    use_subspace = sub_noise is not None
+    # 步内缓冲反复使用，避免每步重新分配 (P, D)
+    drift = np.empty((count, dim), dtype=np.float64)
+    noise_dir = np.empty((count, dim), dtype=np.float64)
+    scratch = np.empty((count, dim), dtype=np.float64)
+    dots = np.empty((count, 1), dtype=np.float64)
+    for step in range(SDE_STEPS):
+        # 漂移把每个粒子拉回它自己的观测点
+        np.subtract(state, origins, out=drift)
+        np.sum(state * drift, axis=-1, out=dots[:, 0])
+        np.multiply(state, dots, out=scratch)
+        drift -= scratch
+        drift *= pull_dt
+        if use_subspace:
+            # 主方差留在 k 维切空间，正交方向只加 0.1 倍的环境噪声
+            np.matmul(sub_noise[step], basis, out=noise_dir)
+            np.multiply(amb_noise[step], 0.1, out=scratch)
+            noise_dir += scratch
+        else:
+            noise_dir[...] = amb_noise[step]
+        np.sum(state * noise_dir, axis=-1, out=dots[:, 0])
+        np.multiply(state, dots, out=scratch)
+        noise_dir -= scratch
+        noise_dir *= diffuse
+        state += drift
+        state += noise_dir
+        np.sum(state * state, axis=-1, out=dots[:, 0])
+        np.sqrt(dots, out=dots)
+        state /= dots
+    return state
+
+
+
+def batch_tangent_subspace_sde(
+    x0: np.ndarray,
+    basis_vectors: np.ndarray | None,
+    *,
+    lam: float,
+    sigma: float,
+    rng: np.random.Generator,
+    repeats: int = NAME_SDE_PARTICLES,
+) -> np.ndarray:
+    """
+    函数名: batch_tangent_subspace_sde
+    作用: 把每条观测复制成 repeats 个粒子，用矩阵乘法完成切空间扩散
+    输入:
+        x0 (np.ndarray): (N, D) 或 (D,) 观测点
+        basis_vectors (np.ndarray | None): (k, D) 主切向基；没有样本基时为 None
+        lam (float): 拉回观测点的阻尼
+        sigma (float): 扩散强度
+        rng (np.random.Generator): 随机源
+        repeats (int): 每条观测的粒子数，默认 8
+    输出:
+        np.ndarray: (N * repeats, D) 球面上的终点
+    """
+    raw = np.asarray(x0, dtype=np.float64)
+    if raw.ndim == 1:
+        raw = raw.reshape(1, -1)
+    points = np.repeat(_row_units(raw), int(repeats), axis=0)
+    origins = np.array(points, dtype=np.float64, copy=True)
+    dim = int(points.shape[1]) if points.ndim == 2 else 0
+    sub_noise, amb_noise = _draw_step_noise(int(points.shape[0]), dim, basis_vectors, rng)
+    return _sde_walk(points, origins, basis_vectors, sub_noise, amb_noise, lam, sigma)
+
+
+
+def batch_energies(logs: np.ndarray, basis: np.ndarray) -> tuple[float, float, float]:
+    """
+    函数名: batch_energies
+    作用: 用两次矩阵乘法分解切向量在子空间内外的能量
+    输入:
+        logs (np.ndarray): (P, D) 黎曼对数
+        basis (np.ndarray): (k, D) 切空间基
+    输出:
+        tuple[float, float, float]: E_in、E_out、rho
+    """
+    mat = np.asarray(logs, dtype=np.float64)
+    if mat.ndim == 1:
+        mat = mat.reshape(1, -1)
+    if mat.size == 0:
+        return 0.0, 0.0, 0.0
+    span = np.asarray(basis, dtype=np.float64)
+    if span.ndim != 2 or int(span.shape[0]) == 0:
+        e_out = float(np.sum(mat * mat))
+        rho = 0.0 if e_out <= 0.0 else 1.0
+        return 0.0, e_out, rho
+    # 坐标 (P, k)，能量是坐标平方和；基来自 SVD，行是正交的
+    coords = mat @ span.T
+    e_in = float(np.sum(coords ** 2))
+    e_out = max(0.0, float(np.sum(mat * mat) - e_in))
+    total = e_in + e_out
+    rho = 0.0 if total <= 0.0 else e_out / total
+    return e_in, e_out, rho
 
 
 
@@ -214,26 +501,16 @@ def tangent_subspace_sde(
     输出:
         np.ndarray: 球面上的终点
     """
-    point = _unit(x0)
-    origin = point.copy()
-    dim = int(point.size)
-    sqrt_dt = float(np.sqrt(SDE_DT))
-    use_subspace = basis_vectors is not None and int(basis_vectors.shape[0]) > 0
-    rank = int(basis_vectors.shape[0]) if use_subspace else dim
-    for _step in range(SDE_STEPS):
-        # 漂移把点拉回这条观测
-        drift = _tangent_project(point, -float(lam) * (point - origin)) * float(SDE_DT)
-        if use_subspace:
-            # 主方差留在 k 维语义切空间，其余方向只做维数归一化的微量摄动
-            sub_noise = rng.normal(0.0, 1.0, size=rank)
-            flow_tangent = sub_noise @ basis_vectors
-            ambient = rng.normal(0.0, 1.0 / np.sqrt(dim), size=dim)
-            noise_dir = flow_tangent + 0.1 * ambient
-        else:
-            noise_dir = rng.normal(0.0, 1.0 / np.sqrt(dim), size=dim)
-        diffusion = float(sigma) * sqrt_dt * _tangent_project(point, noise_dir)
-        point = _unit(point + drift + diffusion)
-    return point
+    # 单粒子走同一套批量步，repeats=1 时随机流与原来的标量循环一致
+    walked = batch_tangent_subspace_sde(
+        np.asarray(x0, dtype=np.float64).reshape(1, -1),
+        basis_vectors,
+        lam=lam,
+        sigma=sigma,
+        rng=rng,
+        repeats=1,
+    )
+    return walked[0]
 
 
 
@@ -270,11 +547,7 @@ def cloud_logs(mu: np.ndarray, particles: np.ndarray) -> np.ndarray:
         np.ndarray
     """
     mean = np.asarray(mu, dtype=np.float64).reshape(-1)
-    mat = np.asarray(particles, dtype=np.float64)
-    packed = np.zeros((int(mat.shape[0]), int(mean.shape[0])), dtype=np.float64)
-    for idx in range(int(mat.shape[0])):
-        packed[idx] = riemannian_log_map(mean, mat[idx])
-    return packed
+    return batch_riemannian_log(mean, particles)
 
 
 
@@ -306,14 +579,10 @@ def sphere_parallel_transport(mu_s: np.ndarray, mu_d: np.ndarray, vec: np.ndarra
     输出:
         np.ndarray | None
     """
-    p = _unit(mu_s)
-    q = _unit(mu_d)
-    moved_in = np.asarray(vec, dtype=np.float64).reshape(-1)
-    cosine = float(np.dot(p, q))
-    if cosine <= -1.0 + ANTIPODE_EPS:
+    moved = batch_parallel_transport(mu_s, mu_d, vec)
+    if moved is None:
         return None
-    moved = moved_in - (float(np.dot(moved_in, q)) / (1.0 + cosine)) * (p + q)
-    return _tangent_project(q, moved)
+    return moved.reshape(-1)
 
 
 
@@ -386,30 +655,31 @@ def _vin(src: list[TextCloud], dest: TextCloud) -> np.ndarray:
         return np.zeros((0, 0), dtype=np.float64)
     mu_d = np.asarray(dest.mu, dtype=np.float64).reshape(-1)
     dim = int(mu_d.shape[0])
-    rows: list[np.ndarray] = []
+    blocks: list[np.ndarray] = []
     for item in src:
-        if item.mu is None or item.particles is None:
+        if item.mu is None or item.particles is None or int(item.particles.shape[0]) == 0:
             continue
-        for vec in cloud_logs(item.mu, item.particles):
-            moved = sphere_parallel_transport(item.mu, mu_d, vec)
-            if moved is not None:
-                rows.append(moved)
-    if not rows:
+        # 一朵源云的对数和平行移动各做一次矩阵运算
+        logs = batch_riemannian_log(item.mu, item.particles)
+        moved = batch_parallel_transport(item.mu, mu_d, logs)
+        if moved is not None and int(moved.shape[0]) > 0:
+            blocks.append(moved)
+    if not blocks:
         return np.zeros((0, dim), dtype=np.float64)
-    stacked = np.stack(rows, axis=0)
+    stacked = np.vstack(blocks)
     rms = float(np.sqrt(np.mean(np.sum(stacked ** 2, axis=1))))
     sigma = SDE_SIGMA_SHORT if dest.kind == "SHORT_STRING" else SDE_SIGMA_LONG
     floor = max(T_FLOOR, rms * sigma)
     _u, spec, vt = np.linalg.svd(stacked, full_matrices=False)
     # 相对最大奇异值做 ω 截断，小于谱峰比例的方向丢掉
     peak = float(spec[0]) if len(spec) else 0.0
-    kept = [
-        vt[idx] for idx, val in enumerate(spec)
-        if float(val) > floor and (peak <= 0.0 or float(val) / peak >= SPECTRUM_OMEGA)
-    ]
-    if not kept:
+    if peak <= 0.0:
+        keep = spec > floor
+    else:
+        keep = (spec > floor) & (spec / peak >= SPECTRUM_OMEGA)
+    if not np.any(keep):
         return np.zeros((0, dim), dtype=np.float64)
-    return np.stack(kept, axis=0)
+    return vt[keep]
 
 
 
@@ -426,21 +696,7 @@ def _energies(dest: TextCloud, basis: np.ndarray) -> tuple[float, float, float]:
     if dest.mu is None or dest.particles is None:
         return 0.0, 0.0, 0.0
     logs = cloud_logs(dest.mu, dest.particles)
-    e_in = 0.0
-    e_out = 0.0
-    if basis.ndim != 2 or basis.shape[0] == 0:
-        for vec in logs:
-            e_out += float(np.dot(vec, vec))
-    else:
-        proj = basis.T @ basis
-        for vec in logs:
-            inside = proj @ vec
-            perp = vec - inside
-            e_in += float(np.dot(inside, inside))
-            e_out += float(np.dot(perp, perp))
-    total = e_in + e_out
-    rho = 0.0 if total <= 0.0 else e_out / total
-    return float(e_in), float(e_out), float(rho)
+    return batch_energies(logs, basis)
 
 
 
@@ -523,22 +779,22 @@ def classify_text_ends(
 
 
 
-def run_text_align(
+def build_text_clouds(
     sources: list[tuple[str, list[str], list[dict[str, str]]]],
     dest_sheet: str,
     dest_headers: list[str],
     dest_rows: list[dict[str, str]],
-) -> list[GeodesicEnd]:
+) -> tuple[list[TextCloud], list[TextCloud]]:
     """
-    函数名: run_text_align
-    作用: 文本列建云并分类；没有权重时仍用日期的日差做虚拟箭头
+    函数名: build_text_clouds
+    作用: 载入掩码模型并建成源表、模板两侧的文本列云；没有权重时只留日期云
     输入:
         sources (list): (sheet, headers, rows)
         dest_sheet (str): 模板表名
         dest_headers (list[str]): 模板表头
         dest_rows (list[dict[str, str]]): 模板行
     输出:
-        list[GeodesicEnd]
+        tuple[list[TextCloud], list[TextCloud]]: 源云、模板云
     """
     engine = None
     try:
@@ -563,11 +819,67 @@ def run_text_align(
     dst_clouds = _date_clouds(engine, dest_sheet, dest_headers, dest_rows)
     if engine is not None:
         dst_clouds = _clouds_for_sheet(engine, dest_sheet, text_headers(dest_headers, dest_rows), dest_rows) + dst_clouds
+    return src_clouds, dst_clouds
+
+
+
+def run_text_align(
+    sources: list[tuple[str, list[str], list[dict[str, str]]]],
+    dest_sheet: str,
+    dest_headers: list[str],
+    dest_rows: list[dict[str, str]],
+) -> list[GeodesicEnd]:
+    """
+    函数名: run_text_align
+    作用: 文本列建云并分类；没有权重时仍用日期的日差做虚拟箭头
+    输入:
+        sources (list): (sheet, headers, rows)
+        dest_sheet (str): 模板表名
+        dest_headers (list[str]): 模板表头
+        dest_rows (list[dict[str, str]]): 模板行
+    输出:
+        list[GeodesicEnd]
+    """
+    src_clouds, dst_clouds = build_text_clouds(sources, dest_sheet, dest_headers, dest_rows)
     arrows = list_arrows(src_clouds, dst_clouds) + list_date_arrows(src_clouds, dst_clouds)
     # 得到普通箭头和一年以内的日期箭头
     if not src_clouds and not dst_clouds:
-        return []
-    return classify_text_ends(src_clouds, dst_clouds, arrows)
+        ends: list[GeodesicEnd] = []
+    else:
+        ends = classify_text_ends(src_clouds, dst_clouds, arrows)
+    global _latest_align
+    _latest_align = TextAlignCache(
+        tuple(str(sheet) for sheet, _headers, _rows in sources),
+        str(dest_sheet),
+        src_clouds,
+        dst_clouds,
+        ends,
+    )
+    return ends
+
+
+
+def cached_text_align(
+    source_sheets: tuple[str, ...],
+    dest_sheet: str,
+) -> tuple[list[TextCloud], list[TextCloud], list[GeodesicEnd]] | None:
+    """
+    函数名: cached_text_align
+    作用: 取出刚刚 run_text_align 留下的列云和分类；表名对不上就返回 None
+    输入:
+        source_sheets (tuple[str, ...]): 源表名，顺序与当时的 sources 一致
+        dest_sheet (str): 模板表名
+    输出:
+        tuple | None: (源云, 模板云, 分类)；没有可复用结果时为 None
+    """
+    found = _latest_align
+    if found is None:
+        return None
+    if found.source_sheets != tuple(str(name) for name in source_sheets):
+        return None
+    if found.dest_sheet != str(dest_sheet):
+        return None
+    return found.src_clouds, found.dst_clouds, found.ends
 
 
 
@@ -643,7 +955,7 @@ def _principal_tangent_basis(vecs: list[np.ndarray]) -> np.ndarray | None:
     if len(vecs) < 2:
         return None
     center = _unit(np.mean(np.stack(vecs, axis=0), axis=0))
-    logs = np.stack([riemannian_log_map(center, item) for item in vecs], axis=0)
+    logs = batch_riemannian_log(center, np.stack(vecs, axis=0))
     _left, spec, vt = np.linalg.svd(logs, full_matrices=False)
     if len(spec) == 0:
         return None
@@ -675,15 +987,17 @@ def _clouds_for_sheet(engine: object, sheet: str, headers: list[str], rows: list
     # 得到空云列表
     # 按列收集每一行里该列名对应的单位向量
     collected: dict[str, list[np.ndarray]] = {name: [] for name in headers}
+    sentences: list[str] = []
     for row in rows:
         # 只把文本列拼成「列名：值」，空值和哨兵不进句子
         sentence = named_row_sentence(headers, row)
-        # 得到这一行的命名句
         if not sentence:
             continue
-        # 整句做一次掩码模型前向，后面按字符位置切列
-        bundle = engine.encode(sentence)
-        # 得到每个 token 的隐状态
+        sentences.append(sentence)
+    # 整表句子打成一个 batch，只做一次掩码模型前向
+    bundles = engine.encode_batch(sentences) if sentences else []
+    for sentence, bundle in zip(sentences, bundles):
+        offsets = bundle.offsets or engine.content_offsets(sentence)
         for name in headers:
             # 用「列名：」在句子里的字符区间对齐内容 token
             token = f"{name}："
@@ -693,8 +1007,6 @@ def _clouds_for_sheet(engine: object, sheet: str, headers: list[str], rows: list
                 continue
             stop = start + len(token)
             # 得到列名区间的终点
-            offsets = engine.content_offsets(sentence)
-            # 得到内容 token 的下标和字符起止
             # 重叠比例达到 τ 的 token 按距列名中心的高斯权重平均
             center = (float(start) + float(stop)) / 2.0
             label_span = max(float(stop - start), 1.0)
@@ -732,14 +1044,15 @@ def _clouds_for_sheet(engine: object, sheet: str, headers: list[str], rows: list
         # 得到短文本或长文本
         sigma = SDE_SIGMA_LONG if kind == "LONG_STRING" else SDE_SIGMA_SHORT
         # 得到该列的球面扩散系数
-        # 用本列观测的主切向做扩散，不在全部隐空间里各向同性撒噪声
+        # 用本列观测的主切向做扩散，整列粒子一次矩阵更新
         basis = _principal_tangent_basis(vecs)
-        particles: list[np.ndarray] = []
-        for vec in vecs:
-            for _idx in range(NAME_SDE_PARTICLES):
-                particles.append(tangent_subspace_sde(vec, basis, lam=SDE_LAMBDA, sigma=sigma, rng=rng))
-        # 得到该列全部粒子
-        mat = np.stack(particles, axis=0)
+        mat = batch_tangent_subspace_sde(
+            np.stack(vecs, axis=0),
+            basis,
+            lam=SDE_LAMBDA,
+            sigma=sigma,
+            rng=rng,
+        )
         # 得到粒子矩阵，行是粒子
         clouds.append(TextCloud(f"{sheet}.{name}", sheet, name, kind, _unit(np.mean(mat, axis=0)), mat))
         # 得到以粒子均值方向为中心的列云

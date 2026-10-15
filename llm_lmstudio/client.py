@@ -50,7 +50,7 @@ def api_url() -> str:
     作用: 当前配置中的 LM Studio 根地址（无尾斜杠）
     输入: 无
     输出:
-        str: 如 http://localhost:9999
+        str: 如 http://127.0.0.1:9999
     """
     return str(load_user_config()["api_url"])
 

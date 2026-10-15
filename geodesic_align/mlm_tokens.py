@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -30,6 +30,7 @@ class TokenBundle:
 
     hidden: np.ndarray
     pooled: np.ndarray
+    offsets: list[tuple[int, int, int]] = field(default_factory=list)
 
 
 
@@ -116,29 +117,66 @@ class MaskedBert:
     def encode(self, text: str) -> TokenBundle:
         """
         函数名: MaskedBert.encode
-        作用: 整句 CPU 前向，返回隐状态与内容 token 均值
+        作用: 单句 CPU 前向，走 encode_batch
         输入:
             text (str): 句子
         输出:
             TokenBundle
         """
+        return self.encode_batch([str(text)])[0]
+
+
+    def encode_batch(self, texts: list[str]) -> list[TokenBundle]:
+        """
+        函数名: MaskedBert.encode_batch
+        作用: 多句一次 CPU 前向；padding 用 attention mask 隔开，隐状态与单句前向对应
+        输入:
+            texts (list[str]): 句子列表
+        输出:
+            list[TokenBundle]: 与 texts 等长，offsets 是内容 token 的字符区间
+        """
+        packed = [str(text) for text in texts]
+        if not packed:
+            return []
         encoded = self.tokenizer(
-            str(text),
+            packed,
             return_tensors="pt",
             truncation=True,
+            padding=True,
             max_length=MAX_LENGTH,
             add_special_tokens=True,
+            return_offsets_mapping=True,
         )
+        # offset_mapping 不是 BERT 的输入，先拿出来
+        offset_mapping = encoded.pop("offset_mapping")
         batch = {key: value.to(DEVICE) for key, value in encoded.items()}
         with torch.inference_mode():
             outputs = self.model(**batch, output_hidden_states=True)
-        hidden = outputs.hidden_states[-1].squeeze(0).detach().cpu().numpy().astype(np.float64, copy=True)
-        ids = [int(x) for x in batch["input_ids"].squeeze(0).tolist()]
-        tokens = self.tokenizer.convert_ids_to_tokens(ids)
+        hidden = outputs.hidden_states[-1].detach().cpu().numpy()
         special = set(self.tokenizer.all_special_tokens)
-        keep = [idx for idx, name in enumerate(tokens) if name not in special]
-        pooled = hidden[keep].mean(axis=0) if keep else hidden[0].copy()
-        return TokenBundle(hidden=hidden, pooled=np.asarray(pooled, dtype=np.float64))
+        bundles: list[TokenBundle] = []
+        for idx in range(len(packed)):
+            # 真实 token 长度，不含 padding
+            length = int(batch["attention_mask"][idx].sum().item())
+            row = np.asarray(hidden[idx, :length], dtype=np.float64)
+            ids = [int(token_id) for token_id in batch["input_ids"][idx, :length].tolist()]
+            tokens = self.tokenizer.convert_ids_to_tokens(ids)
+            keep = [tok_i for tok_i, name in enumerate(tokens) if name not in special]
+            pooled = row[keep].mean(axis=0) if keep else row[0].copy()
+            raw_offsets = offset_mapping[idx]
+            if hasattr(raw_offsets, "detach"):
+                pairs = raw_offsets[:length].detach().cpu().tolist()
+            else:
+                pairs = list(raw_offsets)[:length]
+            hits: list[tuple[int, int, int]] = []
+            for tok_i, name in enumerate(tokens):
+                if name in special:
+                    continue
+                start, stop = int(pairs[tok_i][0]), int(pairs[tok_i][1])
+                if stop > start:
+                    hits.append((tok_i, start, stop))
+            bundles.append(TokenBundle(hidden=row, pooled=np.asarray(pooled, dtype=np.float64), offsets=hits))
+        return bundles
 
 
 

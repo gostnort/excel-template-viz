@@ -13,13 +13,13 @@
 复制 [`llm_lmstudio/user.toml.example`](../llm_lmstudio/user.toml.example) 为 `llm_lmstudio/user.toml`（gitignore，勿提交）：
 
 ```toml
-api_url = "http://localhost:9999"
+api_url = "http://127.0.0.1:9999"
 api_token = ""
 model = "gemma-4-e4b-it-coder"
 model_history = ["gemma-4-e4b-it-coder"]
 ```
 
-- `api_url`：LM Studio Developer 服务地址（本机默认 `http://localhost:9999`）
+- `api_url`：LM Studio Developer 服务地址（本机默认 `http://127.0.0.1:9999`，避开 Windows 上 localhost 的 IPv6 握手超时）
 - `api_token`：若未开鉴权则留空
 - `model`：模型 `key`（客户机默认 `gemma-4-e4b-it-coder`；12B 级不要当默认）
 - `model_history`：曾输入过的名称

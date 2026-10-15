@@ -109,7 +109,7 @@ Linux / macOS:
 | **向导** | `llm_toml_wizard/` | TOML 动态 agents（CLI 验收主线） |
 | **OCR 平台** | `paddle_ocr/` | 图片 → 结构 JSON；PP-OCRv6 fast + LM Studio 语义门禁 + 可选 PP-StructureV3 精修 |
 
-权重由 LM Studio 管理。配置见 `llm_lmstudio/user.toml.example`（默认 `http://localhost:9999`）。NiceGUI 顶栏可编辑模型名，开关遥控加载/卸载。规格：`docs/llm_lmstudio.md`。
+权重由 LM Studio 管理。配置见 `llm_lmstudio/user.toml.example`（默认 `http://127.0.0.1:9999`）。NiceGUI 顶栏可编辑模型名，开关遥控加载/卸载。规格：`docs/llm_lmstudio.md`。
 
 一次性问答：
 

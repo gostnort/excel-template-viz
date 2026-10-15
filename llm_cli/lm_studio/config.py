@@ -11,7 +11,7 @@ import tomlkit
 PLATFORM_ROOT = Path(__file__).resolve().parent
 USER_TOML = PLATFORM_ROOT / "user.toml"
 EXAMPLE_TOML = PLATFORM_ROOT / "user.toml.example"
-DEFAULT_API_URL = "http://localhost:9999"
+DEFAULT_API_URL = "http://127.0.0.1:9999"
 DEFAULT_THINKING_BUDGET = 512
 
 

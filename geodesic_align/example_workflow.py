@@ -370,6 +370,14 @@ def main() -> None:
     source_path, dest_path, sources, dest = load_sample_views()
     load_ms = (time.perf_counter() - mark) * 1000
     decisions, align_ms = align_sample(sources, dest)
+    # -------------------------------------------------------------------------
+    # [研发实验专区: 流形沉淀跟踪]
+    # 生产环境中保持注释；解除注释即可观察流形吸收与 rho 衰减
+    # -------------------------------------------------------------------------
+    # from geodesic_align.manifold_evolution import record_manifold_sediment
+    # sediment_mem = record_manifold_sediment(sources, dest, decisions)
+    # for rec in sediment_mem.records:
+    #     print(f"# [流形跃迁] 列 {rec['col']}: 破缺 rho={rec['rho_before']:.2f} -> 维数跃迁至 k={rec['k_dim']}")
     mark = time.perf_counter()
     text = render_toml(source_path, dest_path, sources, dest, decisions)
     render_ms = (time.perf_counter() - mark) * 1000
