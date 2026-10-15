@@ -1,0 +1,77 @@
+{
+  "suite_id": "06_banking",
+  "domain": "Wire Transactions",
+  "dirty_pattern": "European comma decimals (1.234,56), high-precision timestamps",
+  "total_columns": 5,
+  "role_breakdown": {
+    "data": 5
+  },
+  "elapsed_ms": {
+    "map": 2.64170000446029,
+    "text": 848.1871999974828
+  },
+  "sediment_records": [],
+  "sediment_dim": 0,
+  "decisions": [
+    {
+      "input_label": "Txn_Reference",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_06_banking",
+      "field": "Txn_Reference",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": true,
+      "warnings": []
+    },
+    {
+      "input_label": "Counterparty_IBAN",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_06_banking",
+      "field": "Counterparty_IBAN",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Transfer_Amount",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_06_banking",
+      "field": "Transfer_Amount",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Execution_Time",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_06_banking",
+      "field": "Execution_Time",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Fee_Amount",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_06_banking",
+      "field": "Fee_Amount",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    }
+  ]
+}

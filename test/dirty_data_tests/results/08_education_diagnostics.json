@@ -1,0 +1,68 @@
+{
+  "suite_id": "08_education",
+  "domain": "University Grades",
+  "dirty_pattern": "Composite formula derivations (First_Name & Last_Name), grade score addition",
+  "total_columns": 4,
+  "role_breakdown": {
+    "data": 2,
+    "formula": 2
+  },
+  "elapsed_ms": {
+    "map": 3.0731000006198883,
+    "text": 538.2189999945695
+  },
+  "sediment_records": [],
+  "sediment_dim": 0,
+  "decisions": [
+    {
+      "input_label": "Student_ID",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_08_education",
+      "field": "Student_ID",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": true,
+      "warnings": []
+    },
+    {
+      "input_label": "Full_Name",
+      "cell_role": "formula",
+      "klass": "derived",
+      "source": "",
+      "field": "",
+      "formula": "='{src_08_education}'!$B2 & \" \" & '{src_08_education}'!$C2",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": [
+        "multi_source_derived_synthesis:src_08_education.First_Name,src_08_education.Last_Name"
+      ]
+    },
+    {
+      "input_label": "Total_Score",
+      "cell_role": "formula",
+      "klass": "derived",
+      "source": "src_08_education",
+      "field": "",
+      "formula": "='{src_08_education}'!$D2 + '{src_08_education}'!$E2",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Course_Credits",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_08_education",
+      "field": "Course_Credits",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    }
+  ]
+}

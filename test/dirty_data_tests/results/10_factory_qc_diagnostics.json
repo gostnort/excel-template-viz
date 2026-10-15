@@ -1,0 +1,103 @@
+{
+  "suite_id": "10_factory_qc",
+  "domain": "Manufacturing QC",
+  "dirty_pattern": "Intentional pure outspan / manual sign-off columns with zero source lineage",
+  "total_columns": 6,
+  "role_breakdown": {
+    "data": 4,
+    "input": 2
+  },
+  "elapsed_ms": {
+    "map": 2.3325000001932494,
+    "text": 700.1606000048923
+  },
+  "sediment_records": [
+    {
+      "epoch": 1,
+      "col": "Inspector_Signature",
+      "rho_before": 0.982992747999413,
+      "k_dim": 5
+    },
+    {
+      "epoch": 2,
+      "col": "Shift_Supervisor_Note",
+      "rho_before": 0.9861245078162827,
+      "k_dim": 8
+    }
+  ],
+  "sediment_dim": 8,
+  "decisions": [
+    {
+      "input_label": "Batch_Tag",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_10_factory_qc",
+      "field": "Batch_Tag",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": true,
+      "warnings": []
+    },
+    {
+      "input_label": "Assembly_Line",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_10_factory_qc",
+      "field": "Assembly_Line",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Tested_Parts",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_10_factory_qc",
+      "field": "Tested_Parts",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Defective_Parts",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_10_factory_qc",
+      "field": "Defective_Parts",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Inspector_Signature",
+      "cell_role": "input",
+      "klass": "outspan",
+      "source": "",
+      "field": "",
+      "formula": "",
+      "regex": "",
+      "confidence": 0.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Shift_Supervisor_Note",
+      "cell_role": "input",
+      "klass": "outspan",
+      "source": "",
+      "field": "",
+      "formula": "",
+      "regex": "",
+      "confidence": 0.0,
+      "is_id": false,
+      "warnings": []
+    }
+  ]
+}

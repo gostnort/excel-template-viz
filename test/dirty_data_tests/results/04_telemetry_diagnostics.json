@@ -1,0 +1,89 @@
+{
+  "suite_id": "04_telemetry",
+  "domain": "IoT Sensors",
+  "dirty_pattern": "Heavy missing value sentinels (NaN, None, N/A, '-', whitespace)",
+  "total_columns": 6,
+  "role_breakdown": {
+    "data": 6
+  },
+  "elapsed_ms": {
+    "map": 1.7883999971672893,
+    "text": 377.8232999975444
+  },
+  "sediment_records": [],
+  "sediment_dim": 0,
+  "decisions": [
+    {
+      "input_label": "Sensor_ID",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_04_telemetry",
+      "field": "Sensor_ID",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": true,
+      "warnings": []
+    },
+    {
+      "input_label": "Device_Model",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_04_telemetry",
+      "field": "Device_Model",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Temperature_C",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_04_telemetry",
+      "field": "Temperature_C",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Pressure_Bar",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_04_telemetry",
+      "field": "Pressure_Bar",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Humidity_Pct",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_04_telemetry",
+      "field": "Humidity_Pct",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Battery_V",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_04_telemetry",
+      "field": "Battery_V",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+determiner = "\t"
+work_sheet = "GradeSummary"
+print_sheet = ""
+use_independent_db = true
+db_id = "Student_ID"
+
+[sources]
+src_08_education = 'E:\my_github\excel-template-viz\test\dirty_data_tests\datasets\[08_education_source.xlsx]StudentRoster'
+
+[[input_section]]
+input_area = "A2:D2"
+move_to = "down"
+offset = 1
+
+[[fields]]
+Input_label = "Student_ID"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_08_education"
+field = "Student_ID"
+regex = ''
+formula = ""
+index = 0
+id = true
+
+# multi_source_derived_synthesis:src_08_education.First_Name,src_08_education.Last_Name
+[[fields]]
+Input_label = "Full_Name"
+value_from_label = "down"
+value_offset = 1
+cell_role = "formula"
+source = ""
+field = ""
+regex = ''
+formula = "='{src_08_education}'!$B2 & \" \" & '{src_08_education}'!$C2"
+index = -1
+id = false
+
+[[fields]]
+Input_label = "Total_Score"
+value_from_label = "down"
+value_offset = 1
+cell_role = "formula"
+source = "src_08_education"
+field = ""
+regex = ''
+formula = "='{src_08_education}'!$D2 + '{src_08_education}'!$E2"
+index = -1
+id = false
+
+[[fields]]
+Input_label = "Course_Credits"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_08_education"
+field = "Course_Credits"
+regex = ''
+formula = ""
+index = 1
+id = false

@@ -1,0 +1,73 @@
+determiner = "\t"
+work_sheet = "WaybillDispatch"
+print_sheet = ""
+use_independent_db = true
+db_id = "Waybill_ID"
+
+[sources]
+src_05_waybill = 'E:\my_github\excel-template-viz\test\dirty_data_tests\datasets\[05_waybill_source.xlsx]LogisticsManifest'
+
+[[input_section]]
+input_area = "A2:E2"
+move_to = "down"
+offset = 1
+
+[[fields]]
+Input_label = "Waybill_ID"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_05_waybill"
+field = "Waybill_ID"
+regex = ''
+formula = ""
+index = 0
+id = true
+
+[[fields]]
+Input_label = "Origin_Airport"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_05_waybill"
+field = "Origin_Airport"
+regex = ''
+formula = ""
+index = 1
+id = false
+
+[[fields]]
+Input_label = "Dest_Airport"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_05_waybill"
+field = "Dest_Airport"
+regex = ''
+formula = ""
+index = 2
+id = false
+
+[[fields]]
+Input_label = "Weight_kg"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_05_waybill"
+field = "Weight_kg"
+regex = ''
+formula = ""
+index = 3
+id = false
+
+[[fields]]
+Input_label = "Declared_USD"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_05_waybill"
+field = "Declared_USD"
+regex = ''
+formula = ""
+index = 4
+id = false

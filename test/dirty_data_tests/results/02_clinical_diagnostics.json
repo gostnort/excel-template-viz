@@ -1,0 +1,97 @@
+{
+  "suite_id": "02_clinical",
+  "domain": "Medical Trials",
+  "dirty_pattern": "Inconsistent dates (YYYY/MM/DD, DD-MM-YYYY, serial 46160, textual months)",
+  "total_columns": 6,
+  "role_breakdown": {
+    "data": 5,
+    "input": 1
+  },
+  "elapsed_ms": {
+    "map": 3.2246999980998226,
+    "text": 1963.4662000025855
+  },
+  "sediment_records": [
+    {
+      "epoch": 1,
+      "col": "Investigator_Signoff",
+      "rho_before": 0.662805255061498,
+      "k_dim": 20
+    }
+  ],
+  "sediment_dim": 20,
+  "decisions": [
+    {
+      "input_label": "Subject_ID",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_02_clinical",
+      "field": "Subject_ID",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": true,
+      "warnings": []
+    },
+    {
+      "input_label": "Patient_Name",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_02_clinical",
+      "field": "Patient_Name",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Trial_Arm",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_02_clinical",
+      "field": "Trial_Arm",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Dosage_mg",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_02_clinical",
+      "field": "Dosage_mg",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Enrollment_Date",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_02_clinical",
+      "field": "Enrollment_Date",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Investigator_Signoff",
+      "cell_role": "input",
+      "klass": "outspan",
+      "source": "",
+      "field": "",
+      "formula": "",
+      "regex": "",
+      "confidence": 0.0,
+      "is_id": false,
+      "warnings": []
+    }
+  ]
+}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import date
@@ -9,16 +10,23 @@ from datetime import date
 import numpy as np
 
 from geodesic_align.digit_router import ColumnRoute, route_columns
+from geodesic_align.month_names import TEXT_MONTH_RE, month_number
 
 
 EXCEL_EPOCH = date(1899, 12, 30)
 Z_EPS = 1e-9
 SENTINEL = complex(0.0, -1.0)
-_EMPTY = frozenset({"", "null", "none", "n/a", "na", "暂无", "-", "--"})
+_EMPTY = frozenset({
+    "", "null", "none", "n/a", "na", "nan", "暂无", "无", "空", "缺失", "-", "--",
+    "#n/a", "#na", "nil", "#div/0!", "#ref!", "#name?", "#num!", "#null!", "#value!"
+})
 _DATE_TIME = re.compile(
-    r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$"
+    r"^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?(?:\s*([AaPp][Mm]))?)?$"
 )
-_CLOCK = re.compile(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?$")
+_DATE_TIME_EU = re.compile(
+    r"^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?(?:\s*([AaPp][Mm]))?)?$"
+)
+_CLOCK = re.compile(r"^(\d{1,2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?(?:\s*([AaPp][Mm]))?$")
 DISCRETE_KINDS = frozenset({"NUMERIC", "STRUCTURED_CODE", "DATETIME", "ID_CODE"})
 KEY_KINDS = DISCRETE_KINDS | {"SHORT_STRING", "LONG_STRING"}
 KEY_UNIQUENESS = 0.8
@@ -154,18 +162,66 @@ def quantize_z(value: complex) -> complex:
 
 
 
-def _clock_fraction(hour: int, minute: int, second: int) -> float | None:
+def _clean_numeric_str(raw: str) -> str:
+    """清理币符、千分位及欧式逗号小数，规范化负数。"""
+    clean = raw.replace("\u00a0", " ").strip()
+    clean = clean.replace("¥", "").replace("￥", "").replace("$", "").replace("€", "").replace("£", "").strip()
+    neg = False
+    if clean.startswith("(") and clean.endswith(")"):
+        neg = True
+        clean = clean[1:-1].strip()
+    elif clean.startswith("-"):
+        neg = True
+        clean = clean[1:].strip()
+    clean = clean.replace("¥", "").replace("￥", "").replace("$", "").replace("€", "").replace("£", "").strip()
+    if clean.startswith("(") and clean.endswith(")"):
+        neg = True
+        clean = clean[1:-1].strip()
+    if clean.endswith("%"):
+        clean = clean[:-1].strip()
+    if "." in clean and "," in clean:
+        if clean.rfind(",") > clean.rfind("."):
+            clean = clean.replace(".", "").replace(",", ".")
+        else:
+            clean = clean.replace(",", "")
+    elif "," in clean:
+        parts = clean.split(",")
+        if len(parts) == 2:
+            if parts[0] in ("0", "-0", "+0", "") or len(parts[1]) != 3:
+                clean = clean.replace(",", ".")
+            else:
+                clean = clean.replace(",", "")
+        else:
+            clean = clean.replace(",", "")
+    elif clean.count(".") > 1:
+        dot_parts = clean.split(".")
+        if all(len(p) == 3 for p in dot_parts[1:]):
+            clean = clean.replace(".", "")
+    if neg:
+        clean = "-" + clean
+    return clean
+
+
+
+def _clock_fraction(hour: int, minute: int, second: float, am_pm: str | None = None) -> float | None:
     """
     函数名: _clock_fraction
-    作用: 时刻折成日的小数；非法时钟返回 None
+    作用: 时刻折成日的小数，支持高精度微秒与 12小时制 AM/PM；非法时钟返回 None
     输入:
         hour (int): 时
         minute (int): 分
-        second (int): 秒
+        second (float): 秒
+        am_pm (str | None): AM / PM 标识
     输出:
         float | None
     """
-    if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
+    if am_pm:
+        ap = str(am_pm).upper().strip()
+        if ap == "PM" and hour < 12:
+            hour += 12
+        elif ap == "AM" and hour == 12:
+            hour = 0
+    if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second < 60):
         return None
     return (hour * 3600 + minute * 60 + second) / 86400.0
 
@@ -208,88 +264,128 @@ def cell_to_z(text: str, *, kind: str) -> complex:
     输出:
         complex
     """
-    # 去掉首尾空白，空值和哨兵直接记为 0+(-1)i
-    raw = str(text).strip()
-    # 得到去空白后的格子原文
-    if raw.lower() in _EMPTY or raw in {"暂无"}:
+    # 去掉首尾空白与非换行空格，空值和哨兵直接记为 0+(-1)i
+    raw = str(text).strip().replace("\u00a0", " ").strip()
+    if not raw or raw.lower() in _EMPTY or raw in {"暂无"}:
         return SENTINEL
-    # 得到哨兵，两枚哨兵互不相等
-    # 会计括号表示负数，并剥掉币符和千分位
-    negative = False
+    # 会计括号与负号表示负数，并剥掉币符和千分位
+    clean = _clean_numeric_str(raw)
+    negative = clean.startswith("-")
     body = raw
     if body.startswith("(") and body.endswith(")"):
-        negative = True
         body = body[1:-1].strip()
-        # 得到去掉括号后的正文，并记下负号
-    body = body.replace("¥", "").replace("￥", "").replace("$", "").replace(",", "").strip()
-    # 得到去掉币符和逗号后的正文
+    body = body.replace("¥", "").replace("￥", "").replace("$", "").replace("€", "").replace("£", "").strip()
     # 井号开头的标识码去掉前缀，再按数值解析
     if kind == "ID_CODE":
         body = body[1:] if body.startswith("#") else body
-        # 得到去掉井号后的正文
+        clean = clean[1:] if clean.startswith("#") else clean
     # 百分号按百分数除以 100，虚部保持 0
     if body.endswith("%") and kind != "ID_CODE":
         try:
-            val = float(body[:-1].strip()) / 100.0
+            val = float(clean.lstrip("-")) / 100.0
+            if math.isnan(val) or math.isinf(val):
+                return SENTINEL
         except ValueError:
             return SENTINEL
-            # 得到无法解析的百分数哨兵
         if negative:
             val = -val
         return complex(val, 0.0)
-        # 得到百分数的实数 z
-    # 纯时刻折成日分数，只在日期列上生效
+    # 纯时刻折成日分数，只在日期列上生效，支持高精度秒小数
     clock = _CLOCK.fullmatch(body)
-    # 得到是否整格都是时:分:秒
     if clock is not None and kind == "DATETIME":
-        sec = int(clock.group(3) or 0)
-        frac = _clock_fraction(int(clock.group(1)), int(clock.group(2)), sec)
-        # 得到一天中的小数，非法时钟为 None
+        sec = float(clock.group(3) or 0)
+        am_pm = clock.group(4)
+        frac = _clock_fraction(int(clock.group(1)), int(clock.group(2)), sec, am_pm)
         if frac is None:
             return SENTINEL
-            # 得到非法时刻哨兵
         return complex(-frac if negative else frac, 0.0)
-        # 得到只有时刻的实数 z
-    # 年月日字面转成 Excel 序列，非法日把溢出记在虚部
+    # 年月日字面转成 Excel 序列，支持高精度时分秒
     matched = _DATE_TIME.fullmatch(body)
-    # 得到是否整格都是日期或日期加时刻
     if matched is not None and kind == "DATETIME":
         hour = int(matched.group(4) or 0)
         minute = int(matched.group(5) or 0)
-        sec = int(matched.group(6) or 0)
+        sec = float(matched.group(6) or 0)
+        am_pm = matched.group(7)
         frac = 0.0
         if matched.group(4) is not None:
-            got = _clock_fraction(hour, minute, sec)
-            # 得到日期后面的时刻小数
+            got = _clock_fraction(hour, minute, sec, am_pm)
             if got is None:
                 return SENTINEL
-                # 得到非法时刻哨兵
             frac = got
         z = _date_serial(int(matched.group(1)), int(matched.group(2)), int(matched.group(3)), frac)
-        # 得到序列号在实部、钳位溢出在虚部的 z
         if negative and z.imag >= 0.0:
             return complex(-z.real, z.imag)
-            # 得到实部取负、虚部保留的 z
         return z
-        # 得到日期 z
+    # 欧式日月年 (DD-MM-YYYY) 或美式月日年 (MM-DD-YYYY) 字面转 Excel 序列
+    matched_eu = _DATE_TIME_EU.fullmatch(body)
+    if matched_eu is not None and kind == "DATETIME":
+        hour = int(matched_eu.group(4) or 0)
+        minute = int(matched_eu.group(5) or 0)
+        sec = float(matched_eu.group(6) or 0)
+        am_pm = matched_eu.group(7)
+        frac = 0.0
+        if matched_eu.group(4) is not None:
+            got = _clock_fraction(hour, minute, sec, am_pm)
+            if got is None:
+                return SENTINEL
+            frac = got
+        n1 = int(matched_eu.group(1))
+        n2 = int(matched_eu.group(2))
+        year = int(matched_eu.group(3))
+        if n2 > 12 and 1 <= n1 <= 12:
+            month = n1
+            day = n2
+        else:
+            month = n2
+            day = n1
+        z = _date_serial(year, month, day, frac)
+        if negative and z.imag >= 0.0:
+            return complex(-z.real, z.imag)
+        return z
+    # 英文或中文月份 (如 18-Sept-2026、May 18, 2026、2026年五月18日) 转 Excel 序列
+    matched_txt = TEXT_MONTH_RE.fullmatch(body)
+    if matched_txt is not None and kind == "DATETIME":
+        if matched_txt.group("d1") is not None:
+            day = int(matched_txt.group("d1"))
+            mon_key = matched_txt.group("mon1")
+            year = int(matched_txt.group("y1"))
+        elif matched_txt.group("mon2") is not None:
+            mon_key = matched_txt.group("mon2")
+            day = int(matched_txt.group("d2"))
+            year = int(matched_txt.group("y2"))
+        else:
+            year = int(matched_txt.group("y3"))
+            mon_key = matched_txt.group("mon3")
+            day = int(matched_txt.group("d3"))
+        month = month_number(mon_key or "")
+        hour = int(matched_txt.group("hour") or 0)
+        minute = int(matched_txt.group("minute") or 0)
+        sec = float(matched_txt.group("sec") or 0)
+        am_pm = matched_txt.group("ampm")
+        frac = _clock_fraction(hour, minute, sec, am_pm) or 0.0
+        z = _date_serial(year, month, day, frac)
+        if negative and z.imag >= 0.0:
+            return complex(-z.real, z.imag)
+        return z
     # 日期列上的纯数字按 Excel 序列号收录
     if kind == "DATETIME":
         try:
-            serial = float(body)
+            serial = float(clean)
+            if math.isnan(serial) or math.isinf(serial):
+                return SENTINEL
         except ValueError:
             return SENTINEL
-            # 得到无法解析的日期哨兵
-        if negative:
+        if negative and serial > 0:
             serial = -serial
         return complex(serial, 0.0)
-        # 得到虚部为 0 的序列号 z
-    # 其余按普通浮点收录，失败仍是哨兵
+    # 其余按数值标量 (含欧式逗号小数与千分位) 收录，失败仍是哨兵
     try:
-        val = float(body)
+        val = float(clean)
+        if math.isnan(val) or math.isinf(val):
+            return SENTINEL
     except ValueError:
         return SENTINEL
-        # 得到无法解析的数值哨兵
-    if negative:
+    if negative and val > 0:
         val = -val
     return complex(val, 0.0)
     # 得到虚部为 0 的数值 z
@@ -454,24 +550,26 @@ def _value_token(text: str, kind: str) -> str | None:
     if not raw or raw.lower() in {"null", "none", "n/a", "na", "暂无", "-", "--"}:
         return None
     # 得到空键，本格不进集合
-    # 结构化代码按原文入集合
+    # 结构化代码和文本按原文入集合
     if kind in {"STRUCTURED_CODE", "SHORT_STRING", "LONG_STRING"}:
         return raw
-    # 得到原文键
-    # 数值、日期和 ID 先收成 z，再量化成集合键
-    if kind == "DATETIME":
-        z_kind = "DATETIME"
-    elif kind == "ID_CODE":
-        z_kind = "ID_CODE"
-    else:
-        z_kind = "NUMERIC"
+    # ID 代码：纯数值/井号转量化键，字母数字代码保留原文
+    if kind == "ID_CODE":
+        clean = raw[1:] if raw.startswith("#") else raw
+        try:
+            val = float(clean)
+            if not (math.isnan(val) or math.isinf(val)):
+                packed = quantize_z(complex(val, 0.0))
+                return f"{packed.real:.8f}|{packed.imag:.8f}"
+        except ValueError:
+            pass
+        return raw
+    # 数值与日期先收成 z，再量化成集合键
+    z_kind = "DATETIME" if kind == "DATETIME" else "NUMERIC"
     value = cell_to_z(raw, kind=z_kind)
-    # 得到 z = x + yi
     if value.imag < 0.0:
         return None
-    # 得到哨兵，本格不进集合
     packed = quantize_z(value)
-    # 得到四舍五入后的 z
     return f"{packed.real:.8f}|{packed.imag:.8f}"
     # 得到可哈希的集合键
 
@@ -896,7 +994,7 @@ def _op_value(op: str, left: float, right: float) -> float:
     函数名: _op_value
     作用: 二元运算的实部
     输入:
-        op (str): + - *
+        op (str): + - * /
         left (float): 左实部
         right (float): 右实部
     输出:
@@ -906,6 +1004,10 @@ def _op_value(op: str, left: float, right: float) -> float:
         return left + right
     if op == "-":
         return left - right
+    if op == "*":
+        return left * right
+    if op == "/":
+        return left / right if abs(right) > Z_EPS else float("inf")
     return left * right
 
 
@@ -923,7 +1025,7 @@ def _formula_holds(
         dest_z (list[complex]): 目标列
         left_z (list[complex]): 左操作数
         right_z (list[complex]): 右操作数
-        op (str): + - *
+        op (str): + - * /
     输出:
         bool
     """
@@ -931,6 +1033,8 @@ def _formula_holds(
         return False
     for dest, left, right in zip(dest_z, left_z, right_z):
         if dest.imag != 0.0 or left.imag != 0.0 or right.imag != 0.0:
+            return False
+        if op == "/" and abs(right.real) < Z_EPS:
             return False
         got = _op_value(op, left.real, right.real)
         if abs(got - dest.real) >= Z_EPS:
@@ -967,7 +1071,7 @@ def _try_internal_derived(
         left_z = column_z(dest_table.rows, left_name, kind)
         for right_name in names[i + 1:]:
             right_z = column_z(dest_table.rows, right_name, kind)
-            for op in ("+", "-", "*"):
+            for op in ("+", "-", "*", "/"):
                 if not _formula_holds(dest_z, left_z, right_z, op):
                     continue
                 score = _header_cos(dest_label, left_name) + _header_cos(dest_label, right_name)
@@ -977,6 +1081,10 @@ def _try_internal_derived(
                 score = _header_cos(dest_label, right_name) + _header_cos(dest_label, left_name)
                 if best is None or score > best[0]:
                     best = (score, right_name, "-", left_name)
+            if _formula_holds(dest_z, right_z, left_z, "/"):
+                score = _header_cos(dest_label, right_name) + _header_cos(dest_label, left_name)
+                if best is None or score > best[0]:
+                    best = (score, right_name, "/", left_name)
     if best is None:
         return None
     return best[1], best[2], best[3]
@@ -1078,7 +1186,7 @@ def _try_external_derived(
     best: tuple[float, TableView, str, str, TableView, str] | None = None
     for i, (left_table, left_name, left_z) in enumerate(columns):
         for right_table, right_name, right_z in columns[i + 1:]:
-            for op in ("+", "-", "*"):
+            for op in ("+", "-", "*", "/"):
                 if not _formula_holds(want, left_z, right_z, op):
                     continue
                 score = _header_cos(dest_label, left_name) + _header_cos(dest_label, right_name)
@@ -1088,6 +1196,10 @@ def _try_external_derived(
                 score = _header_cos(dest_label, right_name) + _header_cos(dest_label, left_name)
                 if best is None or score > best[0]:
                     best = (score, right_table, right_name, "-", left_table, left_name)
+            if _formula_holds(want, right_z, left_z, "/"):
+                score = _header_cos(dest_label, right_name) + _header_cos(dest_label, left_name)
+                if best is None or score > best[0]:
+                    best = (score, right_table, right_name, "/", left_table, left_name)
     if best is None:
         return None
     return best[1], best[2], best[3], best[4], best[5]
@@ -1339,6 +1451,9 @@ def run_digit_align(
             continue
         internal = _try_internal_derived(label, dest_z, route.kind, dest, dest_routes)
         if internal is not None:
+            col_a = dest.headers.index(internal[0]) + 1
+            col_b = dest.headers.index(internal[2]) + 1
+            row = int(dest.header_row) + 1
             ends.append(
                 DigitEnd(
                     input_label=label,
@@ -1347,6 +1462,8 @@ def run_digit_align(
                     source="",
                     formula_op=internal[1],
                     operand_headers=[internal[0], internal[2]],
+                    operand_cols=[col_a, col_b],
+                    excel_row=row,
                     physical="internal",
                     pointers=list(pointers),
                 )

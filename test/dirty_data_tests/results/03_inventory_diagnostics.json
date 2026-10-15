@@ -1,0 +1,66 @@
+{
+  "suite_id": "03_inventory",
+  "domain": "Retail Warehouse",
+  "dirty_pattern": "Regex anchor variations (SKU-[101] vs Item# 102 vs REF:103), barcode prefixes",
+  "total_columns": 4,
+  "role_breakdown": {
+    "data": 3,
+    "regex": 1
+  },
+  "elapsed_ms": {
+    "map": 5.251100003079046,
+    "text": 483.58030000235885
+  },
+  "sediment_records": [],
+  "sediment_dim": 0,
+  "decisions": [
+    {
+      "input_label": "Bin_Location",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_03_inventory",
+      "field": "Bin_Location",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": true,
+      "warnings": []
+    },
+    {
+      "input_label": "Extracted_SKU",
+      "cell_role": "regex",
+      "klass": "regex",
+      "source": "src_03_inventory",
+      "field": "Item_Record_Log",
+      "formula": "",
+      "regex": "(?:Item\\#|REF:|SKU\\-\\[)\\s*(\\d+)",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Quantity_On_Hand",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_03_inventory",
+      "field": "Quantity_On_Hand",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Reorder_Level",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_03_inventory",
+      "field": "Reorder_Level",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    }
+  ]
+}

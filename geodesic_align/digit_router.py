@@ -2,25 +2,76 @@
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
+
+from geodesic_align.month_names import TEXT_MONTH_RE
 
 
 _EXTERNAL_REF = re.compile(r"\[[^\]]+\]")
 _CODE = re.compile(r"^[A-Za-z0-9_#-]+$")
 _LETTER = re.compile(r"[A-Za-z]")
 _DIGIT = re.compile(r"\d")
-_DATETIME_CELL = re.compile(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}[ T]\d{1,2}:\d{2}(?::\d{2})?$")
-_DATE_CELL = re.compile(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}$")
-_TIME_CELL = re.compile(r"^\d{1,2}:\d{2}(?::\d{2})?$")
+_DATETIME_CELL = re.compile(r"^(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{4})[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s*[AaPp][Mm])?$")
+_DATE_CELL = re.compile(r"^(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{4})$")
+_TIME_CELL = re.compile(r"^\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s*[AaPp][Mm])?$")
 _INT_CELL = re.compile(r"[+-]?\d+")
 _ID_HEADER = re.compile(r"(?i)(?<![A-Za-z])(?:id|no|po|code|number)(?![A-Za-z])|编号|单号|工号")
 SHORT_CHAR = 16
 ID_UNIQUENESS = 0.8
 LONG_ID_UNIQUENESS = 0.95
 LONG_ID_CHARS = 8
-_EMPTY_WORDS = frozenset({"null", "none", "n/a", "na", "暂无", "-", "--"})
+_EMPTY_WORDS = frozenset({
+    "", "null", "none", "n/a", "na", "nan", "暂无", "无", "空", "缺失", "-", "--",
+    "#n/a", "#na", "nil", "#div/0!", "#ref!", "#name?", "#num!", "#null!", "#value!"
+})
 _DATE_FAMILY = frozenset({"DATETIME_LITERAL", "DATE_LITERAL", "TIME_LITERAL"})
+
+
+
+_DATE_HEADER = re.compile(r"(?i)(?<![A-Za-z])(?:date|time|datetime|timestamp|day|enrollment|trial)(?![A-Za-z])|日期|时间")
+
+
+
+def _clean_numeric_str(raw: str) -> str:
+    """清理币符、千分位及欧式逗号小数，规范化负数。"""
+    clean = raw.replace("\u00a0", " ").strip()
+    clean = clean.replace("¥", "").replace("￥", "").replace("$", "").replace("€", "").replace("£", "").strip()
+    neg = False
+    if clean.startswith("(") and clean.endswith(")"):
+        neg = True
+        clean = clean[1:-1].strip()
+    elif clean.startswith("-"):
+        neg = True
+        clean = clean[1:].strip()
+    clean = clean.replace("¥", "").replace("￥", "").replace("$", "").replace("€", "").replace("£", "").strip()
+    if clean.startswith("(") and clean.endswith(")"):
+        neg = True
+        clean = clean[1:-1].strip()
+    if clean.endswith("%"):
+        clean = clean[:-1].strip()
+    if "." in clean and "," in clean:
+        if clean.rfind(",") > clean.rfind("."):
+            clean = clean.replace(".", "").replace(",", ".")
+        else:
+            clean = clean.replace(",", "")
+    elif "," in clean:
+        parts = clean.split(",")
+        if len(parts) == 2:
+            if parts[0] in ("0", "-0", "+0", "") or len(parts[1]) != 3:
+                clean = clean.replace(",", ".")
+            else:
+                clean = clean.replace(",", "")
+        else:
+            clean = clean.replace(",", "")
+    elif clean.count(".") > 1:
+        dot_parts = clean.split(".")
+        if all(len(p) == 3 for p in dot_parts[1:]):
+            clean = clean.replace(".", "")
+    if neg:
+        clean = "-" + clean
+    return clean
 
 
 
@@ -45,7 +96,7 @@ def extract_cell_physics(text: str) -> str:
         str: EMPTY / FORMULA / DATETIME_LITERAL / DATE_LITERAL / TIME_LITERAL / NUMERIC_SCALAR / STRUCTURED_CODE / NATURAL_TEXT
     """
     # 去掉首尾空白，准备按字符和符号判别
-    raw = str(text).strip()
+    raw = str(text).strip().replace("\u00a0", " ").strip()
     # 得到待判别的格子原文
     # 空字面和哨兵词记为空，不再往下判
     if not raw or raw.lower() in _EMPTY_WORDS:
@@ -59,30 +110,26 @@ def extract_cell_physics(text: str) -> str:
     if _DATETIME_CELL.fullmatch(raw):
         return "DATETIME_LITERAL"
     # 得到带时刻的日期字面
+    txt_m = TEXT_MONTH_RE.fullmatch(raw)
+    if txt_m:
+        if ":" in raw:
+            return "DATETIME_LITERAL"
+        return "DATE_LITERAL"
     if _DATE_CELL.fullmatch(raw):
         return "DATE_LITERAL"
     # 得到纯日期字面
     if _TIME_CELL.fullmatch(raw):
         return "TIME_LITERAL"
     # 得到纯时刻字面
-    # 剥掉币符和千分位，准备试浮点
-    clean = raw.replace("¥", "").replace("￥", "").replace("$", "").replace(",", "")
-    # 得到去掉币符和逗号后的字面
-    if clean.startswith("(") and clean.endswith(")"):
-        clean = clean[1:-1]
-        # 得到去掉会计括号后的字面
-    if clean.endswith("%"):
-        clean = clean[:-1]
-        # 得到去掉百分号后的字面
-    # 能被浮点解析就记为数值标量
+    clean = _clean_numeric_str(raw)
     try:
-        float(clean)
+        val = float(clean)
+        if math.isnan(val) or math.isinf(val):
+            return "EMPTY"
     except ValueError:
-        clean = ""
-        # 得到解析失败，继续看代码模式
+        pass
     else:
         return "NUMERIC_SCALAR"
-        # 得到 NUMERIC_SCALAR
     # 无空格且同时含字母和数字，记为结构化代码
     if _CODE.fullmatch(raw) and _LETTER.search(raw) and _DIGIT.search(raw):
         return "STRUCTURED_CODE"
@@ -200,6 +247,11 @@ def route_column(rows: list[dict[str, str]], label: str) -> ColumnRoute:
     # 得到公式通道
     # 出现两种以上物理族就留在文本，不用过半表决切进数字
     families = {_family(item) for item in physics}
+    # 当出现日期字面与纯数字 (Excel 日期序列号) 混杂时，若日期族占多数或列名具备日期特征，判定为日期列
+    if families <= {"DATETIME", "NUMERIC"}:
+        date_freq = _freq(physics, _DATE_FAMILY)
+        if date_freq >= 0.5 or (date_freq > 0.0 and _DATE_HEADER.search(label)):
+            families = {"DATETIME"}
     # 得到这一列出现过的物理族
     if len(families) != 1:
         longest = max(len(item) for item in raws)

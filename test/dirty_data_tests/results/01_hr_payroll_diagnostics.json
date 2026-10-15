@@ -1,0 +1,89 @@
+{
+  "suite_id": "01_hr_payroll",
+  "domain": "HR Compensation",
+  "dirty_pattern": "Currency symbols ($ / ¥), negative in parentheses (500.00), thousand commas",
+  "total_columns": 6,
+  "role_breakdown": {
+    "data": 6
+  },
+  "elapsed_ms": {
+    "map": 2.5045000002137385,
+    "text": 11831.087099999422
+  },
+  "sediment_records": [],
+  "sediment_dim": 0,
+  "decisions": [
+    {
+      "input_label": "Employee_ID",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_01_hr_payroll",
+      "field": "Employee_ID",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": true,
+      "warnings": []
+    },
+    {
+      "input_label": "Staff_Name",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_01_hr_payroll",
+      "field": "Staff_Name",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Base_Salary",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_01_hr_payroll",
+      "field": "Base_Salary",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Performance_Bonus",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_01_hr_payroll",
+      "field": "Performance_Bonus",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Tax_Deduction",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_01_hr_payroll",
+      "field": "Tax_Deduction",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Gross_Pay",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_01_hr_payroll",
+      "field": "Gross_Pay",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    }
+  ]
+}

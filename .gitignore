@@ -2,6 +2,7 @@ llm_lmstudio/user.toml
 llm_cli/lm_studio/user.toml
 llm_cli/lm_studio/mcp_ready.json
 *.py[cod]
+__pycache__/
 .venv/
 
 # Local install profile (accelerator / ocr flags from bootup/bootstrap_install.py)
@@ -54,11 +55,17 @@ fasttext_models/**
 # llama-cpp wheel probe artifacts (manual install debugging)
 **/_wheel_probe*/
 
-# 测试文件夹和测试脚本（排除所有测试代码和临时文件）
+# 测试文件夹和测试脚本（仅放行 dirty_data_tests，其他测试文件夹继续屏蔽）
 tests/
-test/
+test/*
+!test/dirty_data_tests/
+!test/dirty_data_tests/**
 test_*.py
+!test/dirty_data_tests/**
 *_test.py
+!test/dirty_data_tests/**
+**/__pycache__/**
+*.py[cod]
 _tmp*
 plans/
 

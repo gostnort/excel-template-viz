@@ -1,0 +1,85 @@
+determiner = "\t"
+work_sheet = "TelemetryTemplate"
+print_sheet = ""
+use_independent_db = true
+db_id = "Sensor_ID"
+
+[sources]
+src_04_telemetry = 'E:\my_github\excel-template-viz\test\dirty_data_tests\datasets\[04_telemetry_source.xlsx]SensorTelemetry'
+
+[[input_section]]
+input_area = "A2:F2"
+move_to = "down"
+offset = 1
+
+[[fields]]
+Input_label = "Sensor_ID"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_04_telemetry"
+field = "Sensor_ID"
+regex = ''
+formula = ""
+index = 0
+id = true
+
+[[fields]]
+Input_label = "Device_Model"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_04_telemetry"
+field = "Device_Model"
+regex = ''
+formula = ""
+index = 1
+id = false
+
+[[fields]]
+Input_label = "Temperature_C"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_04_telemetry"
+field = "Temperature_C"
+regex = ''
+formula = ""
+index = 2
+id = false
+
+[[fields]]
+Input_label = "Pressure_Bar"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_04_telemetry"
+field = "Pressure_Bar"
+regex = ''
+formula = ""
+index = 3
+id = false
+
+[[fields]]
+Input_label = "Humidity_Pct"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_04_telemetry"
+field = "Humidity_Pct"
+regex = ''
+formula = ""
+index = 4
+id = false
+
+[[fields]]
+Input_label = "Battery_V"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_04_telemetry"
+field = "Battery_V"
+regex = ''
+formula = ""
+index = 5
+id = false

@@ -112,8 +112,10 @@ def _core_token(samples: list[LineageSample]) -> str:
     all_targets = "".join(item.target_value for item in samples)
     if all_targets.isdigit():
         return r"(\d+)"
-    if re.fullmatch(r"[A-Za-z0-9_#-]+", all_targets):
-        return r"([A-Za-z0-9_#-]+)"
+    if all(re.fullmatch(r"[+-]?\d+(?:\.\d+)?", item.target_value) for item in samples):
+        return r"([+-]?\d+(?:\.\d+)?)"
+    if re.fullmatch(r"[A-Za-z0-9_.#-]+", all_targets):
+        return r"([A-Za-z0-9_.#-]+)"
     return r"([^,\s\]\}\)\>]+)"
 
 
@@ -141,11 +143,16 @@ def symbolic_anchored_synthesizer(samples: list[LineageSample]) -> str | None:
     # 中文注释: 具名引导词，例如 SensorRef: / Code#
     word_anchors: list[str] = []
     for prefix in prefixes:
-        matched = re.search(r"([A-Za-z0-9_]+[:#=\-]|\[[A-Za-z0-9_]+[:\s])\s*$", prefix)
+        matched = re.search(r"([A-Za-z0-9_]+[:#=\-\[]+[\s]*[$€¥£￥]*|\[[A-Za-z0-9_]+[:\s]|[$€¥£￥]+)\s*$", prefix)
         if matched:
             word_anchors.append(matched.group(1).strip())
-    if len(word_anchors) == len(samples) and len(set(word_anchors)) == 1:
-        candidates.append(re.escape(word_anchors[0]) + r"\s*" + core_token)
+    if len(word_anchors) == len(samples):
+        if len(set(word_anchors)) == 1:
+            candidates.append(re.escape(word_anchors[0]) + r"\s*" + core_token)
+        elif len(set(word_anchors)) > 1:
+            alt = "(?:" + "|".join(re.escape(w) for w in sorted(set(word_anchors))) + ")"
+            candidates.append(alt + r"\s*" + core_token)
+            candidates.append(alt + r"\s*\[?" + core_token + r"\]?")
     # 中文注释: 成对定界符，左右括号本身必须 re.escape
     for left, right in (("[", "]"), ("(", ")"), ("<", ">"), ("{", "}")):
         if all(prefix.rstrip().endswith(left) for prefix in prefixes) and all(suffix.lstrip().startswith(right) for suffix in suffixes):
@@ -154,6 +161,14 @@ def symbolic_anchored_synthesizer(samples: list[LineageSample]) -> str | None:
     for sep in (r":\s*", r"#\s*", r"-\s*", r"\s+"):
         if all(re.search(sep + r"$", prefix) for prefix in prefixes):
             candidates.append(sep + core_token)
+    # 中文注释: 后缀单位或界定词，例如 sqm / k / USD
+    suffix_anchors: list[str] = []
+    for suffix in suffixes:
+        matched = re.match(r"^\s*([A-Za-z0-9_]+|[A-Za-z0-9_]*[#=\-\/])", suffix)
+        if matched:
+            suffix_anchors.append(matched.group(1).strip())
+    if len(suffix_anchors) == len(samples) and len(set(suffix_anchors)) == 1 and suffix_anchors[0]:
+        candidates.append(core_token + r"\s*" + re.escape(suffix_anchors[0]))
     candidates.append(rf"\b{core_token}\b")
     for pattern in candidates:
         report = verify_regex_across_lineage(pattern, samples)
@@ -362,6 +377,15 @@ def gemma4_e4b_synthesizer(
 
 
 
+def _header_similarity(a: str, b: str) -> float:
+    """列名相似度：词级 Jaccard (高权重) 叠加字符余弦 (打破平局)。"""
+    tok_a = set(re.findall(r"[A-Za-z0-9\u4e00-\u9fff]+", a.lower()))
+    tok_b = set(re.findall(r"[A-Za-z0-9\u4e00-\u9fff]+", b.lower()))
+    jaccard = len(tok_a & tok_b) / len(tok_a | tok_b) if tok_a | tok_b else 0.0
+    from geodesic_align.digit_processor import _header_cos
+    return 10.0 * jaccard + _header_cos(a, b)
+
+
 def deduce_regex_mapping(
     dest: TableView,
     sources: list[TableView],
@@ -384,6 +408,10 @@ def deduce_regex_mapping(
     superset_list = detect_superset_columns(dest, sources, lineage, decision.input_label)
     if not superset_list:
         return decision
+    superset_list.sort(
+        key=lambda item: _header_similarity(decision.input_label, item[1]),
+        reverse=True,
+    )
     for table, src_field, samples in superset_list:
         pattern = symbolic_anchored_synthesizer(samples)
         origin: Literal["symbolic", "gemma4_verified"] = "symbolic"

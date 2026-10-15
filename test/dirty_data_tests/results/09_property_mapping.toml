@@ -1,0 +1,85 @@
+determiner = "\t"
+work_sheet = "ValuationModel"
+print_sheet = ""
+use_independent_db = true
+db_id = "Property_ID"
+
+[sources]
+src_09_property = 'E:\my_github\excel-template-viz\test\dirty_data_tests\datasets\[09_property_source.xlsx]MLSProperties'
+
+[[input_section]]
+input_area = "A2:F2"
+move_to = "down"
+offset = 1
+
+[[fields]]
+Input_label = "Property_ID"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_09_property"
+field = "Property_ID"
+regex = ''
+formula = ""
+index = 0
+id = true
+
+[[fields]]
+Input_label = "Area_SQM"
+value_from_label = "down"
+value_offset = 1
+cell_role = "regex"
+source = "src_09_property"
+field = "Floor_Area_Str"
+regex = '(\d+)\s*sqm'
+formula = ""
+index = 1
+id = false
+
+[[fields]]
+Input_label = "Price_Range_k"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_09_property"
+field = "Price_Range_k"
+regex = ''
+formula = ""
+index = 2
+id = false
+
+[[fields]]
+Input_label = "List_Price_USD"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_09_property"
+field = "List_Price_USD"
+regex = ''
+formula = ""
+index = 3
+id = false
+
+[[fields]]
+Input_label = "Total_Units"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_09_property"
+field = "Total_Units"
+regex = ''
+formula = ""
+index = 4
+id = false
+
+[[fields]]
+Input_label = "Unit_Price"
+value_from_label = "down"
+value_offset = 1
+cell_role = "formula"
+source = ""
+field = ""
+regex = ''
+formula = "=$D2 / $E2"
+index = -1
+id = false

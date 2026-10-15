@@ -1,0 +1,77 @@
+{
+  "suite_id": "05_waybill",
+  "domain": "Cross-border Logistics",
+  "dirty_pattern": "Shuffled topological row orders, orphan source rows, non-1:1 matching",
+  "total_columns": 5,
+  "role_breakdown": {
+    "data": 5
+  },
+  "elapsed_ms": {
+    "map": 1.7564000008860603,
+    "text": 910.4833000019426
+  },
+  "sediment_records": [],
+  "sediment_dim": 0,
+  "decisions": [
+    {
+      "input_label": "Waybill_ID",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_05_waybill",
+      "field": "Waybill_ID",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": true,
+      "warnings": []
+    },
+    {
+      "input_label": "Origin_Airport",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_05_waybill",
+      "field": "Origin_Airport",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Dest_Airport",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_05_waybill",
+      "field": "Dest_Airport",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Weight_kg",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_05_waybill",
+      "field": "Weight_kg",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Declared_USD",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_05_waybill",
+      "field": "Declared_USD",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    }
+  ]
+}

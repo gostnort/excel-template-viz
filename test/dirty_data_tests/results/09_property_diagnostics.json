@@ -1,0 +1,91 @@
+{
+  "suite_id": "09_property",
+  "domain": "Real Estate Listings",
+  "dirty_pattern": "Mixed dimension strings (120sqm), price ranges (100k-150k)",
+  "total_columns": 6,
+  "role_breakdown": {
+    "data": 4,
+    "regex": 1,
+    "formula": 1
+  },
+  "elapsed_ms": {
+    "map": 4.094100004294887,
+    "text": 0.8323000001837499
+  },
+  "sediment_records": [],
+  "sediment_dim": 0,
+  "decisions": [
+    {
+      "input_label": "Property_ID",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_09_property",
+      "field": "Property_ID",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": true,
+      "warnings": []
+    },
+    {
+      "input_label": "Area_SQM",
+      "cell_role": "regex",
+      "klass": "regex",
+      "source": "src_09_property",
+      "field": "Floor_Area_Str",
+      "formula": "",
+      "regex": "(\\d+)\\s*sqm",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Price_Range_k",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_09_property",
+      "field": "Price_Range_k",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "List_Price_USD",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_09_property",
+      "field": "List_Price_USD",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Total_Units",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_09_property",
+      "field": "Total_Units",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Unit_Price",
+      "cell_role": "formula",
+      "klass": "derived",
+      "source": "",
+      "field": "",
+      "formula": "=$D2 / $E2",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    }
+  ]
+}

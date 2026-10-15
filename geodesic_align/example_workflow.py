@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import sys
 import time
 from datetime import date, datetime
@@ -10,6 +11,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 from geodesic_align.digit_processor import TableView, _excel_col, id_lineage
+from geodesic_align.digit_router import _EMPTY_WORDS
 from geodesic_align.emit_mapping import (
     MappingDecision,
     build_sources,
@@ -20,7 +22,6 @@ from geodesic_align.emit_mapping import (
 from geodesic_align.text_processor import run_text_align
 
 
-_EMPTY = frozenset({"", "null", "none", "n/a", "na"})
 _SAMPLE_DIR = Path(__file__).resolve().parents[1] / "docs" / "sample"
 _SOURCE_BOOK = "执法堂业绩.xlsx"
 _DEST_BOOK = "sample_template.xlsx"
@@ -39,7 +40,7 @@ def is_empty(text: str) -> bool:
     输出:
         bool
     """
-    return str(text).strip().lower() in _EMPTY
+    return str(text).strip().replace("\u00a0", " ").strip().lower() in _EMPTY_WORDS
 
 
 
@@ -54,13 +55,15 @@ def cell_text(value: object) -> str:
     """
     if value is None:
         return ""
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return ""
     if isinstance(value, datetime):
         if value.hour or value.minute or value.second:
             return value.strftime("%Y-%m-%d %H:%M:%S")
         return value.strftime("%Y-%m-%d")
     if isinstance(value, date):
         return value.strftime("%Y-%m-%d")
-    return str(value).strip()
+    return str(value).strip().replace("\u00a0", " ").strip()
 
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -21,6 +22,7 @@ MAX_LENGTH = 512
 _CJK_LO = 0x4E00
 _CJK_HI = 0x9FFF
 _loaded: dict[str, "MaskedBert"] = {}
+_load_lock = threading.Lock()
 
 
 
@@ -214,14 +216,19 @@ class MaskedBert:
 def load_masked_bert(model_id: str) -> MaskedBert:
     """
     函数名: load_masked_bert
-    作用: 取出已缓存的 CPU 模型
+    作用: 线程安全地取出已缓存的 CPU 模型，防止并发加载竞争
     输入:
         model_id (str): 模型目录名
     输出:
         MaskedBert
     """
     found = _loaded.get(model_id)
-    if found is None:
-        found = MaskedBert(model_id)
-        _loaded[model_id] = found
-    return found
+    if found is not None:
+        return found
+    with _load_lock:
+        found = _loaded.get(model_id)
+        if found is None:
+            found = MaskedBert(model_id)
+            _loaded[model_id] = found
+        return found
+

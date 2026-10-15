@@ -1,0 +1,85 @@
+determiner = "\t"
+work_sheet = "TrialRegistry"
+print_sheet = ""
+use_independent_db = true
+db_id = "Subject_ID"
+
+[sources]
+src_02_clinical = 'E:\my_github\excel-template-viz\test\dirty_data_tests\datasets\[02_clinical_source.xlsx]ClinicalTrials'
+
+[[input_section]]
+input_area = "A2:F2"
+move_to = "down"
+offset = 1
+
+[[fields]]
+Input_label = "Subject_ID"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_02_clinical"
+field = "Subject_ID"
+regex = ''
+formula = ""
+index = 0
+id = true
+
+[[fields]]
+Input_label = "Patient_Name"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_02_clinical"
+field = "Patient_Name"
+regex = ''
+formula = ""
+index = 1
+id = false
+
+[[fields]]
+Input_label = "Trial_Arm"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_02_clinical"
+field = "Trial_Arm"
+regex = ''
+formula = ""
+index = 2
+id = false
+
+[[fields]]
+Input_label = "Dosage_mg"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_02_clinical"
+field = "Dosage_mg"
+regex = ''
+formula = ""
+index = 3
+id = false
+
+[[fields]]
+Input_label = "Enrollment_Date"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_02_clinical"
+field = "Enrollment_Date"
+regex = ''
+formula = ""
+index = 4
+id = false
+
+[[fields]]
+Input_label = "Investigator_Signoff"
+value_from_label = "down"
+value_offset = 1
+cell_role = "input"
+source = ""
+field = ""
+regex = ''
+formula = ""
+index = -1
+id = false

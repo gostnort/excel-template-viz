@@ -1,0 +1,89 @@
+{
+  "suite_id": "07_crm_leads",
+  "domain": "Sales Leads",
+  "dirty_pattern": "Header distortions (leading/trailing whitespace, snake_case, typos)",
+  "total_columns": 6,
+  "role_breakdown": {
+    "data": 6
+  },
+  "elapsed_ms": {
+    "map": 2.471499996318016,
+    "text": 1208.8742000050843
+  },
+  "sediment_records": [],
+  "sediment_dim": 0,
+  "decisions": [
+    {
+      "input_label": "Lead_ID",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_07_crm_leads",
+      "field": "Lead_ID",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": true,
+      "warnings": []
+    },
+    {
+      "input_label": "First Name",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_07_crm_leads",
+      "field": "firts_name",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Last Name",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_07_crm_leads",
+      "field": "last_name",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Company Name",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_07_crm_leads",
+      "field": "Company_Name",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Deal Amount",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_07_crm_leads",
+      "field": "deal_amount",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Contact Email",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_07_crm_leads",
+      "field": "contact_email",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    }
+  ]
+}

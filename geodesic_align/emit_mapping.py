@@ -88,6 +88,10 @@ def _decision_from_digit(end: DigitEnd) -> MappingDecision:
         role = "formula"
         source = ""
         field_name = ""
+        if len(end.operand_cols) == 2:
+            col_a, col_b = end.operand_cols[0], end.operand_cols[1]
+            op = end.formula_op
+            formula = f"=${_excel_col(col_a)}{end.excel_row} {op} ${_excel_col(col_b)}{end.excel_row}"
     elif end.klass == "derived" and end.physical == "google":
         role = "data"
         closure = end.closure
