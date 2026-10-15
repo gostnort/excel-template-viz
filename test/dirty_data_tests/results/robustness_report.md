@@ -1,10 +1,10 @@
 # Geodesic Alignment Dirty Data Benchmark: Robustness & Diagnostics Report
 
 ## Executive Summary
-- **Benchmark Suites Executed**: 10 / 10
-- **Total Destination Columns Evaluated**: 54
-- **Clean Recovery Rate (Carry / Regex / Formula)**: 51 / 54 (94.4%)
-- **Graceful Fallback Rate (Input / Outspan)**: 3 / 54 (5.6%)
+- **Benchmark Suites Executed**: 11 / 11
+- **Total Destination Columns Evaluated**: 64
+- **Clean Recovery Rate (Carry / Regex / Formula)**: 59 / 64 (92.2%)
+- **Graceful Fallback Rate (Input / Outspan)**: 5 / 64 (7.8%)
 - **Uncaught Exceptions / Numerical Crashes**: 0 (100% Stability across SDE & SVD steps)
 
 ## Domain Matrix & Classification Breakdown
@@ -21,6 +21,7 @@
 | `08_education` | University Grades | Composite formula derivations (First_Name & Last_Name), grade score addition | 4 | 2 | 0 | 2 | 0 | 100.0% |
 | `09_property` | Real Estate Listings | Mixed dimension strings (120sqm), price ranges (100k-150k) | 6 | 4 | 1 | 1 | 0 | 100.0% |
 | `10_factory_qc` | Manufacturing QC | Intentional pure outspan / manual sign-off columns with zero source lineage | 6 | 4 | 0 | 0 | 2 | 66.7% |
+| `11_real_estate_chart` | Real Estate Valuation & Analytics | Mixed area text (120sqm), name combination formula, outspan inspector signoffs | 10 | 4 | 1 | 3 | 2 | 80.0% |
 
 ## Fallback & Topological Behavior Analysis
 

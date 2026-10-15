@@ -1,0 +1,134 @@
+determiner = "\t"
+work_sheet = "11_real_estate_chart"
+print_sheet = ""
+use_independent_db = true
+db_id = "Parcel_ID"
+
+[sources]
+src_11_real_estate_chart = 'E:\my_github\excel-template-viz\test\dirty_data_tests\datasets\[11_real_estate_chart_source.xlsx]ListingFeed'
+
+[[input_section]]
+input_area = "A2:J2"
+move_to = "down"
+offset = 1
+
+[[fields]]
+Input_label = "Parcel_ID"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_11_real_estate_chart"
+field = "Parcel_ID"
+regex = ''
+formula = ""
+index = 0
+id = true
+
+[[fields]]
+Input_label = "District"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_11_real_estate_chart"
+field = "distrct_name"
+regex = ''
+formula = ""
+index = 1
+id = false
+
+[[fields]]
+Input_label = "Closing_Date"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_11_real_estate_chart"
+field = "Closing_Date"
+regex = ''
+formula = ""
+index = 2
+id = false
+
+[[fields]]
+Input_label = "Area_SQM"
+value_from_label = "down"
+value_offset = 1
+cell_role = "regex"
+source = "src_11_real_estate_chart"
+field = "Floor_Area_Str"
+regex = '(\d+)\s*sqm'
+formula = ""
+index = 3
+id = false
+
+[[fields]]
+Input_label = "List_Price"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "src_11_real_estate_chart"
+field = "list_price"
+regex = ''
+formula = ""
+index = 4
+id = false
+
+# multi_source_derived_synthesis:src_11_real_estate_chart.Buyer_First,src_11_real_estate_chart.Buyer_Last
+[[fields]]
+Input_label = "Buyer_Name"
+value_from_label = "down"
+value_offset = 1
+cell_role = "formula"
+source = ""
+field = ""
+regex = ''
+formula = "='{src_11_real_estate_chart}'!$F4 & \" \" & '{src_11_real_estate_chart}'!$G4"
+index = -1
+id = false
+
+[[fields]]
+Input_label = "Area_vs_Mean"
+value_from_label = "down"
+value_offset = 1
+cell_role = "formula"
+source = ""
+field = ""
+regex = ''
+formula = ""
+index = -1
+id = false
+
+[[fields]]
+Input_label = "Price_Share"
+value_from_label = "down"
+value_offset = 1
+cell_role = "formula"
+source = ""
+field = ""
+regex = ''
+formula = ""
+index = -1
+id = false
+
+[[fields]]
+Input_label = "Appraiser_Signoff"
+value_from_label = "down"
+value_offset = 1
+cell_role = "input"
+source = ""
+field = ""
+regex = ''
+formula = ""
+index = -1
+id = false
+
+[[fields]]
+Input_label = "Compliance_Note"
+value_from_label = "down"
+value_offset = 1
+cell_role = "input"
+source = ""
+field = ""
+regex = ''
+formula = ""
+index = -1
+id = false

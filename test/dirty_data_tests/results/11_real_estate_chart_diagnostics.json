@@ -1,0 +1,155 @@
+{
+  "suite_id": "11_real_estate_chart",
+  "domain": "Real Estate Valuation & Analytics",
+  "dirty_pattern": "Mixed area text (120sqm), name combination formula, outspan inspector signoffs",
+  "total_columns": 10,
+  "role_breakdown": {
+    "data": 4,
+    "regex": 1,
+    "formula": 3,
+    "input": 2
+  },
+  "elapsed_ms": {
+    "map": 29.243899996799883,
+    "text": 15921.238200004154
+  },
+  "sediment_records": [
+    {
+      "epoch": 1,
+      "col": "Appraiser_Signoff",
+      "rho_before": 0.6897391008229035,
+      "k_dim": 73
+    },
+    {
+      "epoch": 2,
+      "col": "Compliance_Note",
+      "rho_before": 0.6990892544464714,
+      "k_dim": 77
+    }
+  ],
+  "sediment_dim": 77,
+  "decisions": [
+    {
+      "input_label": "Parcel_ID",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_11_real_estate_chart",
+      "field": "Parcel_ID",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": true,
+      "warnings": []
+    },
+    {
+      "input_label": "District",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_11_real_estate_chart",
+      "field": "distrct_name",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Closing_Date",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_11_real_estate_chart",
+      "field": "Closing_Date",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Area_SQM",
+      "cell_role": "regex",
+      "klass": "regex",
+      "source": "src_11_real_estate_chart",
+      "field": "Floor_Area_Str",
+      "formula": "",
+      "regex": "(\\d+)\\s*sqm",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "List_Price",
+      "cell_role": "data",
+      "klass": "carry",
+      "source": "src_11_real_estate_chart",
+      "field": "list_price",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Buyer_Name",
+      "cell_role": "formula",
+      "klass": "derived",
+      "source": "",
+      "field": "",
+      "formula": "='{src_11_real_estate_chart}'!$F4 & \" \" & '{src_11_real_estate_chart}'!$G4",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": [
+        "multi_source_derived_synthesis:src_11_real_estate_chart.Buyer_First,src_11_real_estate_chart.Buyer_Last"
+      ]
+    },
+    {
+      "input_label": "Area_vs_Mean",
+      "cell_role": "formula",
+      "klass": "internal_formula",
+      "source": "",
+      "field": "",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Price_Share",
+      "cell_role": "formula",
+      "klass": "internal_formula",
+      "source": "",
+      "field": "",
+      "formula": "",
+      "regex": "",
+      "confidence": 1.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Appraiser_Signoff",
+      "cell_role": "input",
+      "klass": "outspan",
+      "source": "",
+      "field": "",
+      "formula": "",
+      "regex": "",
+      "confidence": 0.0,
+      "is_id": false,
+      "warnings": []
+    },
+    {
+      "input_label": "Compliance_Note",
+      "cell_role": "input",
+      "klass": "outspan",
+      "source": "",
+      "field": "",
+      "formula": "",
+      "regex": "",
+      "confidence": 0.0,
+      "is_id": false,
+      "warnings": []
+    }
+  ]
+}

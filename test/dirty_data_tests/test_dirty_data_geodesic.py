@@ -118,6 +118,15 @@ SUITE_CONFIGS = [
         "src_sheet": "BatchProduction",
         "tpl_sheet": "QualityAudit",
     },
+    {
+        "id": "11_real_estate_chart",
+        "domain": "Real Estate Valuation & Analytics",
+        "dirty_pattern": "Mixed area text (120sqm), name combination formula, outspan inspector signoffs",
+        "src_file": "11_real_estate_chart_source.xlsx",
+        "tpl_file": "11_real_estate_chart.xlsx",
+        "src_sheet": "ListingFeed",
+        "tpl_sheet": "11_real_estate_chart",
+    },
 ]
 
 
@@ -360,6 +369,24 @@ def test_10_factory_qc_stress() -> None:
     assert diag["sediment_dim"] >= 1
 
 
+def test_11_real_estate_chart_stress() -> None:
+    """房产全景分析领域：包含量纲正则、错别字表头、姓名同态拼接、均值与占比公式以及手工留白项。"""
+    cfg = next(c for c in SUITE_CONFIGS if c["id"] == "11_real_estate_chart")
+    diag = _run_single_benchmark(cfg)
+    decisions = {d["input_label"]: d for d in diag["decisions"]}
+    assert decisions["Parcel_ID"]["cell_role"] == "data"
+    assert decisions["Parcel_ID"]["is_id"] is True
+    assert decisions["District"]["cell_role"] == "data"
+    assert decisions["District"]["field"] == "distrct_name"
+    assert decisions["Area_SQM"]["cell_role"] == "regex"
+    assert "sqm" in decisions["Area_SQM"]["regex"]
+    assert decisions["Buyer_Name"]["cell_role"] == "formula"
+    assert "&" in decisions["Buyer_Name"]["formula"]
+    assert decisions["Appraiser_Signoff"]["cell_role"] == "input"
+    assert decisions["Compliance_Note"]["cell_role"] == "input"
+    assert len(diag["sediment_records"]) >= 2
+
+
 @pytest.fixture(scope="session", autouse=True)
 def generate_summary_report():
     """在所有测试执行完毕后，统一生成全量鲁棒性与诊断量化报告。"""
@@ -387,7 +414,7 @@ def generate_summary_report():
         "# Geodesic Alignment Dirty Data Benchmark: Robustness & Diagnostics Report",
         "",
         "## Executive Summary",
-        f"- **Benchmark Suites Executed**: {len(all_diags)} / 10",
+        f"- **Benchmark Suites Executed**: {len(all_diags)} / {len(SUITE_CONFIGS)}",
         f"- **Total Destination Columns Evaluated**: {total_cols}",
         f"- **Clean Recovery Rate (Carry / Regex / Formula)**: {clean_recovered} / {total_cols} ({recovery_rate:.1f}%)",
         f"- **Graceful Fallback Rate (Input / Outspan)**: {total_input} / {total_cols} ({fallback_rate:.1f}%)",
