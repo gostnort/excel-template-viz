@@ -61,9 +61,6 @@ test/*
 !test/dirty_data_tests/
 !test/dirty_data_tests/**
 test_*.py
-!test/dirty_data_tests/**
-*_test.py
-!test/dirty_data_tests/**
 **/__pycache__/**
 *.py[cod]
 _tmp*
