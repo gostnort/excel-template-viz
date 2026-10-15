@@ -4,91 +4,149 @@ work_sheet = "Input_sheet"
 print_sheet = "Print_sheet"
 use_independent_db = true
 
-# 外部数据源；路径可为本地文件、网页链接或 Google Sheet
-# 首次生成时写入空值 ""，真实路径由专用配置页写入后再落盘
-[[sources]]
-source1 = 'E:\my_github\excel-template-viz\docs\sample\执法堂业绩.xlsx'
+# ==============================================================================
+# 外部数据源配置规范说明：
+# 本地 Excel 数据源 与 远程 Google Sheet 数据源采用两套截然不同的物理结构：
+#
+# 【结构 1：本地 Excel 数据源 (Local Excel Source)】
+# - 语法规范：采用 Excel 原生外部引用语法单字符串 '<文件所在目录>\[<工作簿文件名>]<工作表名>'
+# - 示例：
+#   source1 = 'E:\my_github\excel-template-viz\docs\sample\[执法堂业绩.xlsx]sheet1'
+# - 逻辑：Excel 自身的文件物理路径天然支持用中括号 '[]' 区分文件名与工作表名，单字符串即可闭环。
+#
+# 【结构 2：远程 Google Sheet 数据源 (Remote Google Source)】
+# - 核心原则：Google URL 绝不随任何计划改动而改动！必须是 100% 真实、合法、浏览器/API 可直连的原样 URL。
+#   严禁在 URL 内部篡改、插入方括号或在 URL 字符串内部乱拼字段。
+# - 语法规范：URL 本身由 "" 完整闭合包裹，而 remote source 的 sheet name 只能紧跟在 "" URL 的后面。
+# - 采用数组二元组：["<真实原样Google_URL>", "<工作表名>"]
+# - 示例（以真实可访问的现网 frozen_lot 链接为例）：
+#   source_remote = [
+#       "https://docs.google.com/spreadsheets/d/1XdaRK0cDnet54KzDUiSrpl_xcu4vOMSYacdipDXT14c/edit?gid=0#gid=0",
+#       "Containers"
+#   ]
+#
+# 后续 LLM / 编译器读取规则：
+# 1. 若值为单字符串：识别为本地 Excel 源，解析路径、[文件名] 与工作表名；
+# 2. 若值为二元组：第 1 项为纯净原样的 Google Sheet URL，第 2 项为目标工作表名（sheet name）。
+# ==============================================================================
+[sources]
+source1 = 'E:\my_github\excel-template-viz\docs\sample\[执法堂业绩.xlsx]sheet1'
+source2 = 'E:\my_github\excel-template-viz\docs\sample\[执法堂业绩.xlsx]sheet2'
 
-# 输入区段（有且仅有一条）
+# 真实 Google Sheet 远程端点范例（真实可用，供日后 LLM / 编译系统识别远程数据源结构参考）：
+source_remote = [
+    "https://docs.google.com/spreadsheets/d/1XdaRK0cDnet54KzDUiSrpl_xcu4vOMSYacdipDXT14c/edit?gid=0#gid=0",
+    "Containers"
+]
+
+# 输入区段（有且仅有一条，覆盖 A 列至 J 列共 10 个字段）
 [[input_section]]
-input_area = "A2:G2"
+input_area = "A2:J2"
 move_to = "down"
 offset = 1
 
-# 字段映射：每个模板列一个 [[fields]] 表项
+# ==============================================================================
+# 字段映射表：cell_role 决定数据流形态
+# - "data"    : 直接从 source.field 复制
+# - "regex"   : 从 source.field 读取后走 Python 正则提取
+# - "formula" : 公式格（内部公式由 Excel 自身计算写回跳过；外部公式由 formula 键指定）
+# - "input"   : 纯人工手填（无外部源）
+# ==============================================================================
+
 [[fields]]
 Input_label = "ID#"
 value_from_label = "down"
 value_offset = 1
+cell_role = "data"
+source = "source1"
 field = "ID"
-source_file = "source1"
-source_sheet = "sheet1"
 index = 0
-regex = ""
 id = true
 
+[[fields]]
+Input_label = "Last name"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "source1"
+field = "Last name"
+index = 1
+id = false
+
+[[fields]]
+Input_label = "First name"
+value_from_label = "down"
+value_offset = 1
+cell_role = "data"
+source = "source1"
+field = "First name"
+index = 2
+id = false
+
+# 跨外部源派生公式（由 source1 宏替换展开为标准 Excel 外链公式）
+[[fields]]
+Input_label = "name combination"
+value_from_label = "down"
+value_offset = 1
+cell_role = "formula"
+source = "source1"
+formula = "='{source1}'!$C$4 & '{source1}'!$B$4"
+index = -1
+id = false
+
+# 模板内部原生公式（由模板 C 列与 B 列闭环计算，无需外部源干预，写回跳过）
 [[fields]]
 Input_label = "Name"
 value_from_label = "down"
 value_offset = 1
-field = "name"
-source_file = "source1"
-source_sheet = "sheet1"
-index = 1
-regex = ""
+cell_role = "formula"
+index = -1
 id = false
 
 [[fields]]
 Input_label = "Recent Issue"
 value_from_label = "down"
 value_offset = 1
+cell_role = "data"
+source = "source2"
 field = "issues"
-source_file = "source1"
-source_sheet = "sheet2"
-index = 2
-regex = ""
+index = 3
 id = false
 
 [[fields]]
 Input_label = "Report Date"
 value_from_label = "down"
 value_offset = 1
+cell_role = "regex"
+source = "source2"
 field = "issues"
-source_file = "source1"
-source_sheet = "sheet2"
-index = 2
 regex = '\d+/\d+/\d+'
+index = 4
 id = false
 
 [[fields]]
 Input_label = "Discipline"
 value_from_label = "down"
 value_offset = 1
+cell_role = "input"
 field = ""
-source_file = ""
-source_sheet = ""
 index = -1
-regex = ""
 id = false
 
 [[fields]]
 Input_label = "Effective_Date"
 value_from_label = "down"
 value_offset = 1
+cell_role = "input"
 field = ""
-source_file = ""
-source_sheet = ""
 index = -1
-regex = ""
 id = false
 
 [[fields]]
 Input_label = "Sign"
 value_from_label = "down"
 value_offset = 1
+cell_role = "input"
 field = ""
-source_file = ""
-source_sheet = ""
 index = -1
-regex = ""
 id = false

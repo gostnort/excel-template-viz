@@ -12,6 +12,7 @@ PLATFORM_ROOT = Path(__file__).resolve().parent
 USER_TOML = PLATFORM_ROOT / "user.toml"
 EXAMPLE_TOML = PLATFORM_ROOT / "user.toml.example"
 DEFAULT_API_URL = "http://localhost:9999"
+DEFAULT_MODEL = "gemma-4-e4b-it-coder"
 DEFAULT_THINKING_BUDGET = 512
 
 
@@ -27,7 +28,7 @@ def _empty_data() -> dict[str, Any]:
     return {
         "api_url": DEFAULT_API_URL,
         "api_token": "",
-        "model": "",
+        "model": DEFAULT_MODEL,
         "model_history": [],
     }
 
@@ -49,7 +50,7 @@ def load_user_config() -> dict[str, Any]:
             data.update(dict(parsed))
     url = str(data.get("api_url") or DEFAULT_API_URL).strip().rstrip("/")
     token = str(data.get("api_token") or "").strip()
-    model = str(data.get("model") or "").strip()
+    model = str(data.get("model") or "").strip() or DEFAULT_MODEL
     history_raw = data.get("model_history") or []
     history: list[str] = []
     if isinstance(history_raw, list):

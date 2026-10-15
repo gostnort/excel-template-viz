@@ -15,13 +15,13 @@
 ```toml
 api_url = "http://localhost:9999"
 api_token = ""
-model = ""
-model_history = []
+model = "gemma-4-e4b-it-coder"
+model_history = ["gemma-4-e4b-it-coder"]
 ```
 
 - `api_url`：LM Studio Developer 服务地址（本机默认 `http://localhost:9999`）
 - `api_token`：若未开鉴权则留空
-- `model`：模型 `key`（如 `google/gemma-4-26b-a4b`），与顶栏可编辑名称相同
+- `model`：模型 `key`（客户机默认 `gemma-4-e4b-it-coder`；12B 级不要当默认）
 - `model_history`：曾输入过的名称
 
 ## REST

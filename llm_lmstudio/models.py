@@ -4,38 +4,69 @@ from __future__ import annotations
 
 from typing import Any
 
-from llm_lmstudio.client import encode_model_path, request_json
+from llm_lmstudio.client import request_json
 from llm_lmstudio.config import load_user_config, save_user_config
 
 
 LOAD_TIMEOUT = 300.0
 QUERY_TIMEOUT = 20.0
+_known_loaded: set[str] = set()
+_catalog: list[dict[str, Any]] | None = None
 
 
-
-def list_models() -> list[dict[str, Any]]:
+def list_models(*, refresh: bool = False) -> list[dict[str, Any]]:
     """
     函数名: list_models
-    作用: GET /api/v1/models
-    输入: 无
+    作用: GET /api/v1/models；同进程内默认复用第一次列表
+    输入:
+        refresh (bool): True 时强制再问一次服务器
     输出:
         list[dict]: 模型条目（含 key / loaded_instances / capabilities）
     """
+    global _catalog
+    if _catalog is not None and not refresh:
+        return _catalog
     payload = request_json("GET", "/api/v1/models", timeout=QUERY_TIMEOUT)
+    items: list[dict[str, Any]] = []
     if isinstance(payload, dict):
         models = payload.get("models")
         if isinstance(models, list):
-            return [item for item in models if isinstance(item, dict)]
-    if isinstance(payload, list):
-        return [item for item in payload if isinstance(item, dict)]
-    return []
+            items = [item for item in models if isinstance(item, dict)]
+    elif isinstance(payload, list):
+        items = [item for item in payload if isinstance(item, dict)]
+    _catalog = items
+    return items
 
+
+def remember_loaded(model_key: str) -> None:
+    """
+    函数名: remember_loaded
+    作用: 握手成功后记下已加载，后续不再探测存在
+    输入:
+        model_key (str): 模型 key
+    输出: 无
+    """
+    key = str(model_key or "").strip()
+    if key:
+        _known_loaded.add(key)
+
+
+def reset_model_session() -> None:
+    """
+    函数名: reset_model_session
+    作用: 断线后丢掉列表缓存，下次再握手
+    输入: 无
+    输出: 无
+    """
+    global _catalog
+    _catalog = None
+    _known_loaded.clear()
 
 
 def get_model(model_key: str) -> dict[str, Any] | None:
     """
     函数名: get_model
-    作用: GET /api/v1/models/{key}；失败则从列表按 key 回退
+    作用: 从 GET /api/v1/models 列表按 key 查找（本机不支持 /models/{key}）
     输入:
         model_key (str): 模型唯一 key
     输出:
@@ -44,13 +75,7 @@ def get_model(model_key: str) -> dict[str, Any] | None:
     key = str(model_key or "").strip()
     if not key:
         return None
-    encoded = encode_model_path(key)
-    try:
-        payload = request_json("GET", f"/api/v1/models/{encoded}", timeout=QUERY_TIMEOUT)
-    except Exception:
-        payload = None
-    if isinstance(payload, dict) and (payload.get("key") or payload.get("id")):
-        return payload
+    # 中文注释: 本机 LM Studio 不支持 GET /api/v1/models/{key}，只用列表
     for item in list_models():
         if str(item.get("key") or item.get("id") or "") == key:
             return item
@@ -161,8 +186,11 @@ def load_model(model_key: str | None = None, *, remember: bool = True) -> dict[s
         raise ValueError("未指定 LM Studio 模型名称")
     if remember:
         save_user_config(model=key, remember_model=True)
+    if key in _known_loaded:
+        return {"status": "already_loaded", "instance_ids": [], "model": key}
     existing = loaded_instance_ids(key)
     if existing:
+        _known_loaded.add(key)
         return {"status": "already_loaded", "instance_ids": existing, "model": key}
     payload = request_json(
         "POST",
@@ -170,6 +198,7 @@ def load_model(model_key: str | None = None, *, remember: bool = True) -> dict[s
         body={"model": key},
         timeout=LOAD_TIMEOUT,
     )
+    _known_loaded.add(key)
     return payload if isinstance(payload, dict) else {"status": "loaded", "model": key}
 
 
@@ -183,6 +212,7 @@ def unload_model(model_key: str | None = None) -> list[str]:
     输出:
         list[str]: 已卸载的 instance_id
     """
+    global _catalog
     key = str(model_key or load_user_config().get("model") or "").strip()
     if not key:
         return []
@@ -195,4 +225,6 @@ def unload_model(model_key: str | None = None) -> list[str]:
             timeout=QUERY_TIMEOUT,
         )
         unloaded.append(iid)
+    _catalog = None
+    _known_loaded.discard(key)
     return unloaded

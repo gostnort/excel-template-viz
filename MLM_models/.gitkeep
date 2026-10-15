@@ -1,1 +1,2 @@
 # Keep directory in git; BERT weights are downloaded locally and gitignored.
+# 下载位置见 docs/mlm_models.md（https://huggingface.co/google-bert）。

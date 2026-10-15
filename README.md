@@ -98,27 +98,6 @@ Linux / macOS:
 
 界面为 **NiceGUI**（`nicegui_ui/`）；原 Gradio `webui/` 已移除。
 
-### 容器（CPU / GPU）
-
-模型与业务数据**不进镜像**，用卷挂载。
-
-| Profile | 镜像 | 依赖 extra | 宿主机 |
-|---------|------|------------|--------|
-| `cpu` | `excel-template-viz:cpu` | `ocr` | 无特殊要求 |
-| `gpu` | `excel-template-viz:gpu` | `ocr-gpu` | NVIDIA 驱动 + Container Toolkit；`--gpus all` |
-
-```bat
-docker compose --profile cpu up --build
-docker compose --profile gpu up --build
-```
-
-默认挂载：
-
-- `./paddle_ocr/models` → PaddleOCR（PP-OCRv6 / PP-StructureV3）
-- `./templates`、`./exports`、`./temp`、`./certs`
-
-LLM 不进容器：在宿主机运行 LM Studio，并把 `llm_lmstudio/user.toml` 的 `api_url` 指到可达地址。本机 `.install_profile` 的 `accelerator=cpu|gpu` 与 compose profile **语义对齐**。
-
 ### 可选：LM Studio（`llm_lmstudio/`）
 
 本项目包含三套相对独立的平台：
