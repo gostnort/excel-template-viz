@@ -13,10 +13,10 @@ from geodesic_align.digit_processor import (
     cell_to_z,
     excel_formula_pair,
     id_lineage,
+    route_columns,
     run_digit_align,
     z_eq,
 )
-from geodesic_align.digit_router import route_columns
 from geodesic_align.regex_deduce import deduce_regex_mapping
 
 

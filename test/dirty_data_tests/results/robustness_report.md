@@ -3,8 +3,8 @@
 ## Executive Summary
 - **Benchmark Suites Executed**: 11 / 11
 - **Total Destination Columns Evaluated**: 64
-- **Clean Recovery Rate (Carry / Regex / Formula)**: 59 / 64 (92.2%)
-- **Graceful Fallback Rate (Input / Outspan)**: 5 / 64 (7.8%)
+- **Clean Recovery Rate (Carry / Regex / Formula)**: 58 / 64 (90.6%)
+- **Graceful Fallback Rate (Input / Outspan)**: 6 / 64 (9.4%)
 - **Uncaught Exceptions / Numerical Crashes**: 0 (100% Stability across SDE & SVD steps)
 
 ## Domain Matrix & Classification Breakdown
@@ -16,7 +16,7 @@
 | `03_inventory` | Retail Warehouse | Regex anchor variations (SKU-[101] vs Item# 102 vs REF:103), barcode prefixes | 4 | 3 | 1 | 0 | 0 | 100.0% |
 | `04_telemetry` | IoT Sensors | Heavy missing value sentinels (NaN, None, N/A, '-', whitespace) | 6 | 6 | 0 | 0 | 0 | 100.0% |
 | `05_waybill` | Cross-border Logistics | Shuffled topological row orders, orphan source rows, non-1:1 matching | 5 | 5 | 0 | 0 | 0 | 100.0% |
-| `06_banking` | Wire Transactions | European comma decimals (1.234,56), high-precision timestamps | 5 | 5 | 0 | 0 | 0 | 100.0% |
+| `06_banking` | Wire Transactions | European comma decimals (1.234,56), high-precision timestamps | 5 | 4 | 0 | 0 | 1 | 80.0% |
 | `07_crm_leads` | Sales Leads | Header distortions (leading/trailing whitespace, snake_case, typos) | 6 | 6 | 0 | 0 | 0 | 100.0% |
 | `08_education` | University Grades | Composite formula derivations (First_Name & Last_Name), grade score addition | 4 | 2 | 0 | 2 | 0 | 100.0% |
 | `09_property` | Real Estate Listings | Mixed dimension strings (120sqm), price ranges (100k-150k) | 6 | 4 | 1 | 1 | 0 | 100.0% |

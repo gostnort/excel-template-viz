@@ -100,11 +100,12 @@ Linux / macOS:
 
 ### 可选：LM Studio（`llm_lmstudio/`）
 
-本项目包含三套相对独立的平台：
+本项目包含以下核心平台与模块：
 
-| 环境 | 目录 | 用途 |
+| 环境 / 模块 | 目录 | 用途 |
 |------|------|------|
 | **主应用** | `app/` + `nicegui_ui/` | Excel 模板录入、导出、Google 连接、字段拍照与 OCR 回填 |
+| **流形对齐** | `geodesic_align/` | 测地线流形规则还原：物理分流、拓扑主键发现、高维球面扩散与跨源公式/正则归纳 |
 | **LLM 平台** | `llm_lmstudio/` | 连接本机 LM Studio：load/unload、chat、多模态探测 |
 | **向导** | `llm_toml_wizard/` | TOML 动态 agents（CLI 验收主线） |
 | **OCR 平台** | `paddle_ocr/` | 图片 → 结构 JSON；PP-OCRv6 fast + LM Studio 语义门禁 + 可选 PP-StructureV3 精修 |
@@ -151,6 +152,32 @@ uv sync --project bootup
 ```
 
 真人输入对应四类中断：`ask_sources` / `ask_layout` / `ask_sample` / `ask_db_id`。无 LM Studio 时请用上一节 `dialog demo`。
+
+### 测地线流形规则还原（`geodesic_align/`）
+
+利用物理分隔符切片、拓扑主键发现、高维流形对齐与超集正则归纳，自动从历史填写的模板中逆向还原出完整 TOML 映射配置。
+
+- **快速体验经典样本还原（Sample 官方工作流）**：
+  ```bash
+  python -m geodesic_align.example_workflow
+  ```
+  读取 `docs/sample/` 真实业务表，端到端还原为标准 TOML 配置。
+
+- **运行通用脏数据对齐工具（泛化与真实压力测试）**：
+  ```bash
+  # 运行第 11 组真实房地产图表范例（默认）
+  python test/dirty_data_tests/run_generic_align_test.py
+
+  # 查看 11 组正交真实业务脏数据模式（覆盖薪资货币、临床杂乱日期、欧洲小数等）
+  python test/dirty_data_tests/run_generic_align_test.py --list-suites
+
+  # 运行指定领域测试（例如 06 欧洲银行、02 临床试验、11 房产）
+  python test/dirty_data_tests/run_generic_align_test.py --suite 06
+
+  # 对齐任意外部物理表格
+  python test/dirty_data_tests/run_generic_align_test.py --source "path/to/source.xlsx" --template "path/to/template.xlsx"
+  ```
+
 
 ### 可选：PaddleOCR（`paddle_ocr/`）
 

@@ -10,8 +10,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from geodesic_align.digit_processor import TableView, _excel_col, id_lineage
-from geodesic_align.digit_router import _EMPTY_WORDS
+from geodesic_align.digit_processor import TableView, _EMPTY_WORDS, _excel_col, id_lineage
 from geodesic_align.emit_mapping import (
     MappingDecision,
     build_sources,

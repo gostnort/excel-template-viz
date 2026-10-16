@@ -7,10 +7,18 @@ import re
 from dataclasses import dataclass, field
 from datetime import date
 
-import numpy as np
 
-from geodesic_align.digit_router import ColumnRoute, route_columns
 from geodesic_align.month_names import TEXT_MONTH_RE, month_number
+
+
+@dataclass
+class ColumnRoute:
+    """一列的物理通道与类型。"""
+
+    label: str
+    kind: str
+    channel: str
+    raw_formula: str = ""
 
 
 EXCEL_EPOCH = date(1899, 12, 30)
@@ -20,13 +28,8 @@ _EMPTY = frozenset({
     "", "null", "none", "n/a", "na", "nan", "暂无", "无", "空", "缺失", "-", "--",
     "#n/a", "#na", "nil", "#div/0!", "#ref!", "#name?", "#num!", "#null!", "#value!"
 })
-_DATE_TIME = re.compile(
-    r"^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?(?:\s*([AaPp][Mm]))?)?$"
-)
-_DATE_TIME_EU = re.compile(
-    r"^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?(?:\s*([AaPp][Mm]))?)?$"
-)
-_CLOCK = re.compile(r"^(\d{1,2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?(?:\s*([AaPp][Mm]))?$")
+_EMPTY_WORDS = _EMPTY
+_CURRENCY_RE = re.compile(r"[¥￥$€£]+")
 DISCRETE_KINDS = frozenset({"NUMERIC", "STRUCTURED_CODE", "DATETIME", "ID_CODE"})
 KEY_KINDS = DISCRETE_KINDS | {"SHORT_STRING", "LONG_STRING"}
 KEY_UNIQUENESS = 0.8
@@ -70,7 +73,7 @@ class FunctionalClosure:
         输出:
             str: 运算结果字面；无法解析时为空串
         """
-        if self.op in {"+", "-", "*"}:
+        if self.op in {"+", "-", "*", "/"}:
             try:
                 left_num = float(left_val)
                 right_num = float(right_val)
@@ -80,8 +83,14 @@ class FunctionalClosure:
                 result = left_num + right_num
             elif self.op == "-":
                 result = left_num - right_num
-            else:
+            elif self.op == "*":
                 result = left_num * right_num
+            elif self.op == "/":
+                if abs(right_num) < 1e-9:
+                    return ""
+                result = left_num / right_num
+            else:
+                return ""
             if abs(result - round(result)) < 1e-9:
                 return str(int(round(result)))
             return f"{result:.4f}"
@@ -164,8 +173,7 @@ def quantize_z(value: complex) -> complex:
 
 def _clean_numeric_str(raw: str) -> str:
     """清理币符、千分位及欧式逗号小数，规范化负数。"""
-    clean = raw.replace("\u00a0", " ").strip()
-    clean = clean.replace("¥", "").replace("￥", "").replace("$", "").replace("€", "").replace("£", "").strip()
+    clean = _CURRENCY_RE.sub("", raw).strip()
     neg = False
     if clean.startswith("(") and clean.endswith(")"):
         neg = True
@@ -173,10 +181,7 @@ def _clean_numeric_str(raw: str) -> str:
     elif clean.startswith("-"):
         neg = True
         clean = clean[1:].strip()
-    clean = clean.replace("¥", "").replace("￥", "").replace("$", "").replace("€", "").replace("£", "").strip()
-    if clean.startswith("(") and clean.endswith(")"):
-        neg = True
-        clean = clean[1:-1].strip()
+    clean = _CURRENCY_RE.sub("", clean).strip()
     if clean.endswith("%"):
         clean = clean[:-1].strip()
     if "." in clean and "," in clean:
@@ -203,27 +208,31 @@ def _clean_numeric_str(raw: str) -> str:
 
 
 
-def _clock_fraction(hour: int, minute: int, second: float, am_pm: str | None = None) -> float | None:
-    """
-    函数名: _clock_fraction
-    作用: 时刻折成日的小数，支持高精度微秒与 12小时制 AM/PM；非法时钟返回 None
-    输入:
-        hour (int): 时
-        minute (int): 分
-        second (float): 秒
-        am_pm (str | None): AM / PM 标识
-    输出:
-        float | None
-    """
-    if am_pm:
-        ap = str(am_pm).upper().strip()
-        if ap == "PM" and hour < 12:
-            hour += 12
-        elif ap == "AM" and hour == 12:
-            hour = 0
-    if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second < 60):
+def _parse_time_fraction(s: str) -> float | None:
+    """提取时间日分数：只要有冒号就是时间，小时<24，分钟<60，秒<60"""
+    ap = None
+    upper = s.upper()
+    if "PM" in upper:
+        ap = "PM"
+    elif "AM" in upper:
+        ap = "AM"
+    clean_s = upper.replace("PM", "").replace("AM", "").strip()
+    parts = clean_s.split(":")
+    if not (2 <= len(parts) <= 3):
         return None
-    return (hour * 3600 + minute * 60 + second) / 86400.0
+    try:
+        h = int(parts[0])
+        m = int(parts[1])
+        sec = float(parts[2]) if len(parts) == 3 else 0.0
+        if ap == "PM" and h < 12:
+            h += 12
+        elif ap == "AM" and h == 12:
+            h = 0
+        if 0 <= h <= 23 and 0 <= m <= 59 and 0 <= sec < 60:
+            return (h * 3600 + m * 60 + sec) / 86400.0
+    except ValueError:
+        pass
+    return None
 
 
 
@@ -254,141 +263,209 @@ def _date_serial(year: int, month: int, day: int, frac: float) -> complex:
 
 
 
+def _parse_date_tuple(s: str) -> tuple[int, int, int] | None:
+    """提取日期：有 - / . 或中英文月份，年月日自然消歧"""
+    for sep in ("-", "/", "."):
+        if sep in s:
+            parts = s.split(sep)
+            if len(parts) == 3:
+                try:
+                    nums = [int(p) for p in parts]
+                    if nums[0] > 1000:  # YYYY-MM-DD
+                        return nums[0], nums[1], nums[2]
+                    if nums[2] > 1000:  # DD-MM-YYYY 或 MM-DD-YYYY
+                        if nums[1] > 12 and 1 <= nums[0] <= 12:
+                            return nums[2], nums[0], nums[1]
+                        return nums[2], nums[1], nums[0]
+                except ValueError:
+                    pass
+    m = TEXT_MONTH_RE.search(s)
+    if m:
+        if m.group("d1") is not None:
+            return int(m.group("y1")), month_number(m.group("mon1")), int(m.group("d1"))
+        if m.group("mon2") is not None:
+            return int(m.group("y2")), month_number(m.group("mon2")), int(m.group("d2"))
+        if m.group("y3") is not None:
+            return int(m.group("y3")), month_number(m.group("mon3")), int(m.group("d3"))
+    return None
+
+
+
+def _parse_datetime_z(body: str, negative: bool) -> complex:
+    """从字符中提取日期时间，转为 z = x + yi；认不出来安全返回 SENTINEL 降级为 input"""
+    if ":" in body and not any(sep in body for sep in ("-", "/", ".", "年")):
+        frac = _parse_time_fraction(body)
+        if frac is not None:
+            return complex(-frac if negative else frac, 0.0)
+
+    frac = 0.0
+    date_str = body
+    if ":" in body:
+        tokens = body.replace("T", " ").split()
+        time_tokens: list[str] = []
+        date_tokens: list[str] = []
+        for i, tok in enumerate(tokens):
+            if ":" in tok:
+                time_tokens.append(tok)
+                if i + 1 < len(tokens) and tokens[i + 1].upper() in ("AM", "PM"):
+                    time_tokens.append(tokens[i + 1])
+            elif tok.upper() not in ("AM", "PM"):
+                date_tokens.append(tok)
+        if time_tokens:
+            tf = _parse_time_fraction(" ".join(time_tokens))
+            if tf is not None:
+                frac = tf
+            date_str = " ".join(date_tokens)
+
+    d_tuple = _parse_date_tuple(date_str)
+    if d_tuple is not None:
+        y, m, d = d_tuple
+        z = _date_serial(y, m, d, frac)
+        if negative and z.imag >= 0.0:
+            return complex(-z.real, z.imag)
+        return z
+
+    try:
+        serial = float(body)
+        if not (math.isnan(serial) or math.isinf(serial)):
+            if negative and serial > 0:
+                serial = -serial
+            return complex(serial, 0.0)
+    except ValueError:
+        pass
+
+    return SENTINEL
+
+
+
 def cell_to_z(text: str, *, kind: str) -> complex:
     """
     函数名: cell_to_z
-    作用: 把格子编成 z = x + yi；失败为 0 + (-1)i，不抛异常
+    作用: 把格子编成 z = x + yi；失败为 0 + (-1)i，不抛异常，安全降级为 input
     输入:
         text (str): 格子字面
         kind (str): ID_CODE / NUMERIC / DATETIME
     输出:
         complex
     """
-    # 去掉首尾空白与非换行空格，空值和哨兵直接记为 0+(-1)i
     raw = str(text).strip().replace("\u00a0", " ").strip()
     if not raw or raw.lower() in _EMPTY or raw in {"暂无"}:
         return SENTINEL
-    # 会计括号与负号表示负数，并剥掉币符和千分位
     clean = _clean_numeric_str(raw)
     negative = clean.startswith("-")
-    body = raw
+    body = _CURRENCY_RE.sub("", raw).strip()
     if body.startswith("(") and body.endswith(")"):
         body = body[1:-1].strip()
-    body = body.replace("¥", "").replace("￥", "").replace("$", "").replace("€", "").replace("£", "").strip()
-    # 井号开头的标识码去掉前缀，再按数值解析
+    body = _CURRENCY_RE.sub("", body).strip()
+
     if kind == "ID_CODE":
         body = body[1:] if body.startswith("#") else body
         clean = clean[1:] if clean.startswith("#") else clean
-    # 百分号按百分数除以 100，虚部保持 0
+
     if body.endswith("%") and kind != "ID_CODE":
         try:
             val = float(clean.lstrip("-")) / 100.0
-            if math.isnan(val) or math.isinf(val):
-                return SENTINEL
+            if not (math.isnan(val) or math.isinf(val)):
+                return complex(-val if negative else val, 0.0)
         except ValueError:
-            return SENTINEL
-        if negative:
-            val = -val
-        return complex(val, 0.0)
-    # 纯时刻折成日分数，只在日期列上生效，支持高精度秒小数
-    clock = _CLOCK.fullmatch(body)
-    if clock is not None and kind == "DATETIME":
-        sec = float(clock.group(3) or 0)
-        am_pm = clock.group(4)
-        frac = _clock_fraction(int(clock.group(1)), int(clock.group(2)), sec, am_pm)
-        if frac is None:
-            return SENTINEL
-        return complex(-frac if negative else frac, 0.0)
-    # 年月日字面转成 Excel 序列，支持高精度时分秒
-    matched = _DATE_TIME.fullmatch(body)
-    if matched is not None and kind == "DATETIME":
-        hour = int(matched.group(4) or 0)
-        minute = int(matched.group(5) or 0)
-        sec = float(matched.group(6) or 0)
-        am_pm = matched.group(7)
-        frac = 0.0
-        if matched.group(4) is not None:
-            got = _clock_fraction(hour, minute, sec, am_pm)
-            if got is None:
-                return SENTINEL
-            frac = got
-        z = _date_serial(int(matched.group(1)), int(matched.group(2)), int(matched.group(3)), frac)
-        if negative and z.imag >= 0.0:
-            return complex(-z.real, z.imag)
-        return z
-    # 欧式日月年 (DD-MM-YYYY) 或美式月日年 (MM-DD-YYYY) 字面转 Excel 序列
-    matched_eu = _DATE_TIME_EU.fullmatch(body)
-    if matched_eu is not None and kind == "DATETIME":
-        hour = int(matched_eu.group(4) or 0)
-        minute = int(matched_eu.group(5) or 0)
-        sec = float(matched_eu.group(6) or 0)
-        am_pm = matched_eu.group(7)
-        frac = 0.0
-        if matched_eu.group(4) is not None:
-            got = _clock_fraction(hour, minute, sec, am_pm)
-            if got is None:
-                return SENTINEL
-            frac = got
-        n1 = int(matched_eu.group(1))
-        n2 = int(matched_eu.group(2))
-        year = int(matched_eu.group(3))
-        if n2 > 12 and 1 <= n1 <= 12:
-            month = n1
-            day = n2
-        else:
-            month = n2
-            day = n1
-        z = _date_serial(year, month, day, frac)
-        if negative and z.imag >= 0.0:
-            return complex(-z.real, z.imag)
-        return z
-    # 英文或中文月份 (如 18-Sept-2026、May 18, 2026、2026年五月18日) 转 Excel 序列
-    matched_txt = TEXT_MONTH_RE.fullmatch(body)
-    if matched_txt is not None and kind == "DATETIME":
-        if matched_txt.group("d1") is not None:
-            day = int(matched_txt.group("d1"))
-            mon_key = matched_txt.group("mon1")
-            year = int(matched_txt.group("y1"))
-        elif matched_txt.group("mon2") is not None:
-            mon_key = matched_txt.group("mon2")
-            day = int(matched_txt.group("d2"))
-            year = int(matched_txt.group("y2"))
-        else:
-            year = int(matched_txt.group("y3"))
-            mon_key = matched_txt.group("mon3")
-            day = int(matched_txt.group("d3"))
-        month = month_number(mon_key or "")
-        hour = int(matched_txt.group("hour") or 0)
-        minute = int(matched_txt.group("minute") or 0)
-        sec = float(matched_txt.group("sec") or 0)
-        am_pm = matched_txt.group("ampm")
-        frac = _clock_fraction(hour, minute, sec, am_pm) or 0.0
-        z = _date_serial(year, month, day, frac)
-        if negative and z.imag >= 0.0:
-            return complex(-z.real, z.imag)
-        return z
-    # 日期列上的纯数字按 Excel 序列号收录
+            pass
+        return SENTINEL
+
     if kind == "DATETIME":
-        try:
-            serial = float(clean)
-            if math.isnan(serial) or math.isinf(serial):
-                return SENTINEL
-        except ValueError:
-            return SENTINEL
-        if negative and serial > 0:
-            serial = -serial
-        return complex(serial, 0.0)
-    # 其余按数值标量 (含欧式逗号小数与千分位) 收录，失败仍是哨兵
+        return _parse_datetime_z(body, negative)
+
     try:
         val = float(clean)
-        if math.isnan(val) or math.isinf(val):
-            return SENTINEL
+        if not (math.isnan(val) or math.isinf(val)):
+            return complex(-val if negative and val > 0 else val, 0.0)
     except ValueError:
-        return SENTINEL
-    if negative and val > 0:
-        val = -val
-    return complex(val, 0.0)
+        pass
+    return SENTINEL
     # 得到虚部为 0 的数值 z
+
+
+
+def extract_cell_physics(text: str) -> str:
+    """
+    函数名: extract_cell_physics
+    作用: 按字符物理特征判断单格类型，不依赖任何表头关键词字典
+    输出:
+        str: EMPTY / FORMULA / DATETIME / NUMERIC / STRUCTURED_CODE / NATURAL_TEXT
+    """
+    raw = str(text).strip().replace("\u00a0", " ").strip()
+    if not raw or raw.lower() in _EMPTY or raw in {"暂无"}:
+        return "EMPTY"
+    if raw.startswith("="):
+        return "FORMULA"
+    if ":" in raw or _parse_date_tuple(raw) is not None or (TEXT_MONTH_RE.search(raw) and any(c.isdigit() for c in raw)):
+        return "DATETIME"
+    clean = _clean_numeric_str(raw)
+    try:
+        val = float(clean)
+        if not (math.isnan(val) or math.isinf(val)):
+            return "NUMERIC"
+    except ValueError:
+        pass
+    if " " not in raw and any(c.isalpha() for c in raw) and any(c.isdigit() for c in raw):
+        return "STRUCTURED_CODE"
+    return "NATURAL_TEXT"
+
+
+
+def route_column(rows: list[dict[str, str]], label: str) -> ColumnRoute:
+    """
+    函数名: route_column
+    作用: 按单格物理特征统计与单射率给出列通道
+    输入:
+        rows (list[dict[str, str]]): 数据行
+        label (str): 列名
+    输出:
+        ColumnRoute
+    """
+    raws: list[str] = []
+    physics: list[str] = []
+    for row in rows:
+        val = str(row.get(label) or "").strip()
+        kind = extract_cell_physics(val)
+        if kind != "EMPTY":
+            physics.append(kind)
+            raws.append(val)
+
+    if not physics:
+        return ColumnRoute(label, "SHORT_STRING", "text")
+
+    formula_count = sum(1 for p in physics if p == "FORMULA")
+    if formula_count / len(physics) > 0.5:
+        formula_raws = [r for r in raws if r.startswith("=")]
+        raw = formula_raws[0] if formula_raws else ""
+        kind = "EXTERNAL_FORMULA" if any("[" in r and "]" in r for r in formula_raws) else "INTERNAL_FORMULA"
+        return ColumnRoute(label, kind, "formula", raw)
+
+    types = set(physics)
+    if types == {"DATETIME"} or types == {"DATETIME", "NUMERIC"}:
+        return ColumnRoute(label, "DATETIME", "digit")
+
+    if types == {"NUMERIC"}:
+        unique_ratio = len(set(raws)) / len(raws)
+        is_int_like = all(_clean_numeric_str(r).lstrip("-").isdigit() for r in raws)
+        if is_int_like and (unique_ratio >= 0.8 or min(len(r) for r in raws) >= 8):
+            return ColumnRoute(label, "ID_CODE", "digit")
+        return ColumnRoute(label, "NUMERIC", "digit")
+
+    if types == {"STRUCTURED_CODE"}:
+        unique_ratio = len(set(raws)) / len(raws)
+        if unique_ratio >= 0.8:
+            return ColumnRoute(label, "ID_CODE", "digit")
+        return ColumnRoute(label, "STRUCTURED_CODE", "digit")
+
+    max_len = max(len(r) for r in raws)
+    return ColumnRoute(label, "SHORT_STRING" if max_len < 16 else "LONG_STRING", "text")
+
+
+
+def route_columns(headers: list[str], rows: list[dict[str, str]]) -> list[ColumnRoute]:
+    """按表头顺序给出每列通道"""
+    return [route_column(rows, h) for h in headers]
 
 
 
@@ -428,50 +505,32 @@ def set_of_z(values: list[complex]) -> set[complex]:
 def _header_cos(left: str, right: str) -> float:
     """
     函数名: _header_cos
-    作用: 列名字符袋余弦，仅用于已通过值检验的候选打破平局
+    作用: 列名字符袋重合度，仅用于已通过值检验的候选打破平局
     输入:
         left (str): 表头
         right (str): 表头
     输出:
         float
     """
-    def bag(text: str) -> dict[str, float]:
-        counts: dict[str, float] = {}
-        for ch in str(text).lower():
-            if ch.strip():
-                counts[ch] = counts.get(ch, 0.0) + 1.0
-        return counts
-    a = bag(left)
-    b = bag(right)
-    keys = set(a) | set(b)
-    if not keys:
+    s1 = {ch.lower() for ch in str(left) if ch.strip()}
+    s2 = {ch.lower() for ch in str(right) if ch.strip()}
+    if not s1 or not s2:
         return 0.0
-    dot = 0.0
-    na = 0.0
-    nb = 0.0
-    for key in keys:
-        dot += a.get(key, 0.0) * b.get(key, 0.0)
-        na += a.get(key, 0.0) ** 2
-        nb += b.get(key, 0.0) ** 2
-    if na <= 0.0 or nb <= 0.0:
-        return 0.0
-    return float(dot / ((na ** 0.5) * (nb ** 0.5)))
+    return len(s1 & s2) / float(len(s1 | s2))
 
 
 
 def _clean_std(values: list[complex]) -> float:
     """
     函数名: _clean_std
-    作用: 干净实部的标准差；常数列（含全 0、全 1）为 0
+    作用: 检查列是否包含有效方差，常数列（全0或全相同值）返回 0.0
     输入:
         values (list[complex]): 列上的 z
     输出:
         float
     """
-    reals = [float(item.real) for item in values if item.imag == 0.0]
-    if len(reals) < 2:
-        return 0.0
-    return float(np.std(np.asarray(reals, dtype=np.float64)))
+    reals = [round(float(item.real), 6) for item in values if item.imag == 0.0]
+    return 1.0 if len(set(reals)) > 1 else 0.0
 
 
 
@@ -492,45 +551,6 @@ def _majority_key(pointers: list[tuple[str, int] | None]) -> str:
     if not counts:
         return ""
     return max(counts.items(), key=lambda pair: (pair[1], pair[0]))[0]
-
-
-
-def _build_pointers(
-    dest_ids: list[complex],
-    sources: list[TableView],
-    id_cols: dict[str, str],
-) -> list[tuple[str, int] | None]:
-    """
-    函数名: _build_pointers
-    作用: 用量化后的 ID z 把模板行指到源表行
-    输入:
-        dest_ids (list[complex]): 模板 ID 列
-        sources (list[TableView]): 源表
-        id_cols (dict[str, str]): source_key → ID 列名
-    输出:
-        list[tuple[str, int] | None]
-    """
-    index: dict[complex, list[tuple[str, int]]] = {}
-    for table in sources:
-        label = id_cols.get(table.source_key)
-        if not label:
-            continue
-        series = column_z(table.rows, label, "ID_CODE")
-        for row_idx, value in enumerate(series):
-            if value.imag < 0.0:
-                continue
-            index.setdefault(quantize_z(value), []).append((table.source_key, row_idx))
-    pointers: list[tuple[str, int] | None] = []
-    for value in dest_ids:
-        if value.imag < 0.0:
-            pointers.append(None)
-            continue
-        hits = index.get(quantize_z(value), [])
-        if not hits:
-            pointers.append(None)
-            continue
-        pointers.append(hits[0])
-    return pointers
 
 
 
@@ -752,6 +772,23 @@ def id_lineage(
 
 
 
+def _pick_pointer_rows(
+    table: TableView,
+    pointers: list[tuple[str, int] | None],
+    row_indexes: list[int],
+) -> list[int] | None:
+    """按行指针提取有效源行下标，指针不在该表或越界则返回 None"""
+    picked: list[int] = []
+    num_rows = len(table.rows)
+    for idx in row_indexes:
+        ptr = pointers[idx]
+        if ptr is None or ptr[0] != table.source_key or not (0 <= ptr[1] < num_rows):
+            return None
+        picked.append(ptr[1])
+    return picked
+
+
+
 def _values_on_pointer(
     table: TableView,
     label: str,
@@ -759,47 +796,20 @@ def _values_on_pointer(
     pointers: list[tuple[str, int] | None],
     row_indexes: list[int],
 ) -> list[complex] | None:
-    """
-    函数名: _values_on_pointer
-    作用: 按行指针取出源列 z；指针不在该表则失败
-    输入:
-        table (TableView): 源表
-        label (str): 源列名
-        kind (str): 列类型
-        pointers (list): 行指针
-        row_indexes (list[int]): 要用的模板行号
-    输出:
-        list[complex] | None
-    """
+    """按行指针取出源列 z；指针不在该表则失败"""
+    row_ids = _pick_pointer_rows(table, pointers, row_indexes)
+    if row_ids is None:
+        return None
     series = column_z(table.rows, label, kind)
-    picked: list[complex] = []
-    for idx in row_indexes:
-        ptr = pointers[idx]
-        if ptr is None or ptr[0] != table.source_key:
-            return None
-        if ptr[1] < 0 or ptr[1] >= len(series):
-            return None
-        picked.append(series[ptr[1]])
-    return picked
+    return [series[r] for r in row_ids]
 
 
 
 def _match_rows(dest: list[complex], src: list[complex]) -> bool:
-    """
-    函数名: _match_rows
-    作用: 对齐后的两列是否逐格 z_eq
-    输入:
-        dest (list[complex]): 模板 z
-        src (list[complex]): 源 z
-    输出:
-        bool
-    """
+    """对齐后的两列是否逐格 z_eq"""
     if len(dest) != len(src) or not dest:
         return False
-    for left, right in zip(dest, src):
-        if not z_eq(left, right):
-            return False
-    return True
+    return all(z_eq(l, r) for l, r in zip(dest, src))
 
 
 
@@ -809,26 +819,11 @@ def _plain_on_pointer(
     pointers: list[tuple[str, int] | None],
     row_indexes: list[int],
 ) -> list[str] | None:
-    """
-    函数名: _plain_on_pointer
-    作用: 按行指针取源列原文，供结构化代码逐字比对
-    输入:
-        table (TableView): 源表
-        label (str): 源列名
-        pointers (list): 行指针
-        row_indexes (list[int]): 模板行号
-    输出:
-        list[str] | None
-    """
-    picked: list[str] = []
-    for idx in row_indexes:
-        ptr = pointers[idx]
-        if ptr is None or ptr[0] != table.source_key:
-            return None
-        if ptr[1] < 0 or ptr[1] >= len(table.rows):
-            return None
-        picked.append(str(table.rows[ptr[1]].get(label) or "").strip())
-    return picked
+    """按行指针取源列原文，供结构化代码逐字比对"""
+    row_ids = _pick_pointer_rows(table, pointers, row_indexes)
+    if row_ids is None:
+        return None
+    return [str(table.rows[r].get(label) or "").strip() for r in row_ids]
 
 
 
@@ -881,69 +876,10 @@ def _try_carry(
     routes: dict[str, dict[str, ColumnRoute]],
     active: list[int],
     dest_plain: list[str],
-) -> tuple[str, str] | None:
-    """
-    函数名: _try_carry
-    作用: 全部行指针落在同一源且该源有一列逐格相等
-    输入:
-        dest_label (str): 模板列名
-        dest_z (list[complex]): 模板列 z
-        kind (str): 列类型
-        pointers (list): 行指针
-        sources (list[TableView]): 源表
-        routes (dict): 各表列路由
-    输出:
-        tuple[str, str] | None: (source_key, field)
-    """
-    # 只看已填目标行的指针，空行不参与
-    keys = {pointers[idx][0] for idx in active if pointers[idx] is not None}
-    # 得到有效行落到哪些源表
-    if not active or len(keys) != 1 or any(pointers[idx] is None for idx in active):
-        return None
-    # 得到无法单源搬运
-    source_key = next(iter(keys))
-    # 得到唯一源表键
-    table = next(item for item in sources if item.source_key == source_key)
-    # 得到该源表
-    # 只在同物理类型的数字列里找逐格相等的列
-    headers = [
-        name for name, route in routes[source_key].items()
-        if route.channel == "digit" and route.kind == kind
-    ]
-    # 得到候选源列名
-    ordered = [dest_label] if dest_label in headers else []
-    ordered.extend(name for name in headers if name != dest_label)
-    best: tuple[str, float] | None = None
-    idxs = list(active)
-    for name in ordered:
-        if not _column_agrees(table, name, kind, pointers, idxs, dest_z, dest_plain):
-            continue
-        score = _header_cos(dest_label, name)
-        # 得到表头字符余弦，只用于同分挑选
-        if best is None or score > best[1]:
-            best = (name, score)
-            # 得到当前最优源列
-    if best is None:
-        return None
-    # 得到没有全等列
-    return source_key, best[0]
-    # 得到源表键和搬运列名
-
-
-
-def _try_union_carry(
-    dest_label: str,
-    dest_z: list[complex],
-    kind: str,
-    pointers: list[tuple[str, int] | None],
-    sources: list[TableView],
-    routes: dict[str, dict[str, ColumnRoute]],
-    active: list[int],
-    dest_plain: list[str],
 ) -> list[tuple[str, str]] | None:
     """
-    函数名: _try_union_carry
-    作用: 指针跨多表时，每张表只核对自己名下的行
+    函数名: _try_carry
+    作用: 按有效行指针分组，对单表或多表分别寻找逐格匹配的源列 (len==1 为单源 carry, >=2 为多源 union)
     输入:
         dest_label (str): 模板列名
         dest_z (list[complex]): 模板列 z
@@ -951,26 +887,30 @@ def _try_union_carry(
         pointers (list): 行指针
         sources (list[TableView]): 源表
         routes (dict): 各表列路由
+        active (list[int]): 已填行号
+        dest_plain (list[str]): 目标原文
     输出:
-        list[tuple[str, str]] | None
+        list[tuple[str, str]] | None: 匹配到的 [(source_key, field), ...]
     """
-    # 按已填行把指针分组，空目标格不进组
+    if not active:
+        return None
     groups: dict[str, list[int]] = {}
     for idx in active:
         ptr = pointers[idx]
         if ptr is None:
             return None
         groups.setdefault(ptr[0], []).append(idx)
-    # 得到每个源表名下的有效行号
-    if len(groups) < 2:
+    if not groups:
         return None
-    # 得到不是跨表搬运
+
     chosen: list[tuple[str, str]] = []
     by_key = {item.source_key: item for item in sources}
     for source_key, idxs in groups.items():
-        table = by_key[source_key]
+        table = by_key.get(source_key)
+        if table is None:
+            return None
         headers = [
-            name for name, route in routes[source_key].items()
+            name for name, route in routes.get(source_key, {}).items()
             if route.channel == "digit" and route.kind == kind
         ]
         ordered = [dest_label] if dest_label in headers else []
@@ -1043,6 +983,17 @@ def _formula_holds(
 
 
 
+def _iter_binary_ops(left_item, left_z, right_item, right_z):
+    """依次生成 +, *, - (正反), / (正反) 的候选五元组 (a_item, op, b_item, a_z, b_z)"""
+    yield left_item, "+", right_item, left_z, right_z
+    yield left_item, "*", right_item, left_z, right_z
+    yield left_item, "-", right_item, left_z, right_z
+    yield right_item, "-", left_item, right_z, left_z
+    yield left_item, "/", right_item, left_z, right_z
+    yield right_item, "/", left_item, right_z, left_z
+
+
+
 def _try_internal_derived(
     dest_label: str,
     dest_z: list[complex],
@@ -1071,44 +1022,15 @@ def _try_internal_derived(
         left_z = column_z(dest_table.rows, left_name, kind)
         for right_name in names[i + 1:]:
             right_z = column_z(dest_table.rows, right_name, kind)
-            for op in ("+", "-", "*", "/"):
-                if not _formula_holds(dest_z, left_z, right_z, op):
+            for a_name, op, b_name, a_z, b_z in _iter_binary_ops(left_name, left_z, right_name, right_z):
+                if not _formula_holds(dest_z, a_z, b_z, op):
                     continue
-                score = _header_cos(dest_label, left_name) + _header_cos(dest_label, right_name)
+                score = _header_cos(dest_label, a_name) + _header_cos(dest_label, b_name)
                 if best is None or score > best[0]:
-                    best = (score, left_name, op, right_name)
-            if _formula_holds(dest_z, right_z, left_z, "-"):
-                score = _header_cos(dest_label, right_name) + _header_cos(dest_label, left_name)
-                if best is None or score > best[0]:
-                    best = (score, right_name, "-", left_name)
-            if _formula_holds(dest_z, right_z, left_z, "/"):
-                score = _header_cos(dest_label, right_name) + _header_cos(dest_label, left_name)
-                if best is None or score > best[0]:
-                    best = (score, right_name, "/", left_name)
+                    best = (score, a_name, op, b_name)
     if best is None:
         return None
     return best[1], best[2], best[3]
-
-
-
-def _aligned_source_series(
-    table: TableView,
-    label: str,
-    kind: str,
-    pointers: list[tuple[str, int] | None],
-) -> list[complex] | None:
-    """
-    函数名: _aligned_source_series
-    作用: 每个模板行都从同一张源表取出该列；跨表则失败
-    输入:
-        table (TableView): 源表
-        label (str): 列名
-        kind (str): 列类型
-        pointers (list): 行指针
-    输出:
-        list[complex] | None
-    """
-    return _values_on_pointer(table, label, kind, pointers, list(range(len(pointers))))
 
 
 
@@ -1186,20 +1108,14 @@ def _try_external_derived(
     best: tuple[float, TableView, str, str, TableView, str] | None = None
     for i, (left_table, left_name, left_z) in enumerate(columns):
         for right_table, right_name, right_z in columns[i + 1:]:
-            for op in ("+", "-", "*", "/"):
-                if not _formula_holds(want, left_z, right_z, op):
+            for (a_tbl, a_name), op, (b_tbl, b_name), a_z, b_z in _iter_binary_ops(
+                (left_table, left_name), left_z, (right_table, right_name), right_z
+            ):
+                if not _formula_holds(want, a_z, b_z, op):
                     continue
-                score = _header_cos(dest_label, left_name) + _header_cos(dest_label, right_name)
+                score = _header_cos(dest_label, a_name) + _header_cos(dest_label, b_name)
                 if best is None or score > best[0]:
-                    best = (score, left_table, left_name, op, right_table, right_name)
-            if _formula_holds(want, right_z, left_z, "-"):
-                score = _header_cos(dest_label, right_name) + _header_cos(dest_label, left_name)
-                if best is None or score > best[0]:
-                    best = (score, right_table, right_name, "-", left_table, left_name)
-            if _formula_holds(want, right_z, left_z, "/"):
-                score = _header_cos(dest_label, right_name) + _header_cos(dest_label, left_name)
-                if best is None or score > best[0]:
-                    best = (score, right_table, right_name, "/", left_table, left_name)
+                    best = (score, a_tbl, a_name, op, b_tbl, b_name)
     if best is None:
         return None
     return best[1], best[2], best[3], best[4], best[5]
@@ -1224,26 +1140,6 @@ def _excel_col(index_1based: int) -> str:
 
 
 
-def excel_formula(source_key: str, col_a: int, col_b: int, row: int, op: str) -> str:
-    """
-    函数名: excel_formula
-    作用: 列绝对、行相对的外链公式，禁止锁死行号
-    输入:
-        source_key (str): [sources] 键
-        col_a (int): 左列 1-based
-        col_b (int): 右列 1-based
-        row (int): instance 0 的源行号，不加 $
-        op (str): + - *
-    输出:
-        str
-    """
-    left = f"='{{{source_key}}}'!${_excel_col(col_a)}{int(row)}"
-    right = f"'{{{source_key}}}'!${_excel_col(col_b)}{int(row)}"
-    symbol = " & " if op == "&" else f" {op} "
-    return left + symbol + right
-
-
-
 def excel_formula_pair(
     source_a: str,
     col_a: int,
@@ -1252,102 +1148,19 @@ def excel_formula_pair(
     row: int,
     op: str,
 ) -> str:
-    """
-    函数名: excel_formula_pair
-    作用: 两个源可以不同；列绝对、行相对，禁止锁死行号
-    输入:
-        source_a (str): 左源键
-        col_a (int): 左列 1-based
-        source_b (str): 右源键
-        col_b (int): 右列 1-based
-        row (int): 行号，不加 $
-        op (str): + - *
-    输出:
-        str
-    """
-    if source_a == source_b or not source_b:
-        return excel_formula(source_a, col_a, col_b, row, op)
-    left = f"='{{{source_a}}}'!${_excel_col(col_a)}{int(row)}"
-    right = f"'{{{source_b}}}'!${_excel_col(col_b)}{int(row)}"
+    """两个源的外链公式；同源则简写为单表公式，列绝对、行相对"""
     symbol = " & " if op == "&" else f" {op} "
+    b_src = source_b if source_b else source_a
+    left = f"='{{{source_a}}}'!${_excel_col(col_a)}{int(row)}"
+    right = f"'{{{b_src}}}'!${_excel_col(col_b)}{int(row)}"
     return left + symbol + right
 
 
 
-def _id_end(
-    label: str,
-    dest_z: list[complex],
-    sources: list[TableView],
-    id_cols: dict[str, str],
-    pointers: list[tuple[str, int] | None],
-) -> DigitEnd:
-    """
-    函数名: _id_end
-    作用: ID 列按集合覆盖判 union 或 carry，禁止 derived
-    输入:
-        label (str): 模板 ID 列名
-        dest_z (list[complex]): 模板 ID 的 z
-        sources (list[TableView]): 源表
-        id_cols (dict[str, str]): 源 ID 列
-        pointers (list): 行指针
-    输出:
-        DigitEnd
-    """
-    dest_set = set_of_z(dest_z)
-    contributors: list[tuple[str, str]] = []
-    for table in sources:
-        src_label = id_cols.get(table.source_key)
-        if not src_label:
-            continue
-        src_set = set_of_z(column_z(table.rows, src_label, "ID_CODE"))
-        if dest_set & src_set:
-            contributors.append((table.source_key, src_label))
-    covered = set()
-    for table in sources:
-        src_label = id_cols.get(table.source_key)
-        if not src_label:
-            continue
-        covered |= set_of_z(column_z(table.rows, src_label, "ID_CODE"))
-    if dest_set and dest_set <= covered and len(contributors) >= 2:
-        klass = "union"
-    elif dest_set and dest_set <= covered and len(contributors) == 1:
-        klass = "carry"
-    elif dest_set and dest_set <= covered and len(contributors) == 0:
-        klass = "outspan"
-    elif not dest_set:
-        klass = "outspan"
-    else:
-        klass = "outspan" if not contributors else "inspan_miss"
-    if dest_set and not (dest_set <= covered):
-        klass = "outspan"
-    source = _majority_key(pointers) or (contributors[0][0] if contributors else "")
-    field_name = ""
-    for key, name in contributors:
-        if key == source:
-            field_name = name
-            break
-    if not field_name and contributors:
-        field_name = contributors[0][1]
-        source = contributors[0][0]
-    warnings: list[str] = []
-    if len(contributors) >= 2:
-        keys = ",".join(item[0] for item in contributors)
-        warnings.append(f"multi_source_overlap:{keys}")
-        names = {item[1] for item in contributors}
-        if len(names) > 1:
-            bits = "|".join(f"{key}.{name}" for key, name in contributors)
-            warnings.append(f"heterogeneous_headers:{bits}")
-    return DigitEnd(
-        input_label=label,
-        klass=klass,
-        field=field_name,
-        source=source,
-        contributors=contributors,
-        physical="excel",
-        is_id=True,
-        warnings=warnings,
-        pointers=list(pointers),
-    )
+def excel_formula(source_key: str, col_a: int, col_b: int, row: int, op: str) -> str:
+    """单源外链公式"""
+    return excel_formula_pair(source_key, col_a, source_key, col_b, row, op)
+
 
 
 
@@ -1409,45 +1222,44 @@ def run_digit_align(
         # 得到本列的 z
         plain = [str(row.get(label) or "").strip() for row in dest.rows]
         # 得到本列原文
-        # 先试单源逐格搬运
+        # 逐格搬运 (单源 carry 或多源 union_carry)
         carried = _try_carry(label, dest_z, route.kind, pointers, sources, src_routes, active, plain)
-        # 得到搬运到的源列，失败为 None
         if carried is not None:
-            table = by_key[carried[0]]
-            ends.append(
-                DigitEnd(
-                    input_label=label,
-                    klass="carry",
-                    field=carried[1],
-                    source=carried[0],
-                    contributors=[carried],
-                    physical=table.physical,
-                    pointers=list(pointers),
-                    excel_row=int(table.header_row) + 1 + (pointers[0][1] if pointers and pointers[0] else 0),
+            if len(carried) == 1:
+                source_key, field_name = carried[0]
+                table = by_key[source_key]
+                ends.append(
+                    DigitEnd(
+                        input_label=label,
+                        klass="carry",
+                        field=field_name,
+                        source=source_key,
+                        contributors=list(carried),
+                        physical=table.physical,
+                        pointers=list(pointers),
+                        excel_row=int(table.header_row) + 1 + (pointers[0][1] if pointers and pointers[0] else 0),
+                    )
                 )
-            )
-            continue
-        unioned = _try_union_carry(label, dest_z, route.kind, pointers, sources, src_routes, active, plain)
-        if unioned is not None:
-            source = _majority_key(pointers)
-            field_name = next(name for key, name in unioned if key == source)
-            warnings = ["multi_source_overlap:" + ",".join(key for key, _name in unioned)]
-            names = {name for _key, name in unioned}
-            if len(names) > 1:
-                bits = "|".join(f"{key}.{name}" for key, name in unioned)
-                warnings.append(f"heterogeneous_headers:{bits}")
-            ends.append(
-                DigitEnd(
-                    input_label=label,
-                    klass="union_carry",
-                    field=field_name,
-                    source=source,
-                    contributors=unioned,
-                    physical=by_key[source].physical,
-                    warnings=warnings,
-                    pointers=list(pointers),
+            else:
+                source = _majority_key(pointers)
+                field_name = next(name for key, name in carried if key == source)
+                warnings = ["multi_source_overlap:" + ",".join(key for key, _name in carried)]
+                names = {name for _key, name in carried}
+                if len(names) > 1:
+                    bits = "|".join(f"{key}.{name}" for key, name in carried)
+                    warnings.append(f"heterogeneous_headers:{bits}")
+                ends.append(
+                    DigitEnd(
+                        input_label=label,
+                        klass="union_carry",
+                        field=field_name,
+                        source=source,
+                        contributors=list(carried),
+                        physical=by_key[source].physical if source in by_key else "excel",
+                        warnings=warnings,
+                        pointers=list(pointers),
+                    )
                 )
-            )
             continue
         internal = _try_internal_derived(label, dest_z, route.kind, dest, dest_routes)
         if internal is not None:

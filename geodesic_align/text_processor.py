@@ -7,8 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from geodesic_align.digit_processor import cell_to_z
-from geodesic_align.digit_router import route_columns
+from geodesic_align.digit_processor import cell_to_z, route_columns
 
 
 OVERLAP_TAU = 0.85

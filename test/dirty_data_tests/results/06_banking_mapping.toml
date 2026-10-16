@@ -52,12 +52,12 @@ id = false
 Input_label = "Execution_Time"
 value_from_label = "down"
 value_offset = 1
-cell_role = "data"
-source = "src_06_banking"
-field = "Execution_Time"
+cell_role = "input"
+source = ""
+field = ""
 regex = ''
 formula = ""
-index = 3
+index = -1
 id = false
 
 [[fields]]
@@ -69,5 +69,5 @@ source = "src_06_banking"
 field = "Fee_Amount"
 regex = ''
 formula = ""
-index = 4
+index = 3
 id = false

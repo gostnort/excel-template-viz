@@ -4,11 +4,12 @@
   "dirty_pattern": "European comma decimals (1.234,56), high-precision timestamps",
   "total_columns": 5,
   "role_breakdown": {
-    "data": 5
+    "data": 4,
+    "input": 1
   },
   "elapsed_ms": {
-    "map": 2.64170000446029,
-    "text": 848.1871999974828
+    "map": 2.178099995944649,
+    "text": 9662.42990000319
   },
   "sediment_records": [],
   "sediment_dim": 0,
@@ -51,10 +52,10 @@
     },
     {
       "input_label": "Execution_Time",
-      "cell_role": "data",
-      "klass": "carry",
-      "source": "src_06_banking",
-      "field": "Execution_Time",
+      "cell_role": "input",
+      "klass": "inspan_miss",
+      "source": "",
+      "field": "",
       "formula": "",
       "regex": "",
       "confidence": 1.0,

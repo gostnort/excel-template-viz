@@ -17,8 +17,7 @@ from pathlib import Path
 import tomllib
 import pytest
 
-from geodesic_align.digit_processor import TableView
-from geodesic_align.digit_router import route_columns
+from geodesic_align.digit_processor import TableView, route_columns
 from geodesic_align.example_workflow import load_header_rows, align_sample, render_toml
 from geodesic_align.manifold_evolution import record_manifold_sediment
 
