@@ -22,7 +22,29 @@ from llm_cli.banner import (
     wrap_block_lines,
     wrap_model_body,
 )
-from llm_cli.icon import enable_vt
+def enable_vt() -> None:
+    """控制台改 UTF-8 并打开 VT/ANSI 虚拟终端支持"""
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+    if hasattr(sys.stderr, "reconfigure"):
+        try:
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+    if sys.platform != "win32":
+        return
+    import ctypes
+    kernel32 = ctypes.windll.kernel32
+    kernel32.SetConsoleOutputCP(65001)
+    kernel32.SetConsoleCP(65001)
+    handle = kernel32.GetStdHandle(-11)
+    mode = ctypes.c_uint32()
+    if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+        return
+    kernel32.SetConsoleMode(handle, mode.value | 0x0004)
 
 try:
     import msvcrt
@@ -82,7 +104,7 @@ def _key_win() -> str:
     if ch == "\x15":
         return "CTRL_U"
     if ch == "\x1b":
-        return "IGNORE"
+        return "ESC"
     return ch
 
 
@@ -527,7 +549,7 @@ class BoxedPrompt:
             elif key == "CTRL_U":
                 buf = buf[cur:]
                 cur = 0
-            elif key == "IGNORE":
+            elif key in ("IGNORE", "ESC"):
                 pass
             elif len(key) >= 1 and key.isprintable():
                 buf[cur:cur] = list(key)
@@ -548,14 +570,35 @@ def bind_prompt(prompt: BoxedPrompt | None) -> None:
     _ACTIVE = prompt
 
 
+_FEEDBACK_HOOK: Any = None
+_STREAM_THINK: list[str] = []
+_STREAM_MODEL: list[str] = []
+_STREAM_MODEL_NAME = "model"
+
+
+def set_feedback_hook(hook: Any) -> None:
+    """
+    函数名: set_feedback_hook
+    作用: 登记画布反馈回调；为 None 时 emit 回到直接写 stdout
+    输入:
+        hook (Any): 接收一段文本的可调用对象，或 None
+    输出: 无
+    """
+    global _FEEDBACK_HOOK
+    _FEEDBACK_HOOK = hook
+
+
 def emit_text(block: str) -> None:
     """
     函数名: emit_text
-    作用: 有底栏则写到框上方并重绘，否则直接打印
+    作用: 有反馈钩子则转发给画布，有底栏则写到框上方并重绘，否则直接打印
     输入:
         block (str): 已着色多行块
     输出: 无
     """
+    if _FEEDBACK_HOOK is not None:
+        _FEEDBACK_HOOK(block)
+        return
     if _ACTIVE is not None and _ACTIVE._drawn > 0:
         _ACTIVE.write_above(block)
         return
@@ -596,6 +639,9 @@ def emit_think_start() -> None:
     输入: 无
     输出: 无
     """
+    if _FEEDBACK_HOOK is not None:
+        _STREAM_THINK.clear()
+        return
     if _ACTIVE is not None and _ACTIVE._boxed:
         _ACTIVE.begin_think_stream()
         return
@@ -613,6 +659,9 @@ def emit_think_delta(chunk: str) -> None:
     """
     if not chunk:
         return
+    if _FEEDBACK_HOOK is not None:
+        _STREAM_THINK.append(chunk)
+        return
     if _ACTIVE is not None and _ACTIVE._boxed:
         _ACTIVE.append_think_stream(chunk)
         return
@@ -627,6 +676,12 @@ def emit_think_end() -> None:
     输入: 无
     输出: 无
     """
+    if _FEEDBACK_HOOK is not None:
+        text = "".join(_STREAM_THINK).strip()
+        _STREAM_THINK.clear()
+        if text:
+            _FEEDBACK_HOOK("think: " + text)
+        return
     if _ACTIVE is not None and _ACTIVE._boxed:
         _ACTIVE.end_think_stream()
         return
@@ -654,6 +709,11 @@ def emit_model_start(name: str = "model") -> None:
         name (str): 框顶标签
     输出: 无
     """
+    if _FEEDBACK_HOOK is not None:
+        global _STREAM_MODEL_NAME
+        _STREAM_MODEL.clear()
+        _STREAM_MODEL_NAME = name or "model"
+        return
     if _ACTIVE is not None and _ACTIVE._boxed:
         _ACTIVE.begin_model_stream(name)
         return
@@ -671,6 +731,9 @@ def emit_model_delta(chunk: str) -> None:
     """
     if not chunk:
         return
+    if _FEEDBACK_HOOK is not None:
+        _STREAM_MODEL.append(chunk)
+        return
     if _ACTIVE is not None and _ACTIVE._boxed:
         _ACTIVE.append_model_stream(chunk)
         return
@@ -685,6 +748,12 @@ def emit_model_end() -> None:
     输入: 无
     输出: 无
     """
+    if _FEEDBACK_HOOK is not None:
+        text = "".join(_STREAM_MODEL).strip()
+        _STREAM_MODEL.clear()
+        if text:
+            _FEEDBACK_HOOK(f"{_STREAM_MODEL_NAME}: {text}")
+        return
     if _ACTIVE is not None and _ACTIVE._boxed:
         _ACTIVE.end_model_stream()
         return

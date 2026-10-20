@@ -133,6 +133,8 @@ class SortTemplates:
         last_use_template: 最近打开的模板路径
         return: None
         """
+        if JSON_PATH is None:
+            JSON_PATH = self.JSON_PATH
         # 如果没有提供 JSON 文件路径，则调用_generate_json生成默认数据。
         if not JSON_PATH.exists():
             self._generate_json()

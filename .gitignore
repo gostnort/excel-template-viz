@@ -1,5 +1,6 @@
 llm_lmstudio/user.toml
 llm_cli/lm_studio/user.toml
+llm_cli/lms/user.toml
 llm_cli/lm_studio/mcp_ready.json
 *.py[cod]
 __pycache__/

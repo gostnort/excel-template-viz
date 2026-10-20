@@ -290,7 +290,7 @@ def is_lm_studio_ready() -> bool:
         bool: 可以调用神经轨时为 True
     """
     try:
-        from llm_lmstudio import get_backend
+        from llm_cli.lms import get_backend
         health = get_backend().health_check()
     except Exception:
         return False
@@ -318,7 +318,7 @@ def gemma4_e4b_synthesizer(
     输出:
         str | None: 沙箱 100% 通过的模式；探活失败或重试耗尽则为 None
     """
-    from llm_lmstudio import conversation_once
+    from llm_cli.lms import conversation_once
     # 中文注释: 未连接或模型未加载时立刻降级，不阻塞映射流水线
     if not is_lm_studio_ready():
         return None

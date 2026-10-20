@@ -1,4 +1,4 @@
-"""通用提供方入口：默认 lm_studio。toml 等应用不应写死提供方。"""
+"""通用提供方入口：默认 lms。toml 等应用不应写死提供方。"""
 
 from __future__ import annotations
 
@@ -30,14 +30,13 @@ class LlmProvider(Protocol):
     def close(self) -> None: ...
 
 
-
 def get_provider() -> Any:
     """
     函数名: get_provider
-    作用: 返回当前默认提供方（LM Studio 适配器）
+    作用: 返回当前默认提供方（LmsClient）
     输入: 无
     输出:
-        LmStudioBackend
+        LmsClient
     """
-    from llm_cli.lm_studio.backend import get_backend
+    from llm_cli.lms import get_backend
     return get_backend()

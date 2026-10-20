@@ -6,17 +6,31 @@ import json
 import uuid
 from pathlib import Path
 
-from llm_cli.agent import Agent
+from llm_cli.agent import Agent, MAIN_SYSTEM
 from llm_cli.banner import BootInfo, print_boot, resolve_version
-from llm_cli.delegate import ask_worker
-from llm_cli.icon import apply_console_icon
-from llm_cli.prompt import BoxedPrompt, bind_prompt, emit_model, emit_model_delta, emit_model_end, emit_model_start, emit_system, emit_think, emit_think_delta, emit_think_end, emit_think_start, emit_user, _show_cursor
-from llm_cli.prompts import MAIN_SYSTEM
+from llm_cli.terminal_io import (
+    _show_cursor,
+    emit_model,
+    emit_model_delta,
+    emit_model_end,
+    emit_model_start,
+    emit_system,
+    emit_think,
+    emit_think_delta,
+    emit_think_end,
+    emit_think_start,
+    emit_user,
+)
 
 try:
-    from llm_cli.lm_studio import LmStudioError, get_backend, load_model, load_user_config
-    from llm_cli.lm_studio.models import has_vision, instance_runtime_notice, loaded_models_from, model_context_limit
-    from llm_cli.lm_studio.placement import multi_load_notice
+    from llm_cli.lms import (
+        LmsError as LmStudioError,
+        get_backend,
+        load_model,
+        load_user_config,
+        loaded_models_from,
+        model_context_limit,
+    )
 except ImportError as exc:
     get_backend = None
     LmStudioError = RuntimeError
@@ -24,9 +38,6 @@ except ImportError as exc:
     load_model = None
     model_context_limit = None
     loaded_models_from = None
-    instance_runtime_notice = None
-    has_vision = None
-    multi_load_notice = None
     _IMPORT_ERR = str(exc)
 else:
     _IMPORT_ERR = None
@@ -97,78 +108,75 @@ def _loaded_model_keys() -> list[str]:
         return []
 
 
-def _emit_multi_load(current: str, loaded: list[str] | None = None, *, via_print: bool = False) -> None:
+def _model_is_vision(model_key: str, reported: bool = False) -> bool:
     """
-    函数名: _emit_multi_load
-    作用: 若同时加载多套权重则探测指定模型在 VRAM 还是 CPU RAM
+    函数名: _model_is_vision
+    作用: 判断模型是否带视觉能力；健康检查已标明时直接采用，否则询问 llm_lmstudio
     输入:
-        current (str): CLI 默认模型
-        loaded (list | None): 已加载 key；空则现场查询
-        via_print (bool): True 用 print（握手时 prompt 尚未绑定）
-    输出: 无
+        model_key (str): 模型 key
+        reported (bool): /v1/models 已经标成视觉模型时为 True
+    输出:
+        bool: 是视觉模型则为 True
     """
-    if multi_load_notice is None:
-        return
-    names = loaded if loaded is not None else _loaded_model_keys()
-    if len(names) < 2:
-        return
-    label = str(current or "").strip() or "model"
-    if via_print:
-        print(f"probing placement of {label} ...", flush=True)
-        text = multi_load_notice(current, names)
-        if text:
-            print(text, flush=True)
-        return
-    text = multi_load_notice(current, names)
-    if text:
-        emit_system(text)
+    if reported:
+        return True
+    key = str(model_key or "").strip()
+    if not key:
+        return False
+    try:
+        from llm_lmstudio.models import has_vision  # 可选依赖：原生列表才有 capabilities.vision
+    except ImportError:
+        return False
+    try:
+        return bool(has_vision(key))
+    except Exception:
+        return False
 
 
-def _emit_vision_mcp_note(model: str, *, via_print: bool = False) -> None:
+def _vision_note(model: str, *, vision: bool) -> str:
     """
-    函数名: _emit_vision_mcp_note
-    作用: 视觉模型上不要让 LM Studio 托管 MCP Tools，prompt eval 会极慢
+    函数名: _vision_note
+    作用: 视觉模型时给出一句说明；非视觉模型返回空串
     输入:
-        model (str): 当前模型 key
-        via_print (bool): 握手时用 print
-    输出: 无
+        model (str): 模型 key
+        vision (bool): 是否带视觉
+    输出:
+        str: 要写进反馈区的说明；不需要说明时为空串
     """
     key = str(model or "").strip()
-    if not key or has_vision is None:
-        return
-    try:
-        if not has_vision(key):
-            return
-    except Exception:
-        return
-    text = (
+    if not key or not vision:
+        return ""
+    return (
         f"note: {key} has vision. LM Studio Chat with full MCP schemas is still slow. "
         "This CLI does not attach those schemas to /v1/chat/completions."
     )
-    if via_print:
-        print(text, flush=True)
-        return
-    emit_system(text)
 
 
-def print_banner(info: BootInfo | None = None, *, provider: str = "lm_studio", model: str = "") -> None:
+def _remember_note(notes: list[str], text: str) -> None:
     """
-    函数名: print_banner
-    作用: 设置窗口图标并打印欢迎框
+    函数名: _remember_note
+    作用: 握手期间先打印一行，并把同一句留到画布反馈区
     输入:
-        info (BootInfo | None): 握手快照；空则只带 provider/model
-        provider (str): 无 info 时的提供方
-        model (str): 无 info 时的模型
+        notes (list[str]): BootInfo.startup_notes
+        text (str): 说明文本
     输出: 无
     """
-    apply_console_icon()
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return
+    notes.append(cleaned)
+    print(cleaned, flush=True)
+
+
+def print_banner(info: BootInfo | None = None, *, provider: str = "lms", model: str = "") -> None:
+    """打印欢迎框"""
     print_boot(info, provider=provider, model=model)
 
 
 def handshake() -> BootInfo:
     """
     函数名: handshake
-    作用: 探测提供方；已配置模型未加载则 load；欢迎框已先打印
+    作用: 探测提供方；已配置模型未加载则 load；说明写入 startup_notes
     输入: 无
     输出:
         BootInfo: 欢迎框与底栏用的快照
@@ -183,36 +191,44 @@ def handshake() -> BootInfo:
             api_url = str(cfg.get("api_url") or "")
         except Exception:
             model = ""
+    notes: list[str] = []
     if _IMPORT_ERR is not None or get_backend is None:
-        return _empty_boot(model=model, detail=_IMPORT_ERR or "unavailable", api_url=api_url)
+        info = _empty_boot(model=model, detail=_IMPORT_ERR or "unavailable", api_url=api_url)
+        _remember_note(notes, info.provider_detail)
+        info.startup_notes = notes
+        return info
     try:
         report = get_backend().health_check()
     except Exception as exc:
-        return _empty_boot(model=model, detail=str(exc), api_url=api_url)
+        info = _empty_boot(model=model, detail=str(exc), api_url=api_url)
+        _remember_note(notes, info.provider_detail)
+        info.startup_notes = notes
+        return info
     model = report.model or model
     api_url = report.api_url or api_url
     if not report.ok:
-        return _empty_boot(model=model, detail=report.message or "down", api_url=api_url)
-    # API 可达：未加载则静默 load，状态写进 detail
+        info = _empty_boot(model=model, detail=report.message or "down", api_url=api_url)
+        _remember_note(notes, info.provider_detail)
+        info.startup_notes = notes
+        return info
+    # 中文注释: API 可达；未加载则尝试 load，结果留在反馈区
     detail = report.message or "connected"
     if report.message == "model not loaded" and report.model and load_model is not None:
-        print(f"loading model {report.model} ...", flush=True)
+        _remember_note(notes, f"loading model {report.model} ...")
         try:
             load_model(report.model, remember=True)
             detail = "connected · model ready"
         except Exception as exc:
             detail = f"connected · load failed ({exc})"
+            _remember_note(notes, detail)
     elif report.message == "ok":
         detail = "connected · model ready"
     loaded_names = _loaded_model_keys()
     if len(loaded_names) >= 2:
         detail = f"{detail} · {len(loaded_names)} models loaded"
-        _emit_multi_load(model, loaded_names, via_print=True)
-    if instance_runtime_notice is not None:
-        note = instance_runtime_notice(model)
-        if note:
-            print(note, flush=True)
-    _emit_vision_mcp_note(model, via_print=True)
+        _remember_note(notes, f"{len(loaded_names)} models are loaded")
+    vision = _model_is_vision(model, reported=bool(report.vision))
+    _remember_note(notes, _vision_note(model, vision=vision))
     return BootInfo(
         cwd=str(Path.cwd()),
         session=f"session_{uuid.uuid4()}",
@@ -223,6 +239,7 @@ def handshake() -> BootInfo:
         provider_detail=detail,
         api_url=api_url,
         thinking=True,
+        startup_notes=notes,
     )
 
 
@@ -237,11 +254,12 @@ def cmd_help() -> None:
         "\n".join(
             [
                 "Commands:",
-                "  health         Probe LM Studio, MCP ready, Playwright / Bing",
-                "  load [model]   Load weights (default: lm_studio/user.toml)",
-                "  ask <text>     Main Agent.run (tools / max_turns / >>)",
-                "  agents         List nested agents (main / worker / compress)",
-                "  tools          List main Agent tools",
+                "  /menu          Open template selection button grid",
+                "  health         Probe LMS and Playwright",
+                "  load [model]   Load weights; omit model to use lms/user.toml",
+                "  ask <text>     One main Agent completion, no tool loop",
+                "  agents         Show the main Agent",
+                "  tools          List tools registered on the main Agent",
                 "  thinking       Show main Agent reasoning toggle",
                 "  thinking on    Enable reasoning for main Agent (default)",
                 "  thinking off   Disable reasoning",
@@ -275,34 +293,21 @@ def cmd_health() -> None:
         emit_system(f"provider health failed: {exc}")
         return
     loaded_names = _loaded_model_keys()
+    model_key = str(cfg.get("model") or report.model or "")
+    vision = _model_is_vision(model_key, reported=bool(report.vision))
     lines = [
         f"api_url={cfg.get('api_url', report.api_url)}",
         f"model={cfg.get('model', report.model)!r}",
         f"loaded={report.ok and report.message == 'ok'}",
         f"loaded_models={loaded_names or '(none)'}",
-        f"vision={report.vision}",
+        f"vision={vision}",
         f"ok={report.ok}",
         f"message={report.message}",
     ]
     emit_system("\n".join(lines))
-    if instance_runtime_notice is not None:
-        note = instance_runtime_notice(str(cfg.get("model") or report.model or ""))
-        if note:
-            emit_system(note)
-    _emit_vision_mcp_note(str(cfg.get("model") or report.model or ""))
-    _emit_multi_load(str(cfg.get("model") or report.model or ""), loaded_names)
-    try:
-        from llm_cli.lm_studio.mcp_ready import probe_mcp_ready
-        ready = probe_mcp_ready(force=True)
-        emit_system(f"mcp_ready all_ok={ready.get('all_ok')} skipped={ready.get('skipped')}")
-        for warn in ready.get("warnings") or []:
-            emit_system(f"warning: {warn}")
-        checks = ready.get("checks") if isinstance(ready.get("checks"), dict) else {}
-        for key, row in checks.items():
-            if isinstance(row, dict):
-                emit_system(f"  {key}: ok={row.get('ok')} {row.get('detail')}")
-    except Exception as exc:
-        emit_system(f"mcp ready: probe failed ({exc})")
+    note = _vision_note(model_key, vision=vision)
+    if note:
+        emit_system(note)
     try:
         from mcp_playwright.session import probe_playwright
         emit_system(str(probe_playwright().get("message") or "playwright: unknown"))
@@ -321,7 +326,15 @@ def cmd_load(model_name: str) -> None:
     if _IMPORT_ERR is not None or load_model is None:
         emit_system(f"provider unavailable: {_IMPORT_ERR}")
         return
-    key = model_name.strip() or None
+    key = model_name.strip()
+    if not key and load_user_config is not None:
+        try:
+            key = str(load_user_config().get("model") or "").strip()
+        except Exception:
+            key = ""
+    if not key:
+        emit_system("usage: load [model]")
+        return
     try:
         result = load_model(key, remember=True)
     except LmStudioError as exc:
@@ -332,15 +345,8 @@ def cmd_load(model_name: str) -> None:
         return
     if isinstance(result, dict):
         emit_system(json.dumps(result, ensure_ascii=False, indent=2))
-    else:
-        emit_system(str(result))
-    current = key or ""
-    if not current and load_user_config is not None:
-        try:
-            current = str(load_user_config().get("model") or "")
-        except Exception:
-            current = ""
-    _emit_multi_load(current, _loaded_model_keys())
+        return
+    emit_system(str(result))
 
 
 def _emit_tool_name(name: str) -> None:
@@ -356,18 +362,11 @@ def _emit_tool_name(name: str) -> None:
 
 
 def main_agent() -> Agent:
-    """
-    函数名: main_agent
-    作用: 懒创建主 Agent（thinking 常开；ask_worker 内部工人>>压缩）
-    输入: 无
-    输出:
-        Agent
-    """
+    """懒创建主 Agent"""
     global _MAIN_AGENT
     if _MAIN_AGENT is None:
         _MAIN_AGENT = Agent(
             system=MAIN_SYSTEM,
-            tools={"ask_worker": ask_worker},
             thinking=True,
             name="main",
         )
@@ -470,22 +469,9 @@ def cmd_reset() -> None:
 
 
 def cmd_agents() -> None:
-    """
-    函数名: cmd_agents
-    作用: 列出主对话与嵌套子代理名
-    输入: 无
-    输出: 无
-    """
+    """列出 Agent 状态"""
     agent = main_agent()
-    emit_system(
-        "\n".join(
-            [
-                f"main={agent.name} thinking_policy={agent.thinking_policy}",
-                "worker=ask_worker (wikipedia_lookup, read_local_file, web_search/Bing)",
-                "compress=ask_worker pipeline (thinking=off, stateless)",
-            ]
-        )
-    )
+    emit_system(f"agent: name={agent.name} thinking={agent.thinking} stream={agent.stream}")
 
 
 def cmd_tools() -> None:
@@ -640,86 +626,28 @@ def _refresh_info(info: BootInfo) -> None:
 def run_loop(info: BootInfo) -> None:
     """
     函数名: run_loop
-    作用: 方框提示循环：用户行立刻回显，底栏始终留在最下
+    作用: 动态画布状态机循环：启动默认进入模板按钮网格；按 ESC 退出至通用输入框；输入 /menu 重新呼出菜单
     输入:
         info (BootInfo): 启动快照（底栏会读模型/路径）
     输出: 无
     """
-    prompt = BoxedPrompt(info)
-    bind_prompt(prompt)
+    from llm_cli.canvas import CanvasStateMachine, TemplateMenuState
+    machine = CanvasStateMachine(info)
+    for note in info.startup_notes:
+        machine.session.add_feedback(note)
+    machine.push_state(TemplateMenuState())
     try:
-        while True:
-            try:
-                line = prompt.read()
-            except (EOFError, KeyboardInterrupt):
-                prompt.clear_footer()
-                _show_cursor()
-                return
-            # 先标 busy，再回显用户行：write_above 会擦框、印 you、把忙时底栏画回
-            info.activity = "busy"
-            info.thinking = main_agent().thinking
-            info.stream = main_agent().stream
-            emit_user(line)
-            if not dispatch(line, info):
-                prompt.clear_footer()
-                _show_cursor()
-                return
-            info.activity = "idle"
-            info.thinking = main_agent().thinking
-            info.stream = main_agent().stream
-            _refresh_info(info)
+        while machine.is_running():
+            machine.run_turn()
     finally:
-        bind_prompt(None)
-        prompt.clear_footer()
         _show_cursor()
 
 
-def _boot_mcp_ready() -> None:
-    """
-    函数名: _boot_mcp_ready
-    作用: 检测两个 MCP 就绪状态；未齐则每次警告。并探 Bing 用的自带 Chromium
-    输入: 无
-    输出: 无
-    """
-    try:
-        from llm_cli.lm_studio.mcp_ready import format_mcp_warnings, probe_mcp_ready
-        report = probe_mcp_ready(force=False)
-        for line in format_mcp_warnings(report):
-            print(line, flush=True)
-    except Exception as exc:
-        print(f"mcp ready: probe failed ({exc})", flush=True)
-    try:
-        from mcp_playwright.session import probe_playwright
-        pw = probe_playwright()
-        if not pw.get("ok"):
-            print(str(pw.get("message") or "playwright: down"), flush=True)
-    except Exception as exc:
-        print(f"playwright: probe failed ({exc})", flush=True)
-
-
 def main() -> int:
-    """
-    函数名: main
-    作用: 先打欢迎框，再握手 LM Studio 与 MCP 就绪检测，然后进入方框提示符
-    输入: 无
-    输出:
-        int: 0
-    """
-    apply_console_icon()
-    print_boot(_preview_boot())
+    """进入 CLI 动态画布"""
     info = handshake()
-    _boot_mcp_ready()
     try:
         run_loop(info)
     finally:
-        try:
-            from mcp_playwright import close_session as close_playwright
-            close_playwright()
-        except Exception:
-            pass
-        try:
-            from mcp_desktop import close_session as close_desktop
-            close_desktop()
-        except Exception:
-            pass
+        _show_cursor()
     return 0
